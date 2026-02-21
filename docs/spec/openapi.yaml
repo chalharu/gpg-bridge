@@ -976,7 +976,10 @@ components:
         レート制限超過。
         全エンドポイントにIPベースのレート制限を適用。
         認証なしエンドポイント（POST /device, GET /pairing-token）は厳格ティア、その他は標準ティアを適用。
-        GET /pairing-token では未消費ペアリングレコード数超過でも返却される。
+        429の要因は次の2種類：
+        1) IPベース制限超過（Strict/Standard）
+        2) エンドポイント固有の論理制限超過（例: GET /pairing-token の未消費ペアリングレコード数上限超過）
+        GET /pairing-token で未消費ペアリングレコード数が上限超過した場合は、429を返却する。
       headers:
         RateLimit-Policy:
           description: 'レート制限ポリシーの定義（SF-Dictionary形式）。例: `"default";q=100;w=60`'
@@ -987,7 +990,7 @@ components:
           schema:
             type: string
         Retry-After:
-          description: 再試行可能になるまでの秒数
+          description: 再試行可能になるまでの秒数。IPベース制限と論理制限が同時に該当する場合は、より長い待機秒数を返却する。
           schema:
             type: integer
       content:
