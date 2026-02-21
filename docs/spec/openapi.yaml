@@ -1,0 +1,1714 @@
+openapi: 3.1.0
+info:
+  title: Remote GPG Signing System API
+  version: 1.0.0
+  description: |
+    GPG署名システムのWeb API契約（v1）。
+    - デバイス管理: POST /device（登録）, PATCH /device（更新）, POST /device/refresh（device_jwt更新）, /device/public_key（公開鍵管理）, /device/gpg_key（GPG公開鍵管理）
+    - ペアリング: GET /pairing-token → GET /pairing-session(SSE待機) → POST /pairing → POST /pairing/refresh(更新) → POST /pairing/gpg-keys(GPG鍵取得)
+    - 署名: POST /sign-request → PATCH /sign-request → GET /sign-request(スマホ) → GET /sign-events(SSE待機) → POST /sign-result
+
+    スマホ→Webの認証は OIDC Client Authentication (private_key_jwt方式) を使用する。
+    スマホはリクエストごとにdevice_assertion_jwt（ES256署名）を生成し、
+    Authorization: Bearer ヘッダで送信する。サーバーはdevice_assertion_jwtの sub から FID を特定し、
+    clients.public_keys に登録された公開鍵で署名を検証する。
+    ## レート制限
+    全エンドポイントにIPアドレス単位のレート制限を適用する。
+    - **厳格ティア**: 認証なしエンドポイント（`POST /device`, `GET /pairing-token`）に適用
+    - **標準ティア**: 認証ありエンドポイントに適用
+    制限超過時は429 Too Many Requestsを返却する。
+    レスポンスヘッダ: `RateLimit-Policy`, `RateLimit`, `Retry-After`（429時）。
+servers:
+  - url: https://api.example.com
+    description: Production (placeholder)
+
+tags:
+  - name: Device
+  - name: Pairing
+  - name: Signing
+  - name: System
+
+paths:
+  /device:
+    post:
+      tags: [Device]
+      summary: デバイス登録（初回）
+      security: []
+      description: |
+        デバイスの初回登録。認証なし。厳格ティアのレート制限を適用。
+        device_token, firebase_installation_id, public_key（JWKS）, default_kid を送信し、device_jwt（exp付き）を返却する。
+        サーバーはFCM validate_onlyでdevice_tokenの有効性を検証する。
+        device_jwtの有効期限はサーバー設定値（例: 365日）。スマホは残り有効期限が1/3未満になった時点でPOST /device/refreshにより自動更新する。
+        同一FIDが既にclientsテーブルに登録済みの場合は 409 Conflict を返却する（復旧手順: FID削除→再取得→再登録）。
+        同一device_tokenが別FIDに紐づく場合は拒否する。
+        public_key.keys.sig に認証用EC公開鍵（ES256）、public_key.keys.enc にE2E暗号化用EC公開鍵（ECDH-ES+A256KW）をそれぞれ最低1つずつ設定する（スキーマで強制）。
+        public_key の kid が未設定の場合、サーバーが任意のUUIDを設定する。
+        default_kid はE2E暗号化用の既定公開鍵を指定する。keys.encの鍵のkidを参照する必要がある。
+        default_kid が未指定の場合、サーバーがkeys.enc内の最初の鍵のkidを自動設定する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegisterRequest'
+      responses:
+        '201':
+          description: デバイス登録成功（device_jwt返却）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 同一FIDが登録済み、またはdevice_tokenが別FIDに紐付済み
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    patch:
+      tags: [Device]
+      summary: FCMトークン更新
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        FCMデバイストークンの更新、またはE2E暗号化用既定鍵(default_kid)の変更。
+        device_assertion_jwtで認証し、subからFIDを取得する。
+        device_tokenが指定された場合、サーバーはFCM validate_onlyでdevice_tokenの有効性を検証する。
+        既存device_tokenが別FIDに紐づく場合は拒否する。
+        default_kidが指定された場合、登録済みのuse:"enc"鍵のkidと一致することを検証する。
+        device_token と default_kid はそれぞれ任意だが、少なくとも一つは必須。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceUpdateRequest'
+      responses:
+        '204':
+          description: 更新成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: device_tokenが別FIDに紐付済み
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    delete:
+      tags: [Device]
+      summary: デバイス登録の完全削除
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        デバイス登録を完全に削除する。
+        device_assertion_jwtで認証し、subからFIDを取得する。
+        当該client_idのclientsレコードを完全削除し、関連するpairingsレコードもカスケード削除する。
+        未完了のrequests（created/pending状態）がある場合、GET /sign-eventsでSSE接続中のDaemonに `{"status":"expired"}` イベントを送信してからrequestsレコードを削除する。
+
+        **自動クリーンアップポリシー:**
+        - 未ペアリングデバイスの期限切れ削除: created_atから一定時間（例: 24時間）経過後もpairing_idsが空のままのclientsレコードはバックグラウンドジョブで自動削除する
+        - 全ペアリング解除時の即時削除: DELETE /pairingの結果pairing_idsが空になった場合、clientsレコードを即時削除する
+      responses:
+        '204':
+          description: デバイス削除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /device/refresh:
+    post:
+      tags: [Device]
+      summary: device_jwt更新
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        device_jwtの有効期限を更新する。
+        device_assertion_jwtで認証し、subからFIDを取得する。
+        現在のdevice_jwtがまだ有効期限内であることを検証した上で、新しいexp付きのdevice_jwtを返却する。
+        期限切れ済みのdevice_jwtでは更新不可（401を返却し、POST /deviceによるデバイス再登録が必要）。
+        スマホは残り有効期限が1/3未満になった時点で自動的にこのエンドポイントを呼び出す。
+        旧device_jwtは元のexpまで引き続き有効。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRefreshRequest'
+      responses:
+        '200':
+          description: 更新されたdevice_jwt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /device/public_key:
+    post:
+      tags: [Device]
+      summary: 公開鍵追加
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        デバイスの公開鍵を追加する。
+        device_assertion_jwtで認証する。
+        use:"sig"(ES256)は認証用、use:"enc"(ECDH-ES+A256KW)はE2E暗号化用。
+        kid が未設定の場合、サーバーが任意のUUIDを設定する。
+        default_kid を同時に指定して、E2E暗号化用の既定鍵を変更することも可能。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicKeyRequest'
+      responses:
+        '204':
+          description: 公開鍵追加成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    get:
+      tags: [Device]
+      summary: 公開鍵一覧取得
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        デバイスに登録されている公開鍵の一覧を取得する。
+        device_assertion_jwtで認証する。
+      responses:
+        '200':
+          description: 公開鍵一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicKeyListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /device/public_key/{kid}:
+    delete:
+      tags: [Device]
+      summary: 公開鍵削除
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        指定した kid の公開鍵を削除する。
+        device_assertion_jwtで認証する。
+        最後の use:"sig" 鍵は削除不可（削除すると以降のdevice_assertion_jwt認証が不可能になるため）。
+        最後の use:"enc" 鍵は削除不可（削除するとE2E暗号化が不可能になり、署名要求を受け取れなくなるため）。
+        削除対象のkidが未完了の署名要求（requests.e2e_kids）で使用中の場合は削除不可（削除するとスマホ側でJWEの復号が不可能になるため）。
+        default_kid が削除対象の鍵を参照しており、他のuse:"enc"鍵が存在する場合は、残りのuse:"enc"鍵のいずれかにdefault_kidを自動再割当する。
+      parameters:
+        - name: kid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: 削除対象の公開鍵識別子
+      responses:
+        '204':
+          description: 公開鍵削除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 指定された kid が見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            削除不可。以下のいずれかの条件に該当:
+            - 最後の use:"sig" 鍵のため削除不可
+            - 最後の use:"enc" 鍵のため削除不可
+            - 未完了の署名要求（requests.e2e_kids）で使用中のため削除不可
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /device/gpg_key:
+    post:
+      tags: [Device]
+      summary: GPG公開鍵登録
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        GPG公開鍵の登録（スマホアプリからGPG鍵情報をサーバーに登録）。
+        device_assertion_jwtで認証し、subからFIDを取得する。
+        keygrip は40文字の16進数文字列であること。
+        key_id は16進数文字列であること（0xプレフィックスは任意）。
+        public_key は有効なJWK形式であること（EC/RSA等の鍵型に応じた必須フィールドの検証）。
+        同一 keygrip が既に登録済みの場合は上書き更新（upsert）。
+        スマホアプリがローカルのGPG秘密鍵に対応する公開鍵情報をサーバーに登録し、
+        DaemonがHAVEKEY/KEYINFO/READKEYに応答するための情報源とする。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GpgKeyRegisterRequest'
+      responses:
+        '204':
+          description: GPG公開鍵登録成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    get:
+      tags: [Device]
+      summary: GPG公開鍵一覧取得
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        登録済みGPG公開鍵の一覧を取得する。
+        device_assertion_jwtで認証し、subからFIDを取得する。
+      responses:
+        '200':
+          description: GPG公開鍵一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GpgKeyListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /device/gpg_key/{keygrip}:
+    delete:
+      tags: [Device]
+      summary: GPG公開鍵削除
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        指定した keygrip のGPG公開鍵を削除する。
+        device_assertion_jwtで認証する。
+        指定された keygrip が未登録の場合は 404 Not Found を返却する。
+      parameters:
+        - name: keygrip
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-fA-F]{40}$'
+          description: 削除対象のGPG鍵のkeygrip（40文字の16進数文字列）
+      responses:
+        '204':
+          description: GPG公開鍵削除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 指定された keygrip が見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing/gpg-keys:
+    post:
+      tags: [Pairing]
+      summary: GPG公開鍵取得（Daemon用）
+      security: []
+      description: |
+        Daemonがペアリング済みデバイスのGPG公開鍵情報を取得する。
+        HAVEKEY/KEYINFO/READKEYへの応答に使用。
+        client_jwt（JWS+JWE）をbody内のリストとして送信し、サーバーが外側JWS検証・内側JWE復号して認証する。
+        POST /sign-requestと同じ認証パターン。
+        各client_jwtを検証し、対応するデバイスのgpg_keysを集約して返却する。
+        DaemonはGPG公開鍵をローカルに永続化せず、必要時にこのAPIでサーバーから取得する。
+        取得結果はプロセス内メモリに揮発性キャッシュとして保持可能（ディスク保存禁止）。
+        標準ティアのレート制限を適用（body内client_jwtによる認証あり）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GpgKeysQueryRequest'
+      responses:
+        '200':
+          description: GPG公開鍵一覧（ペアリング済みデバイスの鍵を集約）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GpgKeysQueryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing-token:
+    get:
+      tags: [Pairing]
+      summary: ペアリング用トークン取得
+      security: []
+      description: |
+        Daemonが初期登録用Tokenを取得する。認証なし。厳格ティアのレート制限を適用。
+        JWSにはsub(UUID)とpayload_type="pairing"を含める。
+        サーバはpairingsテーブルにレコードを作成する（client_id=null, expired=JWT exp）。
+        client_id==nullの未消費レコードが一定数以上ある場合は 429 Too Many Requests を返却する。
+        認証なしエンドポイントのため、IPベースの厳格ティアレート制限に加え、未消費レコード数による論理的制限も併用する。
+        取得したtokenはQRコード等で表示し、スマホで読み取る。
+      responses:
+        '200':
+          description: ペアリング用トークン
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingTokenResponse'
+              examples:
+                default:
+                  value:
+                    pairing_token: eyJhbGciOi...
+                    expires_in: 300
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing-session:
+    get:
+      tags: [Pairing]
+      summary: ペアリング待機セッション開始
+      security:
+        - pairingTokenAuth: []
+      description: |
+        DaemonがSSE接続を開始し、ペアリング完了イベントを待機する。
+        GET /pairing-token と分離する理由は、Token表示(ユーザー操作)と待機開始の順序を明確化するため。
+        SSE待機はGETを用いる。
+        切断時は同じpairing_jwtで再接続可能。サーバーはpairing_jwtの有効期限内であれば再接続を受理し、既にペアリング完了済みならpairedイベントを即座に再送する。
+        サーバーは接続維持のため、30秒ごとにheartbeatイベント（`event: heartbeat\n\n`）を送信する。クライアントは60秒以内にハートビートまたはイベントを受信できない場合、接続切断とみなし再接続を試みる。
+      responses:
+        '200':
+          description: SSEストリーム（ペアリング完了時にpairedイベントを送信）
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/PairingStream'
+              examples:
+                paired:
+                  value:
+                    event: paired
+                    data:
+                      client_jwt: "eyJ..."
+                      client_id: "9f6d..."
+                heartbeat:
+                  value:
+                    event: heartbeat
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          description: pairing_jwtが期限切れまたは無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing:
+    post:
+      tags: [Pairing]
+      summary: スマホ側のペアリング確定
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        スマホがdevice_assertion_jwtで認証し、body内のpairing_jwtを送信してペアリングを確定する。
+        サーバーはdevice_assertion_jwtの署名をclients.public_keysで検証し、subからFIDを取得する。
+        pairing_jwtの署名・有効期限を検証してpairing_id（sub）を取得する。
+        pairingsテーブルでpairing_idを検索し、client_id==null（未消費）であることを確認する（消費済みなら 409 Conflict）。
+        pairingsレコードのclient_idにFIDを設定（消費済みに更新）する。
+        clients.pairing_idsにpairing_idを追加し、ペアリング関係をサーバー側で記録する。
+        SSE経由でDaemonにclient_jwt（JWS+JWE）を配信する（pairing_idは含めない）。
+        Phoneへのレスポンスにはpairing_idを含め、Phone側でローカル保存する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairingRequest'
+      responses:
+        '200':
+          description: ペアリング成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: pairing_jwtが既に消費済み（別デバイスがペアリング確定済み）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: pairing_jwtが期限切れまたは無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    delete:
+      tags: [Pairing]
+      summary: ペアリング解除（Daemon側・client_jwt認証）
+      security: []
+      description: |
+        Daemon（PC側）からのペアリング解除。body内のclient_jwt（JWS+JWE）の外側JWS署名・expを検証し、内側JWEを復号してFIDとpairing_idを取得する。
+        pairing_idがclients.pairing_idsに含まれることを検証し、含まれない場合は404を返却する。
+        clients.pairing_idsから該当pairing_idを削除する。
+        pairing_idsが空になった場合、gpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
+        削除後、同じclient_jwtでのPOST /sign-requestはサーバー側のpairing_id検証で失敗する（401）。
+        スマホ紛失時やペアリング不要時にDaemon側からペアリングを解除する用途。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_jwt]
+              properties:
+                client_jwt:
+                  type: string
+                  maxLength: 16384
+                  pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+                  description: ペアリング時に取得したclient_jwt（JWS+JWE）
+      responses:
+        '204':
+          description: ペアリング解除成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: client_jwt の外側JWS署名検証・exp検証・内側JWE復号に失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: client_jwt内のpairing_idが当該クライアントのpairing_idsに存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing/refresh:
+    post:
+      tags: [Pairing]
+      summary: client_jwtの有効期限更新
+      security: []
+      description: |
+        Daemon（PC側）がclient_jwtの有効期限が近づいた際に、新しいclient_jwtを取得するためのエンドポイント。
+        body内のclient_jwt（JWS+JWE）の外側JWS署名・expを検証し、内側JWEを復号してFIDとpairing_idを取得する。
+        pairing_idがclients.pairing_idsに含まれることを検証する。
+        検証成功時、同じFID・pairing_idで新しいexp（サーバー設定値、例: 365日）を持つclient_jwtを生成して返却する。
+        client_jwtが期限切れの場合は401を返却し、再ペアリングが必要となる。
+        旧client_jwtはexp到来まで引き続き有効（明示的な無効化は行わない）。
+        Daemon側は残り有効期間が全体の1/3未満（例: 365日有効なら残り122日未満）になった時点で自動呼び出しする。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: client_jwt更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: client_jwtの外側JWS署名検証失敗、または期限切れ（再ペアリングが必要）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: client_jwt内のpairing_idが当該クライアントのpairing_idsに存在しない（ペアリング解除済み）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /pairing/{pairing_id}:
+    delete:
+      tags: [Pairing]
+      summary: ペアリング解除
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        スマホからのペアリング解除。device_assertion_jwtで認証し、指定されたpairing_idをclients.pairing_idsから削除する。
+        pairing_idsが空になった場合、gpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
+        削除後、該当pairing_idを含むclient_jwtでのPOST /sign-requestはサーバー側のpairing_id検証で失敗する（401）。
+        PC紛失時にスマホからペアリングを解除し、当該client_jwtを実質的に無効化する用途。
+      parameters:
+        - name: pairing_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: 解除対象のペアリングID
+      responses:
+        '204':
+          description: ペアリング解除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 指定されたpairing_idが当該クライアントのpairing_idsに存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /sign-request:
+    post:
+      tags: [Signing]
+      summary: "署名要求の登録（Phase 1: E2E公開鍵取得）"
+      security: []
+      description: |
+        署名要求を登録する（Phase 1）。認証はbody内のclient_jwts（JWS+JWEリスト）により行う。
+        サーバは各client_jwtの外側JWS署名・expを検証し、内側JWEを復号してFIDとpairing_idを取得する。
+        いずれかのclient_jwtがJWT検証（JWS署名・exp・JWE復号）に失敗した場合、全体を401で拒否する。
+        JWT検証は成功したがサーバー側で無効化されている場合（pairing_idがclients.pairing_idsに含まれない等）は、該当client_jwtをフィルタリングして残りの有効なclient_jwtのみで処理を継続する。全てのclient_jwtがフィルタリングされた場合は401を返却する。
+        内部でrequest_idを生成し、request_jwt（JWS、Daemon用）を発行する。
+        daemon_public_key（Daemonが生成した認証用一時EC公開鍵）およびdaemon_enc_public_key（返却パスE2E暗号化用一時EC公開鍵）をrequestsレコードに保存する。Phase 2以降、Daemonは対応する認証用一時秘密鍵でrequest_jwtをJWS署名したdaemon_auth_jwsをBearerトークンとして使用する。
+        各デバイスのdefault_kidに基づくE2E暗号化用公開鍵をレスポンスに含める（フィルタリングされたclient_jwtのデバイスは含まない）。
+        Daemonはe2e_keysを使用して署名データをJWE暗号化した後、PATCH /sign-request（Phase 2）で暗号化データを送信する。
+        復号した各client_idとpairing_idの組み合わせについて、未完了（created/pending）の署名要求が一定数以上存在する場合は429 Too Many Requestsを返却する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignRequest'
+      responses:
+        '201':
+          description: 署名要求受理（request_jwtとE2E公開鍵を返却）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignRequestResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: client_jwt の外側JWS署名検証・exp検証・内側JWE復号に失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    patch:
+      tags: [Signing]
+      summary: E2E暗号化データ送信（Phase 2）
+      security:
+        - signingTokenAuth: []
+      description: |
+        Phase 1で取得したrequest_jwtをDaemonの一時秘密鍵でJWS署名したdaemon_auth_jwsで認証し、E2E暗号化済みペイロードを送信する。
+        サーバーはdaemon_auth_jwsを検証する: 外側JWSのペイロードからrequest_jwtを取得、内側request_jwtを検証してrequest_idを取得、requests.daemon_public_keyで外側JWS署名を検証。
+        DaemonはPhase 1で取得したE2E公開鍵を使用して、各デバイス向けにJWE（ECDH-ES+A256KW + A256GCM）でhashとkey_idを暗号化する。
+        サーバーは暗号化済みペイロードを保存し、対応デバイスにFCM Push通知（dataメッセージ: `{ "type": "sign_request", "request_id": "<UUID>" }`）を送信する。
+        Phase 2はrequest_idあたり1回のみ実行可能（再送信時は 409 Conflict）。
+        client_idがPhase 1で登録済みのclient_idsと一致し、全client_idのペイロードが含まれることを検証する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignRequestPhase2'
+      responses:
+        '204':
+          description: E2E暗号化データ受理成功（FCM Push通知送信済み）
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Phase 2は既に実行済み
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    get:
+      tags: [Signing]
+      summary: 署名要求の取得（スマホ用・E2E暗号化済み）
+      security:
+        - deviceAssertionAuth: []
+      description: |
+        スマホがdevice_assertion_jwtで認証し、自デバイスに紐づく保留中の署名要求を取得する。
+        サーバーはdevice_assertion_jwtの sub からFIDを取得し、そのFIDがclient_idsに含まれる保留中のrequestsを返却する。
+        当該デバイスが既にunavailable_client_idsに含まれる署名要求はレスポンスから除外する（再取得による不要な409 Conflictを防止）。
+        各要求にはsign_jwt、encrypted_payload（JWE）、pairing_id、daemon_enc_public_keyが含まれる。
+        sign_jwtはリクエスト時にデバイスごとに発行する（DBに事前保存はしない）。
+        encrypted_payloadはDaemonがPhase 2で送信したJWE（ECDH-ES+A256KW + A256GCM）。
+        スマホは自身のE2E秘密鍵でJWEを復号し、{hash, key_id}を取得する。
+        sign_jwtはPhone専用のトークンであり、POST /sign-result のBearer認証に使用する。
+        pairing_idはスマホアプリがローカル保存済みのペアリング情報と照合し、未知のペアリングからの要求を拒否するために使用する。
+        daemon_enc_public_keyはDaemonがPhase 1で送信した返却パスE2E暗号化用一時公開鍵。スマホは承認時に署名結果をこの鍵でJWE暗号化してからPOST /sign-resultに送信する。
+        スマホアプリは起動時に必ず本エンドポイントを呼び出し、FCM Push未達時のフォールバックとする。
+      responses:
+        '200':
+          description: 保留中の署名要求一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignRequestListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+    delete:
+      tags: [Signing]
+      summary: 署名要求のキャンセル（Daemon用）
+      security:
+        - signingTokenAuth: []
+      description: |
+        Daemon側から署名要求をキャンセルする。AssuanプロトコルのCANCELコマンド受信時等に使用する。
+        daemon_auth_jwsで認証し、request_jwtからrequest_idを取得する。
+        未完了（created/pending）の署名要求のみキャンセル可能。
+        pending状態の場合、対象デバイスにFCMキャンセル通知（sign_request_cancelled）を送信する。
+        GET /sign-eventsでSSE接続中のDaemonに {"status":"cancelled"} イベントを送信する。
+        requestsレコードを削除し、監査ログに sign_cancelled イベントを記録する。
+        完了済み（approved/denied/unavailable）の場合は 409 Conflict を返却する。
+      responses:
+        '204':
+          description: キャンセル成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: request_idが存在しない（既に削除済み含む）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            署名結果が既に確定済み（approved/denied/unavailable）。
+            Daemonは確定済みの結果をSSEで受信しているはずであり、通常この状態にはならない。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /sign-events:
+    get:
+      tags: [Signing]
+      summary: 署名結果イベント受信
+      description: |
+        request_jwtに紐づく署名結果イベントをSSEで受信する。
+        認証はDaemonの一時秘密鍵で署名したdaemon_auth_jws（内部にrequest_jwtを含む）で行う。
+        サーバーはdaemon_auth_jwsを検証する: 外側JWSのペイロードからrequest_jwtを取得、内側request_jwtを検証してrequest_idを取得、requests.daemon_public_keyで外側JWS署名を検証。
+        切断時はDaemonが同じ一時鍵ペアで新しいdaemon_auth_jws（iat・jtiを更新）を生成して再接続可能。サーバーはrequest_jwtの有効期限内であれば再接続を受理し、既に署名結果が存在すれば即座にイベントを再送する。
+        Daemonバインディングにより、Phase 1を開始した同一Daemonからの接続のみが許可される。
+        サーバーは接続維持のため、30秒ごとにheartbeatイベント（`event: heartbeat\n\n`）を送信する。クライアントは60秒以内にハートビートまたはイベントを受信できない場合、接続切断とみなし再接続を試みる。
+        状態を問わず（created/pending）タイムアウト時には `{"status":"expired"}` イベントを送信する。DaemonがDELETE /sign-requestでキャンセルした場合は `{"status":"cancelled"}` イベントを送信する。DaemonはSSEイベントと並行してrequest_jwtのexpも自己監視すること。
+      security:
+        - signingTokenAuth: []
+      responses:
+        '200':
+          description: SSEストリーム
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SignStream'
+              examples:
+                approved:
+                  value:
+                    event: signature
+                    data:
+                      status: approved
+                      signature: "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyJ9.wrapped-key.iv.ciphertext.tag"
+                denied:
+                  value:
+                    event: signature
+                    data:
+                      status: denied
+                expired:
+                  value:
+                    event: signature
+                    data:
+                      status: expired
+                unavailable:
+                  value:
+                    event: signature
+                    data:
+                      status: unavailable
+                cancelled:
+                  value:
+                    event: signature
+                    data:
+                      status: cancelled
+                heartbeat:
+                  value:
+                    event: heartbeat
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: request_idが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /sign-result:
+    post:
+      tags: [Signing]
+      summary: 署名結果の登録
+      description: |
+        スマホがsign_jwtで認証し、署名の承認/拒否/署名不可結果を送信する。
+        sign_jwtにはrequest_idとclient_idが含まれ、サーバーは送信元デバイスの正当性を検証する。
+        - status=approved: サーバーは即座に署名結果をSSEでDaemonに転送する。
+        - status=denied: サーバーは即座にdeniedをSSEでDaemonに転送する。
+        - status=unavailable: 対応するGPG秘密鍵がない等の理由で署名不可。サーバーは他クライアントの応答を待機し、全クライアントがunavailableの場合にのみSSE(unavailable)をDaemonに転送する。
+        status=approved の場合、signatureフィールドにはスマホが `daemon_enc_public_key` でJWE暗号化した署名データが含まれる。サーバーは平文にアクセスせずそのままSSEでDaemonに転送する。
+        既に署名結果が確定済み（approved/denied）、または同一デバイスが既に回答済みの場合は 409 Conflict を返却する。
+      security:
+        - signTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignResultRequest'
+      responses:
+        '204':
+          description: 受付成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: request_idが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            署名結果が確定済み（approved/denied/unavailable）、または同一デバイスが既に回答済み。
+            スマホアプリはこのレスポンスを受信した場合、承認UIを閉じ「他デバイスで処理済み」をユーザーに表示する。
+            サーバーは署名結果確定時に、結果送信元以外の対象デバイスにFCMキャンセル通知も送信する。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /health:
+    get:
+      tags: [System]
+      summary: ヘルスチェック
+      security: []
+      description: |
+        サーバーの稼働状態を確認するエンドポイント。
+        認証不要。サーバーが正常に稼働していれば200 OKを返却する。
+        DB接続の正常性確認を含めるかは実装判断。
+        標準ティアのレート制限を適用（認証なしだがリソース作成を行わないため、厳格ティアの対象外）。
+      responses:
+        '200':
+          description: サーバー正常稼働
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+components:
+  securitySchemes:
+    deviceAssertionAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OIDC Client Authentication（private_key_jwt方式）によるデバイス認証。
+        スマホがリクエストごとにdevice_assertion_jwt（ES256署名）を生成し、Bearerトークンとして送信する。
+        サーバーはdevice_assertion_jwtの sub からFIDを特定し、clients.public_keys に登録された公開鍵で署名を検証する。
+        device_assertion_jwt構造:
+        - ヘッダー: { "alg": "ES256", "typ": "JWT", "kid": "<公開鍵のkid>" }
+        - ペイロード: iss=<fid>, sub=<fid>, aud=<エンドポイントURL>, exp=<現在+60秒>, iat=<現在>, jti=<UUID>
+        - 署名: ES256（スマホの秘密鍵、Android Keystore / iOS Secure Enclave）
+        サーバー検証: kid→public_keys検索、ES256署名検証、aud一致確認、exp/jtiリプレイ防止
+        
+        補足（device_jwtの概念）: サーバーはPOST /device（初回登録）時にdevice_jwt（JWS, sub=FID, payload_type="device", exp=サーバー設定値（例: 365日））を発行する。
+        スマホはdevice_jwtをFIDの確認用として保持するが、実際のAPI認証はすべてdevice_assertion_jwtで行う。
+        device_jwtの有効期限管理: 残り有効期間が1/3未満になった時点でPOST /device/refreshにより自動更新。期限切れ時はPOST /deviceによるデバイス再登録が必要。
+    pairingTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        ペアリング用JWT（pairing_jwt）。JWSで署名。
+        PAYLOADにsub=UUID, payload_type="pairing"を含む。
+        有効期限は300秒。GET /pairing-tokenで発行される。
+    signingTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        署名要求用daemon_auth_jws。Daemonの一時秘密鍵で署名した外側JWSの内部にrequest_jwtを含む。
+        外側JWS構造: Header={"alg":"ES256"}, Payload={"request_jwt":"<元のrequest_jwt>","aud":"<エンドポイントURL>","iat":<timestamp>,"exp":<timestamp>,"jti":"<UUID>"}。
+        audは対象エンドポイントURL（PATCH /sign-request、GET /sign-events、または DELETE /sign-request）。expはrequest_jwtのexpと同じ値を設定する。jtiはリプレイ防止用の一意識別子であり、サーバーがjtisテーブルで使用済みjtiを管理する。
+        内側request_jwtのPayloadにsub=UUID(request_id), payload_type="request"を含む。
+        サーバー検証手順: (1)外側JWSペイロードをデコードしrequest_jwtを取得 (2)内側request_jwtをサーバー署名鍵で検証しrequest_idを取得 (3)requests.daemon_public_keyで外側JWS署名を検証 (4)aud検証 (5)exp有効期限検証 (6)jtiリプレイ検証。
+        Phase 1(POST /sign-request)でDaemonが送信したdaemon_public_keyに暗号的にバインドされるため、request_jwt漏洩時の不正利用を防止する。
+        署名要求ごとに発行される。有効期限は署名タイムアウト（5分）と連動。
+        DaemonがPATCH /sign-request、GET /sign-events、およびDELETE /sign-requestで使用する。
+    signTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        署名トークン用JWT（sign_jwt）。JWSで署名。
+        PAYLOADにsub=UUID(request_id), client_id=FID, payload_type="sign"を含む。
+        署名要求ごと・デバイスごとに発行される。有効期限は署名タイムアウト（5分）と連動。
+        PhoneがGET /sign-requestで取得し、POST /sign-resultで使用する。
+        client_idを含めることで、サーバーが署名結果送信元のデバイスを検証可能。
+
+  responses:
+    BadRequest:
+      description: リクエスト不正
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: 認証失敗
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: |
+        レート制限超過。
+        全エンドポイントにIPベースのレート制限を適用。
+        認証なしエンドポイント（POST /device, GET /pairing-token）は厳格ティア、その他は標準ティアを適用。
+        GET /pairing-token では未消費ペアリングレコード数超過でも返却される。
+      headers:
+        RateLimit-Policy:
+          description: 'レート制限ポリシーの定義（SF-Dictionary形式）。例: `"default";q=100;w=60`'
+          schema:
+            type: string
+        RateLimit:
+          description: '現在のレート制限状態（SF-Dictionary形式）。例: `"default";r=50;t=30`'
+          schema:
+            type: string
+        Retry-After:
+          description: 再試行可能になるまでの秒数
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: リソースが見つからない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Gone:
+      description: 有効期限切れまたは無効
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    DefaultError:
+      description: 予期しないエラー
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    DeviceRegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [device_token, firebase_installation_id, public_key]
+      properties:
+        device_token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: '^.{1,4096}$'
+          description: FCMデバイストークン
+        firebase_installation_id:
+          type: string
+          minLength: 11
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{11,128}$'
+          description: Firebase Installation ID (FID)
+        public_key:
+          type: object
+          additionalProperties: false
+          required: [keys]
+          properties:
+            keys:
+              type: object
+              additionalProperties: false
+              required: [sig, enc]
+              properties:
+                sig:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/JwkEcSig'
+                  description: 認証用EC公開鍵（ES256）。最低1つ必須
+                enc:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/JwkEcEnc'
+                  description: E2E暗号化用EC公開鍵（ECDH-ES+A256KW）。最低1つ必須
+          description: デバイス公開鍵セット。認証用(sig)とE2E暗号化用(enc)をそれぞれ最低1つずつ含む
+        default_kid:
+          type: string
+          format: uuid
+          description: E2E暗号化用の既定公開鍵のkid。keys.encの鍵のkidを参照する必要がある。未指定の場合、サーバーがkeys.enc内の最初の鍵のkidを自動設定する
+
+    DeviceUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        device_token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: '^.{1,4096}$'
+          description: FCMデバイストークン
+        default_kid:
+          type: string
+          format: uuid
+          description: E2E暗号化用の既定公開鍵のkidを変更。登録済みのuse:"enc"鍵のkidを参照
+
+    JwkEcSig:
+      type: object
+      additionalProperties: false
+      required: [kty, use, crv, x, y, alg]
+      description: 認証用EC公開鍵（ES256）
+      properties:
+        kty:
+          type: string
+          enum: [EC]
+        use:
+          type: string
+          enum: [sig]
+          description: "鍵の用途: 認証用(ES256)"
+        crv:
+          type: string
+          enum: [P-256]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のx座標（Base64url、P-256は32バイト=43文字）
+        y:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のy座標（Base64url、P-256は32バイト=43文字）
+        alg:
+          type: string
+          enum: [ES256]
+          description: "署名アルゴリズム"
+        kid:
+          type: string
+          format: uuid
+          description: 鍵識別子。未設定の場合はサーバーが任意のUUIDを設定する
+
+    JwkEcEnc:
+      type: object
+      additionalProperties: false
+      required: [kty, use, crv, x, y, alg]
+      description: E2E暗号化用EC公開鍵（ECDH-ES+A256KW）
+      properties:
+        kty:
+          type: string
+          enum: [EC]
+        use:
+          type: string
+          enum: [enc]
+          description: "鍵の用途: E2E暗号化用(ECDH-ES+A256KW)"
+        crv:
+          type: string
+          enum: [P-256]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のx座標（Base64url、P-256は32バイト=43文字）
+        y:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のy座標（Base64url、P-256は32バイト=43文字）
+        alg:
+          type: string
+          enum: [ECDH-ES+A256KW]
+          description: "鍵合意アルゴリズム"
+        kid:
+          type: string
+          format: uuid
+          description: 鍵識別子。未設定の場合はサーバーが任意のUUIDを設定する
+
+    JwkEc:
+      oneOf:
+        - $ref: '#/components/schemas/JwkEcSig'
+        - $ref: '#/components/schemas/JwkEcEnc'
+      discriminator:
+        propertyName: use
+        mapping:
+          sig: '#/components/schemas/JwkEcSig'
+          enc: '#/components/schemas/JwkEcEnc'
+      description: "EC公開鍵。use=sigの場合はJwkEcSig、use=encの場合はJwkEcEncを参照"
+
+    PublicKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/JwkEc'
+        default_kid:
+          type: string
+          format: uuid
+          description: E2E暗号化用の既定公開鍵のkidを変更（任意）
+
+    PublicKeyListResponse:
+      type: object
+      additionalProperties: false
+      required: [keys, default_kid]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/JwkEc'
+        default_kid:
+          type: string
+          format: uuid
+          description: 現在のE2E暗号化用既定公開鍵のkid
+
+    GpgKeyEntry:
+      type: object
+      additionalProperties: false
+      required: [keygrip, key_id, public_key]
+      properties:
+        keygrip:
+          type: string
+          pattern: '^[0-9a-fA-F]{40}$'
+          description: GPG鍵のkeygrip（40文字の16進数文字列、公開鍵パラメータのSHA-1ハッシュ）
+        key_id:
+          type: string
+          maxLength: 42
+          pattern: '^(0x)?[0-9a-fA-F]+$'
+          description: 'GPG鍵ID（16進数表記。0xプレフィックスは任意。例: "0xABCD1234EF567890" または "ABCD1234EF567890"）'
+        public_key:
+          type: object
+          description: GPG公開鍵のJWK表現（EC/RSA等の鍵型に応じたJWK）
+          additionalProperties: true
+
+    GpgKeyWithClientId:
+      allOf:
+        - $ref: '#/components/schemas/GpgKeyEntry'
+        - type: object
+          required: [client_id]
+          properties:
+            client_id:
+              type: string
+              description: 鍵を登録したデバイスのclient_id（FID）。Daemonが署名要求時に適切なclient_jwtを選択するために使用
+
+    GpgKeyRegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [gpg_keys]
+      properties:
+        gpg_keys:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/GpgKeyEntry'
+          description: 登録するGPG公開鍵のリスト
+
+    GpgKeyListResponse:
+      type: object
+      additionalProperties: false
+      required: [gpg_keys]
+      properties:
+        gpg_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/GpgKeyEntry'
+          description: 登録済みGPG公開鍵のリスト
+
+    GpgKeysQueryRequest:
+      type: object
+      additionalProperties: false
+      required: [client_jwts]
+      properties:
+        client_jwts:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            maxLength: 16384
+            pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+            description: client_jwt（JWS+JWE）文字列
+          description: ペアリング済みclient_jwtのリスト。POST /sign-requestと同じ認証パターン
+
+    GpgKeysQueryResponse:
+      type: object
+      additionalProperties: false
+      required: [gpg_keys]
+      properties:
+        gpg_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/GpgKeyWithClientId'
+          description: ペアリング済みデバイスのGPG公開鍵（client_id付き）
+
+    DeviceRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [device_jwt]
+      properties:
+        device_jwt:
+          type: string
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: 現在のdevice_jwt（有効期限内であること）
+
+    DeviceResponse:
+      type: object
+      additionalProperties: false
+      required: [device_jwt]
+      properties:
+        device_jwt:
+          type: string
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: デバイス認証用JWT（JWS、exp付き）
+
+    PairingTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [pairing_token, expires_in]
+      properties:
+        pairing_token:
+          type: string
+          description: ペアリング用JWT（subにUUIDを含む、サーバーpairingsテーブルにレコード保存）
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        expires_in:
+          type: integer
+          description: トークンの有効期限（秒）
+          minimum: 1
+          maximum: 600
+
+    PairingRequest:
+      type: object
+      additionalProperties: false
+      required: [pairing_jwt]
+      properties:
+        pairing_jwt:
+          type: string
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: QRコード経由で取得したペアリング用JWT
+
+    PairingResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, client_id, pairing_id]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        client_id:
+          type: string
+          minLength: 11
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{11,128}$'
+          description: firebase_installation_id(FID)をclient_idとして利用
+        pairing_id:
+          type: string
+          format: uuid
+          description: ペアリング識別子（pairing_jwtのsub UUID）
+
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [client_jwt]
+      properties:
+        client_jwt:
+          type: string
+          maxLength: 16384
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: 更新対象のclient_jwt（JWS+JWE）。外側JWSのexp有効期限内である必要がある。
+
+    RefreshResponse:
+      type: object
+      additionalProperties: false
+      required: [client_jwt]
+      properties:
+        client_jwt:
+          type: string
+          maxLength: 16384
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: 新しいclient_jwt（JWS+JWE）。同じFID・pairing_idで新しいexpを持つ。
+
+    SignRequest:
+      type: object
+      additionalProperties: false
+      required: [client_jwts, daemon_public_key, daemon_enc_public_key]
+      properties:
+        client_jwts:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            maxLength: 16384
+            pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: 署名要求の対象client_jwt (JWS+JWE) リスト。外側JWS（ES256、サーバー署名、exp・payload_type・client_jweを含む）の内部にJWE（ECDH-ES + A256GCM）をネストした構造。サーバーが外側JWSを検証し、内側JWEを復号してFIDを取得する。
+        daemon_public_key:
+          $ref: '#/components/schemas/DaemonPublicKey'
+          description: Daemonが署名要求ごとに生成した一時EC公開鍵（ES256）。Phase 2以降のdaemon_auth_jws検証に使用され、requests.daemon_public_keyとして保存される。
+        daemon_enc_public_key:
+          $ref: '#/components/schemas/DaemonEncPublicKey'
+          description: Daemonが署名要求ごとに生成した返却パスE2E暗号化用一時EC公開鍵（ECDH-ES+A256KW）。スマホが署名結果をJWE暗号化する際に使用される。
+
+    SignRequestPhase2:
+      type: object
+      additionalProperties: false
+      required: [encrypted_payloads]
+      properties:
+        encrypted_payloads:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/EncryptedPayloadItem'
+          description: デバイスごとのE2E暗号化済みペイロード
+
+    EncryptedPayloadItem:
+      type: object
+      additionalProperties: false
+      required: [client_id, encrypted_data]
+      properties:
+        client_id:
+          type: string
+          minLength: 11
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{11,128}$'
+          description: 対象デバイスのclient_id (FID)
+        encrypted_data:
+          type: string
+          maxLength: 16384
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: |
+            JWE (ECDH-ES+A256KW + A256GCM) 暗号化済みペイロード。
+            復号後のJSON平文構造は E2ePlaintextPayload スキーマに準拠する。
+            Daemon側で暗号化、スマホ側で復号する。Webサーバーは平文にアクセスしない。
+
+    DaemonPublicKey:
+      type: object
+      additionalProperties: false
+      required: [kty, crv, x, y, alg]
+      description: |
+        Daemonが署名要求ごとに生成する一時EC公開鍵（ES256）。
+        Phase 1でサーバーに登録され、Phase 2以降のdaemon_auth_jws検証に使用される。
+        Daemonは対応する一時秘密鍵でrequest_jwtをJWS署名し、daemon_auth_jwsを生成する。
+      properties:
+        kty:
+          type: string
+          enum: [EC]
+        crv:
+          type: string
+          enum: [P-256]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のx座標（Base64url、P-256 = 32バイト = 43文字）
+        y:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のy座標（Base64url、P-256 = 32バイト = 43文字）
+        alg:
+          type: string
+          enum: [ES256]
+
+    DaemonEncPublicKey:
+      type: object
+      additionalProperties: false
+      required: [kty, crv, x, y, alg]
+      description: |
+        Daemonが署名要求ごとに生成する返却パスE2E暗号化用一時EC公開鍵（ECDH-ES+A256KW）。
+        Phase 1でサーバーに登録され、スマホが署名結果をJWE暗号化する際に使用する。
+        Daemonは対応する一時秘密鍵でJWEを復号し、署名データを取得する。
+        daemon_public_key（認証用、ES256）とは別の鍵ペアであること。
+      properties:
+        kty:
+          type: string
+          enum: [EC]
+        crv:
+          type: string
+          enum: [P-256]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のx座標（Base64url、P-256 = 32バイト = 43文字）
+        y:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: EC公開鍵のy座標（Base64url、P-256 = 32バイト = 43文字）
+        alg:
+          type: string
+          enum: [ECDH-ES+A256KW]
+
+    E2eKeyItem:
+      type: object
+      additionalProperties: false
+      required: [client_id, public_key]
+      properties:
+        client_id:
+          type: string
+          minLength: 11
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{11,128}$'
+          description: デバイスのclient_id (FID)
+        public_key:
+          $ref: '#/components/schemas/JwkEcEnc'
+
+    SignRequestResponse:
+      type: object
+      additionalProperties: false
+      required: [request_jwt, e2e_keys]
+      properties:
+        request_jwt:
+          type: string
+          description: 署名要求用JWT（request_idを含む、JWS）
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        e2e_keys:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/E2eKeyItem'
+          description: 各デバイスのdefault_kidに基づくE2E暗号化用公開鍵
+
+    SignRequestListResponse:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/SignRequestDetail'
+
+    SignRequestDetail:
+      type: object
+      additionalProperties: false
+      required: [request_id, sign_jwt, encrypted_payload, pairing_id, daemon_enc_public_key]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: 署名要求の識別子。FCM通知のrequest_idと照合し、キャンセル通知受信時に該当の承認UIを閉じるために使用する。
+        sign_jwt:
+          type: string
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: Phone用署名トークンJWT（request_idを含む、JWS、payload_type="sign"）。POST /sign-result のBearer認証に使用する。
+        encrypted_payload:
+          type: string
+          maxLength: 16384
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: |
+            DaemonがPhase 2で送信したJWE (ECDH-ES+A256KW + A256GCM)。
+            スマホは自身のE2E秘密鍵で復号し、E2ePlaintextPayload スキーマに準拠するJSONを取得する。
+        pairing_id:
+          type: string
+          format: uuid
+          description: ペアリング識別子。スマホがローカル保存済みのpairing_idと照合して検証する。
+        daemon_enc_public_key:
+          $ref: '#/components/schemas/DaemonEncPublicKey'
+          description: DaemonがPhase 1で送信した返却パスE2E暗号化用一時EC公開鍵。スマホは承認時に署名結果をこの鍵でJWE暗号化してからPOST /sign-resultに送信する。
+
+    E2ePlaintextPayload:
+      type: object
+      additionalProperties: false
+      required: [hash, hash_algorithm, key_id]
+      description: |
+        E2E暗号化ペイロード（JWE）の復号後に得られるJSON平文構造。
+        DaemonがPhase 2でスマホ向けにJWE暗号化する際の平文、およびスマホがJWE復号後に得る平文のスキーマ。
+        このスキーマはWebサーバーのAPIとしてやり取りされるものではなく、Daemon↔スマホ間のInteroperability仕様として定義する。
+      properties:
+        hash:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: '^[A-Za-z0-9+/=]+$'
+          description: |
+            署名対象のハッシュ値。Standard Base64エンコーディング（RFC 4648 Section 4）。
+            Daemon側: gpg-agentのAssuanプロトコルから受け取ったバイナリハッシュをBase64エンコードして設定する。
+            スマホ側: Base64デコードしてバイナリハッシュを復元し、GPG秘密鍵で署名する。
+        hash_algorithm:
+          type: string
+          enum: [sha256, sha384, sha512, sha224, sha1, rmd160, md5]
+          description: |
+            ハッシュアルゴリズムの識別子。
+            gpg-agentのSETHASHコマンドの`--hash`名またはlibgcryptアルゴリズム番号からDaemonが変換して設定する。
+            スマホ側はこの情報を使用して署名アルゴリズムのパラメータを決定する。
+        key_id:
+          type: string
+          minLength: 2
+          maxLength: 128
+          pattern: '^(0x)?[A-Fa-f0-9]+$'
+          description: |
+            GPG鍵のKey ID（16進数表記）。先頭の "0x" プレフィックスは任意。
+            Daemonがキャッシュ済みのGPG鍵情報（POST /pairing/gpg-keys で取得）から、SIGKEYコマンドのkeygripに対応するkey_idを検索して設定する。
+            スマホ側はこの値を使用して署名に使用するローカルの秘密鍵を特定する。
+      example:
+        hash: "dGVzdCBoYXNoIHZhbHVl"
+        hash_algorithm: "sha256"
+        key_id: "0xABCD1234EF567890"
+
+    SignResultRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      description: |
+        署名結果。
+        - status=approved: ユーザーが承認し署名完了。signature フィールド必須。サーバーは即座にSSEでDaemonに転送する。
+        - status=denied: ユーザーが明示的に拒否。サーバーは即座にSSEでDaemonに転送する。
+        - status=unavailable: 対応するGPG秘密鍵が存在しない等の理由で署名不可。サーバーは他クライアントの応答を待機し、全クライアントがunavailableの場合にのみSSEでDaemonに転送する。
+      properties:
+        signature:
+          type: string
+          maxLength: 16384
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: |
+            status=approved の場合に必須。
+            スマホが `daemon_enc_public_key` でJWE暗号化（ECDH-ES+A256KW + A256GCM）した署名データ。
+            サーバーは平文にアクセスせずそのままSSEでDaemonに転送する。
+            Daemonは対応する `daemon_enc_public_key` の秘密鍵でJWEを復号し署名データを取得する。
+        status:
+          type: string
+          enum: [approved, denied, unavailable]
+      if:
+        properties:
+          status:
+            const: approved
+      then:
+        required: [signature]
+
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: サーバーの稼働状態
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_:-]+$'
+        message:
+          type: string
+          maxLength: 1024
+          pattern: '^[\s\S]{0,1024}$'
+
+    # --- SSE イベントスキーマ ---
+
+    HeartbeatEvent:
+      description: |
+        接続維持のためサーバーが30秒間隔で送信するSSE名前付きイベント。
+        ワイヤーフォーマット: `event: heartbeat\n\n`
+        SSE仕様上dataフィールドがないためEventSourceのイベントとしてはディスパッチされないが、
+        バイトストリーム層での接続活性検知（中間プロキシ・NAT/FWのアイドルタイムアウト防止）に使用する。
+        Daemonはrequest_jwt.expによる自己タイムアウトでアプリケーション層のタイムアウトを管理する。
+      type: object
+      required: [event]
+      properties:
+        event:
+          type: string
+          const: "heartbeat"
+
+    PairedEvent:
+      description: ペアリング完了を通知するSSEイベント
+      type: object
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: "paired"
+        data:
+          type: object
+          required: [client_jwt, client_id]
+          properties:
+            client_jwt:
+              type: string
+              maxLength: 16384
+              pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+              description: ペアリング完了後に発行されるclient_jwt（JWS+JWE）
+            client_id:
+              type: string
+              minLength: 11
+              maxLength: 128
+              pattern: '^[A-Za-z0-9_-]{11,128}$'
+              description: Daemon識別用のクライアントID（Firebase Installation ID）
+
+    PairingStream:
+      description: ペアリングSSEストリームのイベント定義
+      oneOf:
+        - $ref: '#/components/schemas/HeartbeatEvent'
+        - $ref: '#/components/schemas/PairedEvent'
+      discriminator:
+        propertyName: event
+        mapping:
+          heartbeat: '#/components/schemas/HeartbeatEvent'
+          paired: '#/components/schemas/PairedEvent'
+
+    SignatureEvent:
+      description: 署名結果を通知するSSEイベント
+      type: object
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: "signature"
+        data:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [approved, denied, unavailable, expired, cancelled]
+            signature:
+              type: string
+              maxLength: 16384
+              pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+              description: |
+                status=approved の場合にのみ含まれる。
+                スマホがDaemonの `daemon_enc_public_key` でJWE暗号化（ECDH-ES+A256KW + A256GCM）した署名データ。
+                Daemonは対応する秘密鍵でJWEを復号し署名データを取得する。
+                Webサーバーは平文にアクセスしない。
+                status=denied/unavailable/expired/cancelled の場合は含まれない。
+          if:
+            properties:
+              status:
+                const: approved
+          then:
+            required: [signature]
+
+    SignStream:
+      description: 署名SSEストリームのイベント定義
+      oneOf:
+        - $ref: '#/components/schemas/HeartbeatEvent'
+        - $ref: '#/components/schemas/SignatureEvent'
+      discriminator:
+        propertyName: event
+        mapping:
+          heartbeat: '#/components/schemas/HeartbeatEvent'
+          signature: '#/components/schemas/SignatureEvent'
