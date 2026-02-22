@@ -980,6 +980,8 @@ components:
     TooManyRequests:
       description: |
         レート制限超過。
+        API契約として `RateLimit-Policy` / `RateLimit` / `Retry-After` の返却を必須とするのは429応答時のみ。
+        非429応答で `RateLimit-Policy` / `RateLimit` を返却するかは実装依存（任意）。
         全エンドポイントにIPベースのレート制限を適用。
         認証なしエンドポイント（POST /device, GET /pairing-token）は厳格ティア、その他は標準ティアを適用。
         429の要因は次の2種類：
