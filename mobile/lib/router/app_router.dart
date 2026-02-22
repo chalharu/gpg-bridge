@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../security/secure_storage_service.dart';
 import '../state/auth_state.dart';
 
 part 'app_router.g.dart';
@@ -57,14 +58,23 @@ class _RouterRefreshListenable extends ChangeNotifier {
 class RegisterPage extends ConsumerWidget {
   const RegisterPage({super.key});
 
+  static const _deviceTokenKey = 'device_token';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(title: const Text('Register')),
       body: Center(
         child: ElevatedButton(
-          onPressed: () =>
-              ref.read(authStateProvider.notifier).setRegistered(true),
+          onPressed: () async {
+            await ref
+                .read(secureStorageProvider)
+                .writeValue(
+                  key: _deviceTokenKey,
+                  value: 'registered-device-token',
+                );
+            ref.read(authStateProvider.notifier).setRegistered(true);
+          },
           child: const Text('Complete registration'),
         ),
       ),
@@ -75,14 +85,20 @@ class RegisterPage extends ConsumerWidget {
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
+  static const _deviceTokenKey = 'device_token';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       body: Center(
         child: ElevatedButton(
-          onPressed: () =>
-              ref.read(authStateProvider.notifier).setRegistered(false),
+          onPressed: () async {
+            await ref
+                .read(secureStorageProvider)
+                .deleteValue(key: _deviceTokenKey);
+            ref.read(authStateProvider.notifier).setRegistered(false);
+          },
           child: const Text('Reset registration'),
         ),
       ),
