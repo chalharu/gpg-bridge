@@ -3,6 +3,21 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'secure_storage_service.g.dart';
 
+class SecureStorageException implements Exception {
+  SecureStorageException(this.message, {this.cause});
+
+  final String message;
+  final Object? cause;
+
+  @override
+  String toString() {
+    if (cause == null) {
+      return 'SecureStorageException: $message';
+    }
+    return 'SecureStorageException: $message ($cause)';
+  }
+}
+
 abstract interface class SecureStorageBackend {
   Future<void> write({required String key, required String value});
   Future<String?> read({required String key});
@@ -56,16 +71,34 @@ class SecureStorageService {
 
   final SecureStorageBackend _backend;
 
-  Future<void> writeValue({required String key, required String value}) {
-    return _backend.write(key: key, value: value);
+  Future<void> writeValue({required String key, required String value}) async {
+    try {
+      await _backend.write(key: key, value: value);
+    } catch (error) {
+      throw SecureStorageException(
+        'failed to write secure value',
+        cause: error,
+      );
+    }
   }
 
-  Future<String?> readValue({required String key}) {
-    return _backend.read(key: key);
+  Future<String?> readValue({required String key}) async {
+    try {
+      return await _backend.read(key: key);
+    } catch (error) {
+      throw SecureStorageException('failed to read secure value', cause: error);
+    }
   }
 
-  Future<void> deleteValue({required String key}) {
-    return _backend.delete(key: key);
+  Future<void> deleteValue({required String key}) async {
+    try {
+      await _backend.delete(key: key);
+    } catch (error) {
+      throw SecureStorageException(
+        'failed to delete secure value',
+        cause: error,
+      );
+    }
   }
 }
 

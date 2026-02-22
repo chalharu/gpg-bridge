@@ -20,6 +20,23 @@ class InMemorySecureStorageBackend implements SecureStorageBackend {
   }
 }
 
+class ThrowingSecureStorageBackend implements SecureStorageBackend {
+  @override
+  Future<void> write({required String key, required String value}) async {
+    throw Exception('write failed');
+  }
+
+  @override
+  Future<String?> read({required String key}) async {
+    throw Exception('read failed');
+  }
+
+  @override
+  Future<void> delete({required String key}) async {
+    throw Exception('delete failed');
+  }
+}
+
 void main() {
   test('secure storage service writes reads and deletes values', () async {
     final service = SecureStorageService(InMemorySecureStorageBackend());
@@ -29,5 +46,24 @@ void main() {
 
     await service.deleteValue(key: 'token');
     expect(await service.readValue(key: 'token'), isNull);
+  });
+
+  test('secure storage service wraps backend errors', () async {
+    final service = SecureStorageService(ThrowingSecureStorageBackend());
+
+    await expectLater(
+      () => service.writeValue(key: 'token', value: 'abc123'),
+      throwsA(isA<SecureStorageException>()),
+    );
+
+    await expectLater(
+      () => service.readValue(key: 'token'),
+      throwsA(isA<SecureStorageException>()),
+    );
+
+    await expectLater(
+      () => service.deleteValue(key: 'token'),
+      throwsA(isA<SecureStorageException>()),
+    );
   });
 }
