@@ -11,6 +11,7 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod ipc;
 mod sse;
 
 use sse::{DaemonSseEvent, SseClient, SseClientConfig};
@@ -281,6 +282,8 @@ async fn main() -> anyhow::Result<()> {
         "daemon started"
     );
 
+    let ipc_server = ipc::IpcServer::start(&config.socket_path).await?;
+
     let sse_task = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
         let sse_client = SseClient::new(http_client.clone(), SseClientConfig::new(sse_url))?;
 
@@ -314,12 +317,16 @@ async fn main() -> anyhow::Result<()> {
 
     info!("waiting for shutdown signal");
 
-    wait_for_shutdown_signal(tokio::signal::ctrl_c()).await?;
+    let shutdown_signal_result = wait_for_shutdown_signal(tokio::signal::ctrl_c()).await;
 
     if let Some(task) = sse_task {
         task.abort();
         let _ = task.await;
     }
+
+    ipc_server.shutdown().await?;
+
+    shutdown_signal_result?;
 
     info!("shutdown signal received");
     Ok(())
