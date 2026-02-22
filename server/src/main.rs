@@ -13,6 +13,14 @@ struct Cli {
     port: u16,
 }
 
+fn parse_cli_from<I, T>(args: I) -> Cli
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    Cli::parse_from(args)
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -28,7 +36,7 @@ fn parse_socket_addr(host: &str, port: u16) -> Result<SocketAddr, std::net::Addr
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+    let cli = parse_cli_from(std::env::args_os());
     let addr = parse_socket_addr(&cli.host, cli.port)?;
 
     let app = Router::new().route("/", get(health));
@@ -44,7 +52,7 @@ mod tests {
 
     #[test]
     fn cli_defaults_are_applied() {
-        let cli = Cli::parse_from(["gpg-bridge-server"]);
+        let cli = parse_cli_from(["gpg-bridge-server"]);
 
         assert_eq!(cli.host, "127.0.0.1");
         assert_eq!(cli.port, 3000);
@@ -52,7 +60,7 @@ mod tests {
 
     #[test]
     fn cli_custom_values_are_applied() {
-        let cli = Cli::parse_from([
+        let cli = parse_cli_from([
             "gpg-bridge-server",
             "--host",
             "0.0.0.0",
@@ -62,6 +70,14 @@ mod tests {
 
         assert_eq!(cli.host, "0.0.0.0");
         assert_eq!(cli.port, 8080);
+    }
+
+    #[test]
+    fn parse_cli_from_accepts_short_args_array() {
+        let cli = parse_cli_from(["gpg-bridge-server", "--port", "3001"]);
+
+        assert_eq!(cli.host, "127.0.0.1");
+        assert_eq!(cli.port, 3001);
     }
 
     #[test]
