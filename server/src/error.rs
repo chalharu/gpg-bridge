@@ -16,6 +16,7 @@ pub struct ProblemDetails {
 
 #[derive(Debug, Clone, Copy)]
 enum AppErrorKind {
+    NotAcceptable,
     Validation,
     Database,
     Internal,
@@ -29,6 +30,14 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub fn not_acceptable(detail: impl Into<String>) -> Self {
+        Self {
+            kind: AppErrorKind::NotAcceptable,
+            detail: detail.into(),
+            instance: None,
+        }
+    }
+
     pub fn validation(detail: impl Into<String>) -> Self {
         Self {
             kind: AppErrorKind::Validation,
@@ -60,6 +69,7 @@ impl AppError {
 
     fn status_code(&self) -> StatusCode {
         match self.kind {
+            AppErrorKind::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
             AppErrorKind::Validation => StatusCode::BAD_REQUEST,
             AppErrorKind::Database => StatusCode::SERVICE_UNAVAILABLE,
             AppErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -68,6 +78,7 @@ impl AppError {
 
     fn title(&self) -> &'static str {
         match self.kind {
+            AppErrorKind::NotAcceptable => "Not acceptable",
             AppErrorKind::Validation => "Validation error",
             AppErrorKind::Database => "Database error",
             AppErrorKind::Internal => "Internal server error",
@@ -76,6 +87,7 @@ impl AppError {
 
     fn problem_type(&self) -> &'static str {
         match self.kind {
+            AppErrorKind::NotAcceptable => "https://gpg-bridge.dev/problems/not-acceptable",
             AppErrorKind::Validation => "https://gpg-bridge.dev/problems/validation",
             AppErrorKind::Database => "https://gpg-bridge.dev/problems/database",
             AppErrorKind::Internal => "https://gpg-bridge.dev/problems/internal",
@@ -131,6 +143,17 @@ mod tests {
         let response = AppError::validation("missing field").into_response();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+    }
+
+    #[test]
+    fn not_acceptable_error_returns_406_problem_json() {
+        let response = AppError::not_acceptable("unsupported media type").into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(
             response.headers().get(CONTENT_TYPE).unwrap(),
             "application/problem+json"

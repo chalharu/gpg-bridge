@@ -22,3 +22,4 @@ tower-http.workspace = true
 
 [dev-dependencies]
 postgresql_embedded.workspace = true
+tower.workspace = true
