@@ -29,6 +29,7 @@
 
 # Testing
 # cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo llvm-cov --workspace --summary-only
+# cd mobile && dart format --output=none --set-exit-if-changed lib test && flutter analyze && flutter test --coverage
 
 # Build
 # [Add your build command here]
@@ -45,6 +46,8 @@
 - Delete dead code immediately
 - If Rust source code is modified, always run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
 - For Rust changes, include the `cargo llvm-cov --workspace --summary-only` result summary in the related PR body or PR comments
+- If Flutter source code is modified, always run: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, and `flutter test --coverage`
+- If Flutter coverage is low for the changed area, add/adjust tests to improve coverage before creating or updating the PR
 
 ---
 
