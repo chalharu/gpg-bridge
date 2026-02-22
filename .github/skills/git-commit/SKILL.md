@@ -17,6 +17,8 @@ Execute commits with a strict and repeatable workflow.
 6. Run commit.
 7. Verify result.
 
+If GitHub operations are needed alongside commit work (PR/issue/comment/search), use GitHub MCP tools (`mcp_io_github_*`) and do not use `gh` CLI.
+
 Do not skip change understanding before message generation.
 
 ## 1) Check Repository State
