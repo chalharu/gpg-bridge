@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
