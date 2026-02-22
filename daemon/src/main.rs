@@ -177,6 +177,8 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::Builder;
 
     #[test]
     fn cli_defaults_are_applied() {
@@ -224,12 +226,14 @@ mod tests {
 
     #[test]
     fn parse_toml_file_config() {
-        let path = Path::new("tmp/test.toml");
-        let config = parse_file_config(
-            path,
-            "server_url = 'https://daemon.example'\nsocket_path = 'tmp/daemon.sock'\nlog_level = 'debug'\n",
+        let mut file = Builder::new().suffix(".toml").tempfile().unwrap();
+        write!(
+            file,
+            "server_url = 'https://daemon.example'\nsocket_path = 'tmp/daemon.sock'\nlog_level = 'debug'\n"
         )
         .unwrap();
+
+        let config = load_file_config(Some(file.path())).unwrap();
 
         assert_eq!(config.server_url, Some("https://daemon.example".to_owned()));
         assert_eq!(config.socket_path, Some("tmp/daemon.sock".to_owned()));
@@ -238,12 +242,14 @@ mod tests {
 
     #[test]
     fn parse_yaml_file_config() {
-        let path = Path::new("tmp/test.yaml");
-        let config = parse_file_config(
-            path,
-            "server_url: https://daemon.example\nsocket_path: tmp/daemon.sock\nlog_level: warn\n",
+        let mut file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(
+            file,
+            "server_url: https://daemon.example\nsocket_path: tmp/daemon.sock\nlog_level: warn\n"
         )
         .unwrap();
+
+        let config = load_file_config(Some(file.path())).unwrap();
 
         assert_eq!(config.server_url, Some("https://daemon.example".to_owned()));
         assert_eq!(config.socket_path, Some("tmp/daemon.sock".to_owned()));
