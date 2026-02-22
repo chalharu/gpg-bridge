@@ -71,6 +71,14 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn parse_socket_addr_returns_expected_value_for_valid_input() {
+        let result = parse_socket_addr("127.0.0.1", 8080);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to_string(), "127.0.0.1:8080");
+    }
+
     #[tokio::test]
     async fn health_returns_ok_status() {
         let Json(response) = health().await;
