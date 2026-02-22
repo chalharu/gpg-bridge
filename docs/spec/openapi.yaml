@@ -119,6 +119,8 @@ paths:
         **自動クリーンアップポリシー:**
         - 未ペアリングデバイスの期限切れ削除: created_atから一定時間（例: 24時間）経過後もpairing_idsが空のままのclientsレコードはバックグラウンドジョブで自動削除する
         - 全ペアリング解除時の即時削除: DELETE /pairingの結果pairing_idsが空になった場合、clientsレコードを即時削除する
+        - device_jwt期限超過: device_jwt_issued_at + device_jwt有効期間（例: 365日）を超過したclientsレコードをバックグラウンドジョブで自動削除する
+        - client_jwt期限超過: pairing_ids内のclient_jwt_issued_at + client_jwt有効期間（例: 365日）を超過したペアリングをバックグラウンドジョブで自動解除する。結果pairing_idsが空になった場合はclientsレコードも削除する
       responses:
         '204':
           description: デバイス削除成功
