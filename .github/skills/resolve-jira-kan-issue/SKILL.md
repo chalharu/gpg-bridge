@@ -31,11 +31,12 @@ If missing, ask for it before any action.
    - `feature/<topic>` for feature work
    - `fix/<topic>` for bug fix
    - `chore/<topic>` for maintenance
-5. Implement minimal required changes in repository.
-6. Run relevant tests/build checks for changed area.
-7. Commit changes using `git-commit` skill workflow.
-8. Create pull request following `CONTRIBUTING.md` PR template requirements.
-9. Report summary and PR URL.
+5. Start implementation and immediately transition the Jira issue status to `進行中`.
+6. Implement minimal required changes in repository.
+7. Run relevant tests/build checks for changed area.
+8. Commit changes using `git-commit` skill workflow.
+9. Create pull request following `CONTRIBUTING.md` PR template requirements.
+10. Report summary and PR URL.
 
 ## Clarification Dialogue Rules
 
@@ -51,6 +52,7 @@ Do not proceed with implementation until required unknowns are resolved.
 ## Jira Handling Rules
 
 - Read issue content, comments, and status before implementation.
+- When work begins, transition the issue to `進行中`.
 - If scope needs refinement, add concise Jira comment in `KAN`.
 - When work is ready for review, update Jira with PR link and summary.
 - Never update issues outside `KAN`.
