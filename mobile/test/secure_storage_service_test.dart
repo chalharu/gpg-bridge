@@ -2,23 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
 
 import 'helpers/in_memory_secure_storage_backend.dart';
-
-class ThrowingSecureStorageBackend implements SecureStorageBackend {
-  @override
-  Future<void> write({required String key, required String value}) async {
-    throw Exception('write failed');
-  }
-
-  @override
-  Future<String?> read({required String key}) async {
-    throw Exception('read failed');
-  }
-
-  @override
-  Future<void> delete({required String key}) async {
-    throw Exception('delete failed');
-  }
-}
+import 'helpers/throwing_secure_storage_backend.dart';
 
 void main() {
   test('secure storage service writes reads and deletes values', () async {
@@ -48,5 +32,18 @@ void main() {
       () => service.deleteValue(key: 'token'),
       throwsA(isA<SecureStorageException>()),
     );
+  });
+
+  test('secure storage exception toString includes cause when present', () {
+    final error = SecureStorageException('failed', cause: Exception('boom'));
+
+    expect(error.toString(), contains('failed'));
+    expect(error.toString(), contains('boom'));
+  });
+
+  test('secure storage exception toString omits cause when absent', () {
+    final error = SecureStorageException('failed');
+
+    expect(error.toString(), 'SecureStorageException: failed');
   });
 }
