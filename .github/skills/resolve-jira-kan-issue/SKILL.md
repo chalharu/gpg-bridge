@@ -27,10 +27,10 @@ If missing, ask for it before any action.
 1. Validate `ISSUEID` and fetch issue details.
 2. Confirm problem statement, acceptance criteria, and constraints.
 3. If missing/ambiguous, ask the user and resolve via dialogue before coding.
-4. Create working branch from `main` according to `CONTRIBUTING.md`:
-   - `feature/<topic>` for feature work
-   - `fix/<topic>` for bug fix
-   - `chore/<topic>` for maintenance
+4. Create working branch from `main` according to `CONTRIBUTING.md`, and always include `ISSUEID` in the branch name:
+   - `feature/<issueid>-<topic>` for feature work (e.g., `feature/kan-123-add-auth`)
+   - `fix/<issueid>-<topic>` for bug fix (e.g., `fix/kan-123-token-expiry`)
+   - `chore/<issueid>-<topic>` for maintenance (e.g., `chore/kan-123-update-docs`)
 5. Start implementation and immediately transition the Jira issue status to `進行中`.
 6. Implement minimal required changes in repository.
 7. Run relevant tests/build checks for changed area.
