@@ -67,13 +67,22 @@ class RegisterPage extends ConsumerWidget {
       body: Center(
         child: ElevatedButton(
           onPressed: () async {
-            await ref
-                .read(secureStorageProvider)
-                .writeValue(
-                  key: _deviceTokenKey,
-                  value: 'registered-device-token',
-                );
-            ref.read(authStateProvider.notifier).setRegistered(true);
+            try {
+              await ref
+                  .read(secureStorageProvider)
+                  .writeValue(
+                    key: _deviceTokenKey,
+                    value: 'registered-device-token',
+                  );
+              ref.read(authStateProvider.notifier).setRegistered(true);
+            } on SecureStorageException catch (error) {
+              if (!context.mounted) {
+                return;
+              }
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(error.message)));
+            }
           },
           child: const Text('Complete registration'),
         ),
@@ -94,10 +103,19 @@ class HomePage extends ConsumerWidget {
       body: Center(
         child: ElevatedButton(
           onPressed: () async {
-            await ref
-                .read(secureStorageProvider)
-                .deleteValue(key: _deviceTokenKey);
-            ref.read(authStateProvider.notifier).setRegistered(false);
+            try {
+              await ref
+                  .read(secureStorageProvider)
+                  .deleteValue(key: _deviceTokenKey);
+              ref.read(authStateProvider.notifier).setRegistered(false);
+            } on SecureStorageException catch (error) {
+              if (!context.mounted) {
+                return;
+              }
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(error.message)));
+            }
           },
           child: const Text('Reset registration'),
         ),
