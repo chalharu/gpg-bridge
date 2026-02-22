@@ -162,6 +162,18 @@ IPベースのレート制限に加え、以下のアプリケーションレベ
 > [!NOTE]
 > これらの論理的制限はIPベースのレート制限とは独立して動作し、いずれかの制限に到達した時点で429を返却する。初期目安値は運用開始後のトラフィック分析に基づいて調整する（設定値として外部化）。
 
+#### SSEエンドポイント向け接続制御
+長時間接続のSSEエンドポイント（`GET /pairing-session`, `GET /sign-events`）には、通常のreq/min制限に加えて接続数ベースの制御を適用する。
+
+| 対象 | 制限条件 | 初期目安 | 応答 | 設計理由 |
+| --- | --- | --- | --- | --- |
+| `GET /pairing-session`, `GET /sign-events` | 同一IPの同時SSE接続数が上限超過 | 20接続/IP | 429 | 短時間再接続集中時の接続枯渇防止 |
+| `GET /pairing-session` | 同一`pairing_jwt`での同時接続数が上限超過 | 1接続 | 429 | 同一待機セッションの重複接続防止 |
+| `GET /sign-events` | 同一`request_id`での同時接続数が上限超過 | 1接続 | 429 | 同一署名待機セッションの重複接続防止 |
+
+> [!NOTE]
+> SSE接続制御により429を返却する場合も `Retry-After` を返却し、クライアントは `Retry-After` を最小待機時間として再接続する。
+
 #### レスポンスヘッダ
 レート制限の状態はRFC 6585（429ステータスコード）およびdraft-ietf-httpapi-ratelimit-headers（RateLimit関連ヘッダ）に基づくレスポンスヘッダで通知する:
 - `RateLimit-Policy`: レート制限ポリシーの定義（SF-Dictionary形式。クォータ`q`とウィンドウ幅`w`）。例: `"default";q=100;w=60`
@@ -1478,6 +1490,9 @@ data: { "signature": "eyJ...(JWE)", "status": "approved|denied|unavailable|expir
 - [ ] 全エンドポイントへのIPベースレート制限の実装（ミドルウェア方式、セクション4.5参照）
 - [ ] 認証なしエンドポイント（`POST /device`, `GET /pairing-token`）への厳格ティア適用
 - [ ] レート制限レスポンスヘッダ（`RateLimit-Policy`, `RateLimit`, `Retry-After`）の実装
+- [ ] SSE接続数制限（`GET /pairing-session`, `GET /sign-events`）の実装（IP単位・セッション単位）
+- [ ] SSE再接続時の指数バックオフ + ジッターの実装（初期1秒、最大30秒）
+- [ ] SSEで429受信時に `Retry-After` を優先する再接続制御の実装
 - [ ] POST /sign-requestでの同一client_id & pairing_id未完了要求数制限（初期上限5件、セクション4.5参照）
 - [ ] POST /sign-requestでのclient_jwt内pairing_idの`clients.pairing_ids`存在検証（ペアリング解除済みclient_jwtのフィルタリング、有効なclient_jwtが0件なら401）
 - [ ] POST /sign-requestでの複数client_jwt検証方針: JWT検証失敗は全体401拒否、サーバー側無効化はフィルタリングして部分成功許容
@@ -1571,6 +1586,12 @@ data: { "signature": "eyJ...(JWE)", "status": "approved|denied|unavailable|expir
 - 各SSEストリームは1回のイベント発火で完結するため、複数イベントの順序管理が不要
 - Bearerトークンがセッションと認証を同時に担うため、別途`Last-Event-ID`を管理する必要がない
 - サーバーは再接続時にDB状態を確認し、結果が存在すれば即座に再送する（イベント取りこぼし防止）
+
+**再接続バックオフ方針（必須）：**
+- クライアントは再接続時に指数バックオフ + ジッターを使用する
+- 初期待機: 1秒、最大待機: 30秒（目安）
+- 429受信時は `Retry-After` を優先し、`max(Retry-After, バックオフ計算値)` 秒待機して再接続する
+- 連続失敗時の高頻度再接続（再接続ストーム）を禁止する
 
 #### 9.1.4 SSEハートビート
 全SSEエンドポイント（`GET /pairing-session`, `GET /sign-events`）で、サーバーは接続維持のために定期的なハートビートを送信する。

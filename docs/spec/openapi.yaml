@@ -427,6 +427,8 @@ paths:
         SSE待機はGETを用いる。
         切断時は同じpairing_jwtで再接続可能。サーバーはpairing_jwtの有効期限内であれば再接続を受理し、既にペアリング完了済みならpairedイベントを即座に再送する。
         サーバーは接続維持のため、30秒ごとにheartbeatイベント（`event: heartbeat\n\n`）を送信する。クライアントは60秒以内にハートビートまたはイベントを受信できない場合、接続切断とみなし再接続を試みる。
+        SSE向け接続制御として、同一IPあたりの同時接続数上限および同一pairing_jwtの同時接続数上限を適用する。上限超過時は429を返却する。
+        再接続は指数バックオフ + ジッターを使用し、429受信時はRetry-Afterを最小待機時間として再接続する。
       responses:
         '200':
           description: SSEストリーム（ペアリング完了時にpairedイベントを送信）
@@ -785,6 +787,8 @@ paths:
         切断時はDaemonが同じ一時鍵ペアで新しいdaemon_auth_jws（iat・jtiを更新）を生成して再接続可能。サーバーはrequest_jwtの有効期限内であれば再接続を受理し、既に署名結果が存在すれば即座にイベントを再送する。
         Daemonバインディングにより、Phase 1を開始した同一Daemonからの接続のみが許可される。
         サーバーは接続維持のため、30秒ごとにheartbeatイベント（`event: heartbeat\n\n`）を送信する。クライアントは60秒以内にハートビートまたはイベントを受信できない場合、接続切断とみなし再接続を試みる。
+        SSE向け接続制御として、同一IPあたりの同時接続数上限および同一request_idの同時接続数上限を適用する。上限超過時は429を返却する。
+        再接続は指数バックオフ + ジッターを使用し、429受信時はRetry-Afterを最小待機時間として再接続する。
         状態を問わず（created/pending）タイムアウト時には `{"status":"expired"}` イベントを送信する。DaemonがDELETE /sign-requestでキャンセルした場合は `{"status":"cancelled"}` イベントを送信する。DaemonはSSEイベントと並行してrequest_jwtのexpも自己監視すること。
       security:
         - signingTokenAuth: []
