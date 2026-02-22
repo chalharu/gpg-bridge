@@ -72,6 +72,8 @@ Prefer one logical change per commit; avoid mixed-purpose commits.
 
 Follow `CONTRIBUTING.md` exactly.
 
+GitHub operations (PR create/update/comment/search, issue comments, merge checks) must use GitHub MCP tools (`mcp_io_github_*`) only. Do not use `gh` CLI for GitHub interactions.
+
 PR body must include:
 
 - Why (motivation)
