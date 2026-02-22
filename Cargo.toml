@@ -11,6 +11,7 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
+async-trait = "0.1.89"
 axum = "0.8.8"
 clap = { version = "4.5.60", features = ["derive"] }
 dotenvy = "0.15.7"
@@ -22,6 +23,7 @@ serde_yaml = "0.9.34"
 tempfile = "3.25.0"
 toml = "0.9.12"
 tokio = { version = "1.49.0", features = ["full"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "sqlite", "migrate"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tower-http = { version = "0.6.8", features = ["trace", "request-id", "util"] }
