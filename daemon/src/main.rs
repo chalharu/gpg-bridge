@@ -1,10 +1,18 @@
 use clap::Parser;
+use reqwest::{
+    Client, StatusCode,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER, USER_AGENT},
+};
 use serde::Deserialize;
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 10;
+const MAX_HTTP_RETRIES: u32 = 3;
 
 #[derive(Debug, Parser)]
 #[command(name = "gpg-bridge-daemon")]
@@ -142,6 +150,98 @@ fn setup_tracing(log_level: &str) -> anyhow::Result<()> {
         .map_err(|error| anyhow::anyhow!("failed to initialize tracing subscriber: {error}"))
 }
 
+fn default_user_agent() -> String {
+    format!("gpg-bridge-daemon/{}", env!("CARGO_PKG_VERSION"))
+}
+
+pub fn build_http_client(timeout: Duration, user_agent: &str) -> anyhow::Result<Client> {
+    let client = Client::builder()
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .build()?;
+
+    Ok(client)
+}
+
+pub fn build_bearer_header(token: &str) -> anyhow::Result<HeaderValue> {
+    if token.trim().is_empty() {
+        return Err(anyhow::anyhow!("bearer token must not be empty"));
+    }
+
+    Ok(HeaderValue::from_str(&format!("Bearer {token}"))?)
+}
+
+pub fn retry_delay_for(status: StatusCode, headers: &HeaderMap, attempt: u32) -> Option<Duration> {
+    if attempt >= MAX_HTTP_RETRIES {
+        return None;
+    }
+
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return headers
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .or_else(|| Some(Duration::from_secs(u64::from(attempt + 1))));
+    }
+
+    if status.is_server_error() {
+        return Some(Duration::from_secs(2_u64.pow(attempt)));
+    }
+
+    None
+}
+
+pub fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
+    match status {
+        StatusCode::UNAUTHORIZED => anyhow::anyhow!("authentication failed for {url} (401)"),
+        StatusCode::FORBIDDEN => anyhow::anyhow!("permission denied for {url} (403)"),
+        StatusCode::NOT_FOUND => anyhow::anyhow!("resource not found at {url} (404)"),
+        StatusCode::TOO_MANY_REQUESTS => anyhow::anyhow!("rate limited by {url} (429)"),
+        _ if status.is_server_error() => {
+            anyhow::anyhow!("server error from {url} ({status})")
+        }
+        _ => anyhow::anyhow!("request failed for {url} ({status})"),
+    }
+}
+
+pub async fn send_get_with_retry(
+    client: &Client,
+    url: &str,
+    bearer_token: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut attempt = 0;
+
+    loop {
+        let mut request = client.get(url).header(USER_AGENT, default_user_agent());
+
+        if let Some(token) = bearer_token {
+            request = request.header(AUTHORIZATION, build_bearer_header(token)?);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to send request to {url}: {error}"))?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            return response.text().await.map_err(|error| {
+                anyhow::anyhow!("failed to read response body from {url}: {error}")
+            });
+        }
+
+        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
+            attempt += 1;
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        return Err(map_status_error(status, url));
+    }
+}
+
 async fn wait_for_shutdown_signal<F>(shutdown_signal: F) -> anyhow::Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
@@ -157,15 +257,26 @@ async fn main() -> anyhow::Result<()> {
     let config_path = resolve_config_path(&cli, &lookup);
     let file_config = load_file_config(config_path.as_deref())?;
     let config = build_app_config(&cli, &file_config, &lookup)?;
+    let http_client = build_http_client(
+        Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECONDS),
+        &default_user_agent(),
+    )?;
 
     setup_tracing(&config.log_level)?;
+
+    if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
+        let _ = build_bearer_header(&token)?;
+    }
 
     info!(
         log_level = %config.log_level,
         server_url = %config.server_url,
         socket_path = %config.socket_path,
+        http_timeout_seconds = DEFAULT_HTTP_TIMEOUT_SECONDS,
+        max_http_retries = MAX_HTTP_RETRIES,
         "daemon started"
     );
+    let _ = http_client;
     info!("waiting for shutdown signal");
 
     wait_for_shutdown_signal(tokio::signal::ctrl_c()).await?;
@@ -179,6 +290,8 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::Builder;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn cli_defaults_are_applied() {
@@ -319,6 +432,57 @@ mod tests {
 
         let result = build_app_config(&cli, &file, &lookup);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_bearer_header_adds_scheme() {
+        let value = build_bearer_header("token-123").unwrap();
+
+        assert_eq!(value.to_str().unwrap(), "Bearer token-123");
+    }
+
+    #[test]
+    fn retry_delay_for_uses_retry_after_on_429() {
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+
+        let delay = retry_delay_for(StatusCode::TOO_MANY_REQUESTS, &headers, 0).unwrap();
+
+        assert_eq!(delay, Duration::from_secs(7));
+    }
+
+    #[tokio::test]
+    async fn send_get_with_retry_sends_bearer_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            let mut buffer = [0_u8; 2048];
+            let bytes_read = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+
+            request
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "daemon-test/1.0").unwrap();
+        let response =
+            send_get_with_retry(&client, &format!("http://{addr}"), Some("secret-token"))
+                .await
+                .unwrap();
+
+        let request = server.await.unwrap();
+        let request_lower = request.to_ascii_lowercase();
+
+        assert_eq!(response, "ok");
+        assert!(request_lower.contains("authorization: bearer secret-token"));
+        assert!(request_lower.contains("user-agent: gpg-bridge-daemon/"));
     }
 
     #[tokio::test]
