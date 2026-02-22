@@ -541,6 +541,10 @@ approved/denied/unavailable: 結果確定済み。DaemonのSSE再接続に備え
 | --- | --- | --- | --- |
 | 署名要求 | `sign_request` | `{ "type": "sign_request", "request_id": "<UUID>" }` | PATCH /sign-request（Phase 2）完了時 |
 | 署名要求キャンセル | `sign_request_cancelled` | `{ "type": "sign_request_cancelled", "request_id": "<UUID>" }` | POST /sign-resultで承認/拒否確定時、またはDELETE /sign-requestでのキャンセル時 |
+| 復号要求（vNext） | `decrypt_request` | `{ "type": "decrypt_request", "request_id": "<UUID>" }` | PATCH /decrypt-request（Phase 2）完了時 |
+| 復号要求キャンセル（vNext） | `decrypt_request_cancelled` | `{ "type": "decrypt_request_cancelled", "request_id": "<UUID>" }` | POST /decrypt-resultで承認/拒否確定時、またはDELETE /decrypt-requestでのキャンセル時 |
+| 認証要求（vNext） | `auth_request` | `{ "type": "auth_request", "request_id": "<UUID>" }` | PATCH /auth-request（Phase 2）完了時 |
+| 認証要求キャンセル（vNext） | `auth_request_cancelled` | `{ "type": "auth_request_cancelled", "request_id": "<UUID>" }` | POST /auth-resultで承認/拒否確定時、またはDELETE /auth-requestでのキャンセル時 |
 
 ### 6.3 永続化要件
 - clients: **準永続化**（`client_id`, `created_at`, `device_token`, `updated_at`, `device_jwt_issued_at`, `public_keys`, `default_kid`, `pairing_ids`, `gpg_keys`）。以下の条件で自動削除:
