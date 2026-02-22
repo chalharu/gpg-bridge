@@ -37,6 +37,7 @@ If missing, ask for it before any action.
 8. Commit changes using `git-commit` skill workflow.
 9. Create pull request following `CONTRIBUTING.md` PR template requirements.
 10. Report summary and PR URL.
+11. Return local repository to `main` branch at the end (`git checkout main`).
 
 ## Clarification Dialogue Rules
 
