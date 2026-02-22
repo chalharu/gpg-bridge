@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = ["server", "daemon"]
+
+[workspace.package]
+authors = ["chalharu"]
+repository = "https://github.com/chalharu/gpg-bridge.git"
+license = "AGPL-3.0"
+version = "0.1.0"
+edition = "2024"
