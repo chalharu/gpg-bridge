@@ -16,7 +16,7 @@ clap = { version = "4.5.60", features = ["derive"] }
 dotenvy = "0.15.7"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-reqwest = { version = "0.12.23", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
 thiserror = "2.0.18"
 serde_yaml = "0.9.34"
 tempfile = "3.23.0"
