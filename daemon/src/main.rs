@@ -27,3 +27,22 @@ async fn main() -> anyhow::Result<()> {
     info!("shutdown signal received");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_defaults_are_applied() {
+        let cli = Cli::parse_from(["gpg-bridge-daemon"]);
+
+        assert_eq!(cli.log_level, "info");
+    }
+
+    #[test]
+    fn cli_custom_log_level_is_applied() {
+        let cli = Cli::parse_from(["gpg-bridge-daemon", "--log-level", "debug"]);
+
+        assert_eq!(cli.log_level, "debug");
+    }
+}
