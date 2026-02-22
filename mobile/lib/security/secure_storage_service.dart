@@ -1,5 +1,7 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+part 'secure_storage_service.g.dart';
 
 abstract interface class SecureStorageBackend {
   Future<void> write({required String key, required String value});
@@ -67,7 +69,8 @@ class SecureStorageService {
   }
 }
 
-final secureStorageProvider = Provider<SecureStorageService>((ref) {
+@riverpod
+SecureStorageService secureStorage(Ref ref) {
   const storage = FlutterSecureStorage();
   return SecureStorageService(FlutterSecureStorageBackend(storage));
-});
+}
