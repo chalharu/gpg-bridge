@@ -19,7 +19,7 @@ where
 }
 
 fn build_env_filter(log_level: &str) -> anyhow::Result<EnvFilter> {
-    Ok(EnvFilter::try_new(log_level.to_owned())?)
+    Ok(EnvFilter::try_new(log_level)?)
 }
 
 fn setup_tracing(log_level: &str) -> anyhow::Result<()> {
