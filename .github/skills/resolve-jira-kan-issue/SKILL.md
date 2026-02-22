@@ -27,22 +27,35 @@ If missing, ask for it before any action.
 1. Validate `ISSUEID` and fetch issue details.
 2. Confirm problem statement, acceptance criteria, and constraints.
 3. If missing/ambiguous, ask the user and resolve via dialogue before coding.
-4. Create working branch from `main` according to `CONTRIBUTING.md`, and always include `ISSUEID` in the branch name:
-   - `feature/<issueid>-<topic>` for feature work (e.g., `feature/kan-123-add-auth`)
-   - `fix/<issueid>-<topic>` for bug fix (e.g., `fix/kan-123-token-expiry`)
-   - `chore/<issueid>-<topic>` for maintenance (e.g., `chore/kan-123-update-docs`)
-5. Start implementation and immediately transition the Jira issue status to `進行中`.
-6. Implement required changes in repository using a subagent.
-7. After implementation, run a review using a different subagent.
-8. Run relevant tests/build checks for changed area.
-   - Always run format/lint or static analysis/tests/coverage commands that match the changed area (Rust/Flutter/others).
-   - If coverage is low for the changed area, add/adjust tests and re-run until coverage improves before creating/updating the PR.
-   - For Rust changes, run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo llvm-cov --workspace --summary-only`.
-   - For Flutter changes, run: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, `flutter test --coverage`.
-9. Commit changes using `git-commit` skill workflow.
-10. Create pull request following `CONTRIBUTING.md` PR template requirements.
-11. Report summary and PR URL.
-12. Return local repository to `main` branch at the end (`git checkout main`).
+4. Create a **git worktree** inside the repository's `work/` directory to isolate work from the existing environment:
+   - If `work/` directory does not exist, create it and add `work/.gitignore` containing `*` to prevent tracking worktree contents.
+   - Run `git worktree add work/<issueid> -b <branch> main` to create a separate working directory (e.g., `work/kan-123`).
+   - All subsequent implementation and checks must run inside this worktree, not the original repository.
+   - Branch naming follows `CONTRIBUTING.md` and always includes `ISSUEID`:
+     - `feature/<issueid>-<topic>` for feature work (e.g., `feature/kan-123-add-auth`)
+     - `fix/<issueid>-<topic>` for bug fix (e.g., `fix/kan-123-token-expiry`)
+     - `chore/<issueid>-<topic>` for maintenance (e.g., `chore/kan-123-update-docs`)
+5. Transition the Jira issue status to `進行中`.
+6. **Implement** required changes using a subagent (the "implementation agent").
+   - The implementation agent must aim for **global optimization**, not minimal or narrowly scoped changes. Consider the overall codebase health, consistency, and design when making changes.
+7. **Quality gate** (run by the implementation agent before requesting review):
+   - Always run format/lint, static analysis, tests, and coverage commands for the changed area.
+   - For Rust changes: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo llvm-cov --workspace --summary-only`.
+   - For Flutter changes: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, `flutter test --coverage`.
+   - If coverage is low for the changed area, add/adjust tests and re-run until coverage improves.
+   - All checks must pass before proceeding to review.
+8. **Review** using a **different** subagent (the "review agent").
+   - The review agent must **never modify code**. It only inspects and reports findings.
+   - If issues are found, the review agent returns a detailed list of required fixes and **rejects** (sends back) the work to the implementation agent.
+9. **Rework loop**: If the review agent rejects:
+   - The implementation agent fixes all reported issues.
+   - Re-run the quality gate (step 7).
+   - Re-submit to the review agent (step 8).
+   - Repeat until the review agent approves with no remaining issues.
+10. Commit changes using `git-commit` skill workflow.
+11. Create pull request following `CONTRIBUTING.md` PR template requirements.
+12. Report summary and PR URL.
+13. Clean up: remove the git worktree (`git worktree remove work/<issueid>`) and return to `main` branch.
 
 ## Clarification Dialogue Rules
 
