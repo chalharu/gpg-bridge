@@ -8,6 +8,7 @@ use tower_http::{
 };
 use tracing::Level;
 
+use crate::error::AppError;
 use crate::repository::SignatureRepository;
 
 #[derive(Debug, Clone)]
@@ -24,18 +25,18 @@ pub struct HealthResponse {
 
 pub async fn health(
     axum::extract::State(state): axum::extract::State<AppState>,
-) -> Json<HealthResponse> {
-    let database_status = if state.repository.health_check().await.is_ok() {
-        "ok"
-    } else {
-        "error"
-    };
+) -> Result<Json<HealthResponse>, AppError> {
+    state
+        .repository
+        .health_check()
+        .await
+        .map_err(|error| AppError::from(error).with_instance("/"))?;
 
-    Json(HealthResponse {
+    Ok(Json(HealthResponse {
         status: "ok",
         database_backend: state.repository.backend_name(),
-        database_status,
-    })
+        database_status: "ok",
+    }))
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -56,6 +57,26 @@ pub fn build_router(state: AppState) -> Router {
 mod tests {
     use super::*;
     use crate::{config::AppConfig, repository::build_repository};
+    use async_trait::async_trait;
+    use axum::{body, response::IntoResponse};
+
+    #[derive(Debug)]
+    struct FailingRepository;
+
+    #[async_trait]
+    impl SignatureRepository for FailingRepository {
+        async fn run_migrations(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("connection refused"))
+        }
+
+        fn backend_name(&self) -> &'static str {
+            "sqlite"
+        }
+    }
 
     #[tokio::test]
     async fn health_returns_ok_status() {
@@ -74,10 +95,42 @@ mod tests {
         repository.run_migrations().await.unwrap();
 
         let state = AppState { repository };
-        let Json(response) = health(axum::extract::State(state)).await;
+        let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
         assert_eq!(response.status, "ok");
         assert_eq!(response.database_backend, "sqlite");
         assert_eq!(response.database_status, "ok");
+    }
+
+    #[tokio::test]
+    async fn health_returns_problem_details_when_repository_unavailable() {
+        let state = AppState {
+            repository: Arc::new(FailingRepository),
+        };
+
+        let error = health(axum::extract::State(state)).await.unwrap_err();
+        let response = error.into_response();
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/problem+json"
+        );
+
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_text.contains("\"type\""));
+        assert!(body_text.contains("\"title\""));
+        assert!(body_text.contains("\"status\""));
+        assert!(body_text.contains("\"detail\""));
+        assert!(body_text.contains("\"instance\""));
     }
 }
