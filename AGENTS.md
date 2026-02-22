@@ -28,7 +28,7 @@
 # [Add your dev server command here]
 
 # Testing
-# [Add your test command here]
+# cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo llvm-cov --workspace --summary-only
 
 # Build
 # [Add your build command here]
@@ -43,6 +43,7 @@
 - Follow the existing patterns in the codebase
 - Prefer explicit over clever
 - Delete dead code immediately
+- If Rust source code is modified, always run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
 
 ---
 
