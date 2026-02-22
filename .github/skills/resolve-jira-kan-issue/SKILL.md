@@ -34,6 +34,8 @@ If missing, ask for it before any action.
 5. Start implementation and immediately transition the Jira issue status to `進行中`.
 6. Implement minimal required changes in repository.
 7. Run relevant tests/build checks for changed area.
+   - Always run format/lint or static analysis/tests/coverage commands that match the changed area (Rust/Flutter/others).
+   - If coverage is low for the changed area, add/adjust tests and re-run until coverage improves before creating/updating the PR.
    - For Rust changes, run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo llvm-cov --workspace --summary-only`.
    - For Flutter changes, run: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, `flutter test --coverage`.
    - If Flutter coverage is low for the changed area, add/adjust tests and re-run until coverage improves.

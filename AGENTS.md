@@ -44,6 +44,8 @@
 - Follow the existing patterns in the codebase
 - Prefer explicit over clever
 - Delete dead code immediately
+- For any source code changes, always run format/lint or static analysis/tests/coverage commands relevant to the changed area before updating a PR
+- If coverage is low for the changed area (Rust/Flutter/others), add or adjust tests and re-run until coverage improves before PR update
 - If Rust source code is modified, always run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
 - For Rust changes, include the `cargo llvm-cov --workspace --summary-only` result summary in the related PR body or PR comments
 - If Flutter source code is modified, always run: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, and `flutter test --coverage`
