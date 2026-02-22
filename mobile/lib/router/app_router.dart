@@ -58,8 +58,6 @@ class _RouterRefreshListenable extends ChangeNotifier {
 class RegisterPage extends ConsumerWidget {
   const RegisterPage({super.key});
 
-  static const _deviceTokenKey = 'device_token';
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
@@ -71,7 +69,7 @@ class RegisterPage extends ConsumerWidget {
               await ref
                   .read(secureStorageProvider)
                   .writeValue(
-                    key: _deviceTokenKey,
+                    key: SecureStorageKeys.deviceToken,
                     value: 'registered-device-token',
                   );
               ref.read(authStateProvider.notifier).setRegistered(true);
@@ -94,8 +92,6 @@ class RegisterPage extends ConsumerWidget {
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
-  static const _deviceTokenKey = 'device_token';
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
@@ -106,7 +102,7 @@ class HomePage extends ConsumerWidget {
             try {
               await ref
                   .read(secureStorageProvider)
-                  .deleteValue(key: _deviceTokenKey);
+                  .deleteValue(key: SecureStorageKeys.deviceToken);
               ref.read(authStateProvider.notifier).setRegistered(false);
             } on SecureStorageException catch (error) {
               if (!context.mounted) {
