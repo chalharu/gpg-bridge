@@ -60,13 +60,7 @@ mod tests {
 
     #[test]
     fn cli_custom_values_are_applied() {
-        let cli = parse_cli_from([
-            "gpg-bridge-server",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8080",
-        ]);
+        let cli = parse_cli_from(["gpg-bridge-server", "--host", "0.0.0.0", "--port", "8080"]);
 
         assert_eq!(cli.host, "0.0.0.0");
         assert_eq!(cli.port, 8080);
