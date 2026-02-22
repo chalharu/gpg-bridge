@@ -11,6 +11,10 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod sse;
+
+use sse::{DaemonSseEvent, SseClient, SseClientConfig};
+
 const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_RETRIES: u32 = 3;
 
@@ -276,10 +280,46 @@ async fn main() -> anyhow::Result<()> {
         max_http_retries = MAX_HTTP_RETRIES,
         "daemon started"
     );
-    let _ = http_client;
+
+    let sse_task = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
+        let sse_client = SseClient::new(http_client.clone(), SseClientConfig::new(sse_url))?;
+
+        Some(tokio::spawn(async move {
+            let run_result = sse_client
+                .run_with_handler(|event| async move {
+                    match event {
+                        DaemonSseEvent::Heartbeat => {
+                            info!("sse heartbeat");
+                        }
+                        DaemonSseEvent::Message {
+                            event_type,
+                            id,
+                            data,
+                        } => {
+                            info!(event_type = %event_type, event_id = ?id, data = %data, "sse event received");
+                        }
+                    }
+
+                    Ok(())
+                })
+                .await;
+
+            if let Err(error) = run_result {
+                tracing::warn!(?error, "sse client stopped");
+            }
+        }))
+    } else {
+        None
+    };
+
     info!("waiting for shutdown signal");
 
     wait_for_shutdown_signal(tokio::signal::ctrl_c()).await?;
+
+    if let Some(task) = sse_task {
+        task.abort();
+        let _ = task.await;
+    }
 
     info!("shutdown signal received");
     Ok(())
