@@ -15,9 +15,11 @@ async-trait = "0.1.89"
 axum = "0.8.8"
 clap = { version = "4.5.60", features = ["derive"] }
 dotenvy = "0.15.7"
+eventsource-stream = "0.2.3"
+futures-util = "0.3.31"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-reqwest = { version = "0.13.2", features = ["json", "rustls"] }
+reqwest = { version = "0.13.2", features = ["json", "rustls", "stream"] }
 postgresql_embedded = "0.20.2"
 thiserror = "2.0.18"
 serde_yaml = "0.9.34"

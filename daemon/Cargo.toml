@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+eventsource-stream.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
