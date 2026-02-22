@@ -118,7 +118,7 @@ paths:
 
         **自動クリーンアップポリシー:**
         - 未ペアリングデバイスの期限切れ削除: created_atから一定時間（例: 24時間）経過後もpairing_idsが空のままのclientsレコードはバックグラウンドジョブで自動削除する
-        - 全ペアリング解除時の即時削除: DELETE /pairingの結果pairing_idsが空になった場合、clientsレコードを即時削除する
+        - 全ペアリング解除時の即時削除: DELETE /pairingの結果pairing_idsが空になった場合、未完了のrequests（created/pending状態）に対してSSEでexpiredイベントを送信してからrequestsレコードを削除し、その上でclientsレコードを即時削除する
         - device_jwt期限超過: device_jwt_issued_at + device_jwt有効期間（例: 365日）を超過したclientsレコードをバックグラウンドジョブで自動削除する
         - client_jwt期限超過: pairing_ids内のclient_jwt_issued_at + client_jwt有効期間（例: 365日）を超過したペアリングをバックグラウンドジョブで自動解除する。結果pairing_idsが空になった場合はclientsレコードも削除する
       responses:
@@ -518,7 +518,7 @@ paths:
         Daemon（PC側）からのペアリング解除。body内のclient_jwt（JWS+JWE）の外側JWS署名・expを検証し、内側JWEを復号してFIDとpairing_idを取得する。
         pairing_idがclients.pairing_idsに含まれることを検証し、含まれない場合は404を返却する。
         clients.pairing_idsから該当pairing_idを削除する。
-        pairing_idsが空になった場合、gpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
+        pairing_idsが空になった場合、未完了のrequests（created/pending状態）がある場合はGET /sign-eventsでSSE接続中のDaemonに `{"status":"expired"}` イベントを送信してからrequestsレコードを削除し、その上でgpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
         削除後、同じclient_jwtでのPOST /sign-requestはサーバー側のpairing_id検証で失敗する（401）。
         スマホ紛失時やペアリング不要時にDaemon側からペアリングを解除する用途。
       requestBody:
@@ -610,7 +610,7 @@ paths:
         - deviceAssertionAuth: []
       description: |
         スマホからのペアリング解除。device_assertion_jwtで認証し、指定されたpairing_idをclients.pairing_idsから削除する。
-        pairing_idsが空になった場合、gpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
+        pairing_idsが空になった場合、未完了のrequests（created/pending状態）がある場合はGET /sign-eventsでSSE接続中のDaemonに `{"status":"expired"}` イベントを送信してからrequestsレコードを削除し、その上でgpg_keysを含むclientsレコード全体を即時削除する（GPG鍵情報もサーバーから完全に消去される）。
         削除後、該当pairing_idを含むclient_jwtでのPOST /sign-requestはサーバー側のpairing_id検証で失敗する（401）。
         PC紛失時にスマホからペアリングを解除し、当該client_jwtを実質的に無効化する用途。
       parameters:
