@@ -34,6 +34,9 @@ If missing, ask for it before any action.
 5. Start implementation and immediately transition the Jira issue status to `進行中`.
 6. Implement minimal required changes in repository.
 7. Run relevant tests/build checks for changed area.
+   - For Rust changes, run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo llvm-cov --workspace --summary-only`.
+   - For Flutter changes, run: `dart format --output=none --set-exit-if-changed lib test`, `flutter analyze`, `flutter test --coverage`.
+   - If Flutter coverage is low for the changed area, add/adjust tests and re-run until coverage improves.
 8. Commit changes using `git-commit` skill workflow.
 9. Create pull request following `CONTRIBUTING.md` PR template requirements.
 10. Report summary and PR URL.
