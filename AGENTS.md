@@ -44,6 +44,7 @@
 - Prefer explicit over clever
 - Delete dead code immediately
 - If Rust source code is modified, always run: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
+- For Rust changes, include the `cargo llvm-cov --workspace --summary-only` result summary in the related PR body or PR comments
 
 ---
 
