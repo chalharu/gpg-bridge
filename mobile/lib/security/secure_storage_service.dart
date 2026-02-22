@@ -18,6 +18,10 @@ class SecureStorageException implements Exception {
   }
 }
 
+abstract final class SecureStorageKeys {
+  static const String deviceToken = 'device_token';
+}
+
 abstract interface class SecureStorageBackend {
   Future<void> write({required String key, required String value});
   Future<String?> read({required String key});
