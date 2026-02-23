@@ -7,6 +7,22 @@ description: Execute Git commits end-to-end. Use when the user asks to commit ch
 
 Execute commits with a strict and repeatable workflow.
 
+## Docker Execution Rule
+
+All Git commands **must** run inside a Docker container:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -v "$HOME/.gitconfig:/root/.gitconfig:ro" -w /workspace gpg-bridge-dev <git-command>
+```
+
+For push operations that require SSH authentication, also mount SSH keys:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -v "$HOME/.gitconfig:/root/.gitconfig:ro" -v "$HOME/.ssh:/root/.ssh:ro" -w /workspace gpg-bridge-dev git push
+```
+
+Never run `git` directly on the host for commit operations.
+
 ## Workflow
 
 1. Check repository state.

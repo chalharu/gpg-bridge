@@ -1,0 +1,10 @@
+target/
+mobile/build/
+mobile/.dart_tool/
+mobile/.packages
+.git/
+tmp/
+*.pdb
+.env
+coverage/
+signatures/
