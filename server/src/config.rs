@@ -67,6 +67,18 @@ impl AppConfig {
             )
         })?;
 
+        if db_min_connections > db_max_connections {
+            return Err(anyhow!(
+                "SERVER_DB_MIN_CONNECTIONS ({db_min_connections}) must be less than or equal to SERVER_DB_MAX_CONNECTIONS ({db_max_connections})"
+            ));
+        }
+
+        if db_acquire_timeout_seconds == 0 {
+            return Err(anyhow!(
+                "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS must be greater than 0"
+            ));
+        }
+
         let log_level = lookup("SERVER_LOG_LEVEL").unwrap_or_else(|| "info".to_owned());
         let log_format = lookup("SERVER_LOG_FORMAT").unwrap_or_else(|| "plain".to_owned());
 
@@ -136,5 +148,40 @@ mod tests {
     fn detect_database_kind_rejects_unknown_scheme() {
         let result = detect_database_kind("mysql://localhost:3306/gpg_bridge");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_rejects_min_connections_larger_than_max() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_DB_MAX_CONNECTIONS" => Some("2".to_owned()),
+            "SERVER_DB_MIN_CONNECTIONS" => Some("3".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_DB_MIN_CONNECTIONS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_acquire_timeout() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS")
+        );
     }
 }
