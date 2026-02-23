@@ -2,8 +2,11 @@
 abstract final class ApiConfig {
   /// Base URL for the API server.
   ///
-  /// Override with a different value per environment as needed.
-  static const String baseUrl = 'https://api.example.com';
+  /// Override at build time via `--dart-define=API_BASE_URL=https://...`.
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api.example.com',
+  );
 
   /// Connection timeout duration.
   static const Duration connectTimeout = Duration(seconds: 10);

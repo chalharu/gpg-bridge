@@ -191,6 +191,9 @@ class JweService {
 
     // 3. ECDH shared secret
     final privateScalar = base64UrlDecodeBigInt(privateKey.d);
+    // NOTE: Dart's BigInt is immutable and cannot be zeroed from memory.
+    // The private key scalar will remain in memory until GC collects it.
+    // For production use, consider an FFI-based approach for secure memory handling.
     final ephemeralPoint = jwkToEcPoint(epk);
     final sharedSecret = ecdh(privateScalar, ephemeralPoint);
 
@@ -262,8 +265,10 @@ class JweService {
   }
 
   Uint8List _generateRandomBytes(int length) {
-    return Uint8List.fromList(
-      List.generate(length, (_) => _random.nextInt(256)),
-    );
+    final bytes = Uint8List(length);
+    for (var i = 0; i < length; i++) {
+      bytes[i] = _random.nextInt(256);
+    }
+    return bytes;
   }
 }

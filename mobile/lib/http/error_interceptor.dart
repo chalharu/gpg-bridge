@@ -8,6 +8,8 @@ import 'api_exception.dart';
 /// - RFC 7807 Problem Details (`application/problem+json`)
 /// - Server ErrorResponse (`{ error, message }`)
 class ErrorInterceptor extends Interceptor {
+  // Defensive: Dio routes 4xx/5xx to onError by default.
+  // This handles the case where validateStatus is overridden.
   @override
   void onResponse(
     Response<dynamic> response,

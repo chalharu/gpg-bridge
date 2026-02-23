@@ -1,3 +1,4 @@
+import 'crypto_utils.dart' show base64UrlDecode;
 import 'jwe_exception.dart';
 
 /// EC P-256 public key in JWK format for JWE encryption.
@@ -19,6 +20,13 @@ class EcPublicJwk {
     final y = json['y'] as String?;
     if (x == null || y == null) {
       throw JweException('missing x or y coordinate');
+    }
+    final xBytes = base64UrlDecode(x);
+    final yBytes = base64UrlDecode(y);
+    if (xBytes.length != 32 || yBytes.length != 32) {
+      throw JweException(
+        'invalid P-256 coordinate length: x=${xBytes.length}, y=${yBytes.length}',
+      );
     }
     return EcPublicJwk(x: x, y: y);
   }

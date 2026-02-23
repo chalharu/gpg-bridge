@@ -106,7 +106,7 @@ class SecureStorageService {
   }
 }
 
-@riverpod
+@Riverpod(keepAlive: true)
 SecureStorageService secureStorage(Ref ref) {
   const storage = FlutterSecureStorage();
   return SecureStorageService(FlutterSecureStorageBackend(storage));

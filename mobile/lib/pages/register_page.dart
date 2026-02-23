@@ -19,9 +19,10 @@ class RegisterPage extends ConsumerWidget {
                   .read(secureStorageProvider)
                   .writeValue(
                     key: SecureStorageKeys.deviceToken,
+                    // TODO(KAN-41): Replace with actual device registration token from server
                     value: 'registered-device-token',
                   );
-              ref.read(authStateProvider.notifier).setRegistered(true);
+              await ref.read(authStateProvider.notifier).setRegistered(true);
             } on SecureStorageException catch (error) {
               if (!context.mounted) {
                 return;

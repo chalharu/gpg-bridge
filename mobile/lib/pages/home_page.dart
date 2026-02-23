@@ -18,7 +18,7 @@ class HomePage extends ConsumerWidget {
               await ref
                   .read(secureStorageProvider)
                   .deleteValue(key: SecureStorageKeys.deviceToken);
-              ref.read(authStateProvider.notifier).setRegistered(false);
+              await ref.read(authStateProvider.notifier).setRegistered(false);
             } on SecureStorageException catch (error) {
               if (!context.mounted) {
                 return;

@@ -157,6 +157,9 @@ class MethodChannelKeystorePlatformService implements KeystorePlatformService {
     }
   }
 
+  /// Restricts sign/verify to device_key only.
+  /// Currently only device_assertion_jwt requires signing.
+  /// If E2E key signing is needed in the future, extend this check.
   void _assertSignAlias(String alias) {
     if (alias != KeystoreAliases.deviceKey) {
       throw KeystorePlatformException(
