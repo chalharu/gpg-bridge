@@ -92,6 +92,13 @@ Do not proceed with implementation until required unknowns are resolved.
 - When posting Jira comments via `mcp_com_atlassian_addCommentToJiraIssue`, always pass `commentBody` with **actual newline characters** (not escaped `\n` literals). Escaped sequences render as literal text and break formatting.
 - Never update issues outside `KAN`.
 
+## Quality Standards
+
+- **Review findings**: Address ALL findings up to and including INFO level. No finding may be left unresolved.
+- **Commit granularity**: Split commits appropriately. Each commit should be roughly tens of lines to 200 lines of diff. Do not bundle unrelated changes.
+- **File and function size**: Keep functions/methods around 20–30 lines. Keep files around 200 lines (excluding test code). Split when exceeding these guidelines.
+- **Test coverage**: Maintain at least 80 % line coverage for the changed area. Add or adjust tests until this threshold is met.
+
 ## Commit Rules
 
 Use `git-commit` skill and `CONTRIBUTING.md` Conventional Commits format:
@@ -100,7 +107,7 @@ Use `git-commit` skill and `CONTRIBUTING.md` Conventional Commits format:
 
 Allowed types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
 
-Prefer one logical change per commit; avoid mixed-purpose commits.
+Prefer one logical change per commit; avoid mixed-purpose commits. Each commit should be roughly tens of lines to 200 lines of diff.
 
 ## Pull Request Rules
 
