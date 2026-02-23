@@ -1,6 +1,9 @@
 # Development environment for gpg-bridge
 # Usage: docker build -t gpg-bridge-dev .
-#        docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev <command>
+#        docker run --rm -v "$PWD:/workspace" \
+#          -v gpg-bridge-cargo-registry:/usr/local/cargo/registry \
+#          -v gpg-bridge-cargo-git:/usr/local/cargo/git \
+#          -w /workspace gpg-bridge-dev <command>
 
 FROM rust:1.93-bookworm
 

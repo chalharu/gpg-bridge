@@ -27,14 +27,14 @@
 # Docker build (run once or when Dockerfile changes)
 # docker build -t gpg-bridge-dev .
 
-# All commands below run inside Docker:
-# docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev <command>
+# All commands below run inside Docker (named volumes cache Cargo registry between runs):
+# docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev <command>
 
 # Testing (Rust)
-# docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev sh -c "cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo llvm-cov --workspace --summary-only"
+# docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev sh -c "cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo llvm-cov --workspace --summary-only"
 
 # Testing (Flutter)
-# docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev sh -c "cd mobile && dart format --output=none --set-exit-if-changed lib test && flutter analyze && flutter test --coverage"
+# docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev sh -c "cd mobile && dart format --output=none --set-exit-if-changed lib test && flutter analyze && flutter test --coverage"
 ```
 
 ---
@@ -46,7 +46,7 @@
 - Follow the existing patterns in the codebase
 - Prefer explicit over clever
 - Delete dead code immediately
-- **All commands must run inside Docker**: `docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev <command>`
+- **All commands must run inside Docker**: `docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev <command>`
 - For any source code changes, always run format/lint or static analysis/tests/coverage commands relevant to the changed area before updating a PR
 - If coverage is low for the changed area (Rust/Flutter/others), add or adjust tests and re-run until coverage improves before PR update
 - If Rust source code is modified, always run inside Docker: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
