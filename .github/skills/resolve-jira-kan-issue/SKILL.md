@@ -37,8 +37,9 @@ All work (implementation, tests, format, lint, static analysis, coverage, and Gi
 1. Validate `ISSUEID` and fetch issue details.
 2. Confirm problem statement, acceptance criteria, and constraints.
 3. If missing/ambiguous, ask the user and resolve via dialogue before coding.
-4. Create a **git worktree** in `/tmp` to isolate work from the existing environment:
-   - Run `git worktree add /tmp/<issueid> -b <branch> main` to create a separate working directory (e.g., `/tmp/kan-123`).
+4. Create a **git worktree** inside the repository's `work/` directory to isolate work from the existing environment:
+   - If `work/` directory does not exist, create it and add `work/.gitignore` containing `*` to prevent tracking worktree contents.
+   - Run `git worktree add work/<issueid> -b <branch> main` to create a separate working directory (e.g., `work/kan-123`).
    - All subsequent implementation and checks must run inside this worktree, not the original repository.
    - Branch naming follows `CONTRIBUTING.md` and always includes `ISSUEID`:
      - `feature/<issueid>-<topic>` for feature work (e.g., `feature/kan-123-add-auth`)
@@ -67,7 +68,7 @@ All work (implementation, tests, format, lint, static analysis, coverage, and Gi
 12. Push the branch to the remote: `git push -u origin <branch>` (runs on the host — requires host credentials).
 13. Create pull request following `CONTRIBUTING.md` PR template requirements.
 14. Report summary and PR URL.
-15. Clean up: remove the git worktree (`git worktree remove /tmp/<issueid>`) and return to `main` branch.
+15. Clean up: remove the git worktree (`git worktree remove work/<issueid>`) and return to `main` branch.
 
 ## Clarification Dialogue Rules
 
