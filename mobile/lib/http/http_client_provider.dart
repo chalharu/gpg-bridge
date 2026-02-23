@@ -33,7 +33,7 @@ TokenRefresher tokenRefresher(Ref ref) {
 /// 2. [AuthInterceptor] – attaches `Authorization: Bearer` header
 /// 3. [ErrorInterceptor] – parses error responses into [ApiException]
 /// 4. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
-@riverpod
+@Riverpod(keepAlive: true)
 Dio httpClient(Ref ref) {
   final dio = Dio(
     BaseOptions(

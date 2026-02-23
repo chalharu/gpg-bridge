@@ -12,7 +12,7 @@ part of 'auth_state.dart';
 @ProviderFor(AuthState)
 const authStateProvider = AuthStateProvider._();
 
-final class AuthStateProvider extends $NotifierProvider<AuthState, bool> {
+final class AuthStateProvider extends $AsyncNotifierProvider<AuthState, bool> {
   const AuthStateProvider._()
     : super(
         from: null,
@@ -30,30 +30,22 @@ final class AuthStateProvider extends $NotifierProvider<AuthState, bool> {
   @$internal
   @override
   AuthState create() => AuthState();
-
-  /// {@macro riverpod.override_with_value}
-  Override overrideWithValue(bool value) {
-    return $ProviderOverride(
-      origin: this,
-      providerOverride: $SyncValueProvider<bool>(value),
-    );
-  }
 }
 
-String _$authStateHash() => r'2f3be601a4cce3e6706b7a8c90afec1348b8b619';
+String _$authStateHash() => r'86f9816760470c25fad1adc658d91bdca9091fb3';
 
-abstract class _$AuthState extends $Notifier<bool> {
-  bool build();
+abstract class _$AuthState extends $AsyncNotifier<bool> {
+  FutureOr<bool> build();
   @$mustCallSuper
   @override
   void runBuild() {
     final created = build();
-    final ref = this.ref as $Ref<bool, bool>;
+    final ref = this.ref as $Ref<AsyncValue<bool>, bool>;
     final element =
         ref.element
             as $ClassProviderElement<
-              AnyNotifier<bool, bool>,
-              bool,
+              AnyNotifier<AsyncValue<bool>, bool>,
+              AsyncValue<bool>,
               Object?,
               Object?
             >;

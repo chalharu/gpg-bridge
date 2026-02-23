@@ -9,6 +9,14 @@ import 'package:gpg_bridge_mobile/state/auth_state.dart';
 import 'helpers/in_memory_secure_storage_backend.dart';
 import 'helpers/throwing_secure_storage_backend.dart';
 
+class _TestAuthState extends AuthState {
+  _TestAuthState(this._initial);
+  final bool _initial;
+
+  @override
+  Future<bool> build() async => _initial;
+}
+
 void main() {
   testWidgets('Registration flow routes to home', (WidgetTester tester) async {
     final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
@@ -60,7 +68,7 @@ void main() {
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
-          authStateProvider.overrideWithValue(true),
+          authStateProvider.overrideWith(() => _TestAuthState(true)),
         ],
         child: const GpgBridgeApp(),
       ),
@@ -85,7 +93,7 @@ void main() {
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
-          authStateProvider.overrideWithValue(true),
+          authStateProvider.overrideWith(() => _TestAuthState(true)),
         ],
         child: const GpgBridgeApp(),
       ),
@@ -125,7 +133,7 @@ void main() {
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
-          authStateProvider.overrideWithValue(true),
+          authStateProvider.overrideWith(() => _TestAuthState(true)),
         ],
         child: const GpgBridgeApp(),
       ),

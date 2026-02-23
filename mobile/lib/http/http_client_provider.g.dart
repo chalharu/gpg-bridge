@@ -149,7 +149,7 @@ final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
         argument: null,
         retry: null,
         name: r'httpClientProvider',
-        isAutoDispose: true,
+        isAutoDispose: false,
         dependencies: null,
         $allTransitiveDependencies: null,
       );
@@ -176,4 +176,4 @@ final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
   }
 }
 
-String _$httpClientHash() => r'd2d2e2342fc8ea690cdef484a0817b430ff1e9f6';
+String _$httpClientHash() => r'55015cf5a7e64a80f505c6669da8bc20a46ffae1';

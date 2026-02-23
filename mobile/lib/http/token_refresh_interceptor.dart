@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 
 import 'api_exception.dart';
@@ -16,6 +18,9 @@ typedef TokenRefresher = Future<bool> Function();
 ///    device_assertion_jwt via [AuthInterceptor]).
 /// 3. If refresh fails, propagates the original error.
 ///
+/// Concurrent 401s are coalesced: the first triggers a refresh and subsequent
+/// ones wait on the same [Completer].
+///
 /// This interceptor should be added **after** [AuthInterceptor] and
 /// [ErrorInterceptor] in the interceptor chain so that 401s from the
 /// original request are already parsed.
@@ -29,9 +34,7 @@ class TokenRefreshInterceptor extends Interceptor {
   final Dio _dio;
   final TokenRefresher _tokenRefresher;
 
-  /// Tracks whether a refresh is currently in progress to avoid concurrent
-  /// refresh attempts.
-  bool _isRefreshing = false;
+  Completer<bool>? _refreshCompleter;
 
   @override
   Future<void> onError(
@@ -48,13 +51,8 @@ class TokenRefreshInterceptor extends Interceptor {
       return handler.next(err);
     }
 
-    if (_isRefreshing) {
-      return handler.next(err);
-    }
-
-    _isRefreshing = true;
     try {
-      final refreshed = await _tokenRefresher();
+      final refreshed = await _waitForRefresh();
 
       if (!refreshed) {
         return handler.next(err);
@@ -76,8 +74,24 @@ class TokenRefreshInterceptor extends Interceptor {
           error: error,
         ),
       );
+    }
+  }
+
+  Future<bool> _waitForRefresh() async {
+    if (_refreshCompleter != null) {
+      return _refreshCompleter!.future;
+    }
+
+    _refreshCompleter = Completer<bool>();
+    try {
+      final result = await _tokenRefresher();
+      _refreshCompleter!.complete(result);
+      return result;
+    } catch (error) {
+      _refreshCompleter!.completeError(error);
+      rethrow;
     } finally {
-      _isRefreshing = false;
+      _refreshCompleter = null;
     }
   }
 }

@@ -13,7 +13,7 @@ import '../state/auth_state.dart';
 
 part 'app_router.g.dart';
 
-@riverpod
+@Riverpod(keepAlive: true)
 GoRouter appRouter(Ref ref) {
   return GoRouter(
     initialLocation: '/register',
@@ -60,7 +60,8 @@ GoRouter appRouter(Ref ref) {
       ),
     ],
     redirect: (context, state) {
-      final isRegistered = ref.read(authStateProvider);
+      final authAsync = ref.read(authStateProvider);
+      final isRegistered = authAsync.value ?? false;
       final inRegister = state.matchedLocation == '/register';
 
       if (!isRegistered && !inRegister) {
@@ -79,14 +80,14 @@ GoRouter appRouter(Ref ref) {
 
 class _RouterRefreshListenable extends ChangeNotifier {
   _RouterRefreshListenable(this.ref) {
-    _subscription = ref.listen<bool>(
+    _subscription = ref.listen<AsyncValue<bool>>(
       authStateProvider,
       (_, next) => notifyListeners(),
     );
   }
 
   final Ref ref;
-  late final ProviderSubscription<bool> _subscription;
+  late final ProviderSubscription<AsyncValue<bool>> _subscription;
 
   @override
   void dispose() {

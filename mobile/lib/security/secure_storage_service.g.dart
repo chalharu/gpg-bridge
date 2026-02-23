@@ -26,7 +26,7 @@ final class SecureStorageProvider
         argument: null,
         retry: null,
         name: r'secureStorageProvider',
-        isAutoDispose: true,
+        isAutoDispose: false,
         dependencies: null,
         $allTransitiveDependencies: null,
       );
@@ -54,4 +54,4 @@ final class SecureStorageProvider
   }
 }
 
-String _$secureStorageHash() => r'667a358827cb605bc089cd55bcee591a88474a5c';
+String _$secureStorageHash() => r'45cd74ee89a80d22ec28696eed218423a163fae9';
