@@ -89,6 +89,7 @@ Do not proceed with implementation until required unknowns are resolved.
 - If scope needs refinement, add concise Jira comment in `KAN`.
 - When work is ready for review, update Jira with PR link and summary.
 - After each review round, post review findings (severity, file, description) as a Jira comment for traceability.
+- When posting Jira comments via `mcp_com_atlassian_addCommentToJiraIssue`, always pass `commentBody` with **actual newline characters** (not escaped `\n` literals). Escaped sequences render as literal text and break formatting.
 - Never update issues outside `KAN`.
 
 ## Commit Rules
