@@ -59,6 +59,7 @@ All work (implementation, tests, format, lint, static analysis, coverage, and Gi
 9. **Review** using a **different** subagent (the "review agent").
    - The review agent must **never modify code**. It only inspects and reports findings.
    - If issues are found, the review agent returns a detailed list of required fixes and **rejects** (sends back) the work to the implementation agent.
+   - **Post review findings to Jira**: After the review agent completes its review, post a summary of all findings (severity, category, description) as a Jira comment on the issue. This applies to both rejection and approval cases, so that the review history is traceable in Jira.
 10. **Rework loop**: If the review agent rejects:
     - The implementation agent fixes all reported issues.
     - Re-run the quality gate (step 8).
@@ -87,6 +88,7 @@ Do not proceed with implementation until required unknowns are resolved.
 - When work begins, transition the issue to `進行中`.
 - If scope needs refinement, add concise Jira comment in `KAN`.
 - When work is ready for review, update Jira with PR link and summary.
+- After each review round, post review findings (severity, file, description) as a Jira comment for traceability.
 - Never update issues outside `KAN`.
 
 ## Commit Rules
