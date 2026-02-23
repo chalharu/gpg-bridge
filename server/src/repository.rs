@@ -18,6 +18,7 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     async fn run_migrations(&self) -> anyhow::Result<()>;
     async fn health_check(&self) -> anyhow::Result<()>;
     fn backend_name(&self) -> &'static str;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,10 @@ impl SignatureRepository for PostgresRepository {
 
     fn backend_name(&self) -> &'static str {
         "postgres"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -74,6 +79,10 @@ impl SignatureRepository for SqliteRepository {
     fn backend_name(&self) -> &'static str {
         "sqlite"
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 pub async fn build_repository(config: &AppConfig) -> anyhow::Result<Arc<dyn SignatureRepository>> {
@@ -97,7 +106,8 @@ pub async fn build_repository(config: &AppConfig) -> anyhow::Result<Arc<dyn Sign
                 .parse::<SqliteConnectOptions>()
                 .context("failed to parse sqlite connection options")?
                 .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal);
+                .journal_mode(SqliteJournalMode::Wal)
+                .foreign_keys(true);
 
             let pool = SqlitePoolOptions::new()
                 .max_connections(config.db_max_connections)
@@ -139,6 +149,32 @@ mod tests {
         repository.run_migrations().await.unwrap();
         repository.health_check().await.unwrap();
         assert_eq!(repository.backend_name(), "sqlite");
+    }
+
+    #[tokio::test]
+    async fn sqlite_enforces_foreign_key_constraints() {
+        let config = sqlite_test_config();
+        let repository = build_repository(&config).await.unwrap();
+        repository.run_migrations().await.unwrap();
+
+        // Downcast to SqliteRepository to access the pool
+        let sqlite_repo = repository
+            .as_any()
+            .downcast_ref::<SqliteRepository>()
+            .expect("expected SqliteRepository");
+
+        // Inserting a client_pairings row referencing a non-existent client
+        // must fail because of the foreign key constraint on client_id.
+        let result = sqlx::query(
+            "INSERT INTO client_pairings (client_id, pairing_id, client_jwt_issued_at) VALUES ('nonexistent', 'pair-1', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&sqlite_repo.pool)
+        .await;
+
+        assert!(
+            result.is_err(),
+            "foreign key constraint should reject insert with non-existent client_id"
+        );
     }
 
     #[tokio::test]
