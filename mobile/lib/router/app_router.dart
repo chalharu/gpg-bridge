@@ -3,7 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../security/secure_storage_service.dart';
+import '../pages/home_page.dart';
+import '../pages/keys_page.dart';
+import '../pages/main_shell.dart';
+import '../pages/pairing_page.dart';
+import '../pages/register_page.dart';
+import '../pages/settings_page.dart';
 import '../state/auth_state.dart';
 
 part 'app_router.g.dart';
@@ -17,7 +22,42 @@ GoRouter appRouter(Ref ref) {
         path: '/register',
         builder: (context, state) => const RegisterPage(),
       ),
-      GoRoute(path: '/', builder: (context, state) => const HomePage()),
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) {
+          return MainShell(navigationShell: navigationShell);
+        },
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/', builder: (context, state) => const HomePage()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/keys',
+                builder: (context, state) => const KeysPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/pairing',
+                builder: (context, state) => const PairingPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/settings',
+                builder: (context, state) => const SettingsPage(),
+              ),
+            ],
+          ),
+        ],
+      ),
     ],
     redirect: (context, state) {
       final isRegistered = ref.read(authStateProvider);
@@ -52,70 +92,5 @@ class _RouterRefreshListenable extends ChangeNotifier {
   void dispose() {
     _subscription.close();
     super.dispose();
-  }
-}
-
-class RegisterPage extends ConsumerWidget {
-  const RegisterPage({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Register')),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(secureStorageProvider)
-                  .writeValue(
-                    key: SecureStorageKeys.deviceToken,
-                    value: 'registered-device-token',
-                  );
-              ref.read(authStateProvider.notifier).setRegistered(true);
-            } on SecureStorageException catch (error) {
-              if (!context.mounted) {
-                return;
-              }
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text(error.message)));
-            }
-          },
-          child: const Text('Complete registration'),
-        ),
-      ),
-    );
-  }
-}
-
-class HomePage extends ConsumerWidget {
-  const HomePage({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Home')),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(secureStorageProvider)
-                  .deleteValue(key: SecureStorageKeys.deviceToken);
-              ref.read(authStateProvider.notifier).setRegistered(false);
-            } on SecureStorageException catch (error) {
-              if (!context.mounted) {
-                return;
-              }
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text(error.message)));
-            }
-          },
-          child: const Text('Reset registration'),
-        ),
-      ),
-    );
   }
 }
