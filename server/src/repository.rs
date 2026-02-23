@@ -35,7 +35,7 @@ impl SignatureRepository for PostgresRepository {
     }
 
     async fn health_check(&self) -> anyhow::Result<()> {
-        sqlx::query_scalar::<_, i64>("SELECT 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(&self.pool)
             .await
             .context("postgres health check failed")?;
@@ -63,7 +63,7 @@ impl SignatureRepository for SqliteRepository {
     }
 
     async fn health_check(&self) -> anyhow::Result<()> {
-        sqlx::query_scalar::<_, i64>("SELECT 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(&self.pool)
             .await
             .context("sqlite health check failed")?;
