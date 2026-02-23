@@ -37,33 +37,33 @@ class AndroidKeystoreService {
   Future<void> generateKeyPair({required String alias}) async {
     _assertSupportedAlias(alias);
 
-    try {
-      await _channel.invokeMethod<bool>('generateKeyPair', {'alias': alias});
-    } on PlatformException catch (error) {
-      throw AndroidKeystoreException(
-        'failed to generate key pair',
-        cause: error,
-      );
+    final generated = await _guardPlatformCall<bool>(
+      operation: 'generate key pair',
+      call: () =>
+          _channel.invokeMethod<bool>('generateKeyPair', {'alias': alias}),
+    );
+
+    if (generated != true) {
+      throw AndroidKeystoreException('invalid generate key pair response');
     }
   }
 
   Future<String> sign({required String alias, required List<int> data}) async {
     _assertSignAlias(alias);
 
-    try {
-      final signatureBase64 = await _channel.invokeMethod<String>('sign', {
+    final signatureBase64 = await _guardPlatformCall<String>(
+      operation: 'sign data',
+      call: () => _channel.invokeMethod<String>('sign', {
         'alias': alias,
         'dataBase64': base64Encode(data),
-      });
+      }),
+    );
 
-      if (signatureBase64 == null || signatureBase64.isEmpty) {
-        throw AndroidKeystoreException('signature is empty');
-      }
-
-      return signatureBase64;
-    } on PlatformException catch (error) {
-      throw AndroidKeystoreException('failed to sign data', cause: error);
+    if (signatureBase64 == null || signatureBase64.isEmpty) {
+      throw AndroidKeystoreException('signature is empty');
     }
+
+    return signatureBase64;
   }
 
   Future<bool> verify({
@@ -72,42 +72,65 @@ class AndroidKeystoreService {
     required String signatureBase64,
   }) async {
     _assertSignAlias(alias);
+    _assertNonEmptySignature(signatureBase64);
 
-    try {
-      final verified = await _channel.invokeMethod<bool>('verify', {
+    final verified = await _guardPlatformCall<bool>(
+      operation: 'verify signature',
+      call: () => _channel.invokeMethod<bool>('verify', {
         'alias': alias,
         'dataBase64': base64Encode(data),
         'signatureBase64': signatureBase64,
-      });
+      }),
+    );
 
-      return verified ?? false;
-    } on PlatformException catch (error) {
-      throw AndroidKeystoreException(
-        'failed to verify signature',
-        cause: error,
-      );
-    }
+    return verified ?? false;
   }
 
   Future<Map<String, String>> getPublicKeyJwk({required String alias}) async {
     _assertSupportedAlias(alias);
 
+    final jwk = await _guardPlatformCall<Map<String, String>>(
+      operation: 'get public key jwk',
+      call: () => _channel.invokeMapMethod<String, String>('getPublicKeyJwk', {
+        'alias': alias,
+      }),
+    );
+
+    if (jwk == null || jwk.isEmpty) {
+      throw AndroidKeystoreException('public key jwk is empty');
+    }
+
     try {
-      final jwk = await _channel.invokeMapMethod<String, String>(
-        'getPublicKeyJwk',
-        {'alias': alias},
-      );
-
-      if (jwk == null || jwk.isEmpty) {
-        throw AndroidKeystoreException('public key jwk is empty');
-      }
-
       _assertValidJwk(alias, jwk);
-
-      return jwk;
-    } on PlatformException catch (error) {
+    } catch (error) {
+      if (error is AndroidKeystoreException) {
+        rethrow;
+      }
       throw AndroidKeystoreException(
-        'failed to get public key jwk',
+        'unexpected platform response while trying to get public key jwk',
+        cause: error,
+      );
+    }
+
+    return jwk;
+  }
+
+  Future<T?> _guardPlatformCall<T>({
+    required String operation,
+    required Future<T?> Function() call,
+  }) async {
+    try {
+      return await call();
+    } on PlatformException catch (error) {
+      throw AndroidKeystoreException('failed to $operation', cause: error);
+    } on MissingPluginException catch (error) {
+      throw AndroidKeystoreException(
+        'android keystore is unavailable',
+        cause: error,
+      );
+    } catch (error) {
+      throw AndroidKeystoreException(
+        'unexpected platform response while trying to $operation',
         cause: error,
       );
     }
@@ -151,6 +174,12 @@ class AndroidKeystoreService {
 
     _assertBase64UrlCoordinate(jwk['x'], 'x');
     _assertBase64UrlCoordinate(jwk['y'], 'y');
+  }
+
+  void _assertNonEmptySignature(String signatureBase64) {
+    if (signatureBase64.isEmpty) {
+      throw AndroidKeystoreException('signature is empty');
+    }
   }
 
   void _assertBase64UrlCoordinate(String? value, String name) {
