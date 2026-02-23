@@ -270,10 +270,6 @@ mod tests {
         fn backend_name(&self) -> &'static str {
             "sqlite"
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[derive(Debug)]
@@ -291,10 +287,6 @@ mod tests {
 
         fn backend_name(&self) -> &'static str {
             "sqlite"
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

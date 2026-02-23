@@ -18,7 +18,6 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     async fn run_migrations(&self) -> anyhow::Result<()>;
     async fn health_check(&self) -> anyhow::Result<()>;
     fn backend_name(&self) -> &'static str;
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[derive(Debug, Clone)]
@@ -47,10 +46,6 @@ impl SignatureRepository for PostgresRepository {
     fn backend_name(&self) -> &'static str {
         "postgres"
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,10 +73,6 @@ impl SignatureRepository for SqliteRepository {
 
     fn backend_name(&self) -> &'static str {
         "sqlite"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -141,6 +132,25 @@ mod tests {
         }
     }
 
+    /// Build an in-memory SQLite pool with the same connect options used in
+    /// production (`foreign_keys(true)`, WAL journal mode).  This lets tests
+    /// exercise the real connection settings without needing to downcast
+    /// through `Arc<dyn SignatureRepository>`.
+    async fn build_sqlite_test_pool() -> SqlitePool {
+        let options = "sqlite::memory:"
+            .parse::<SqliteConnectOptions>()
+            .unwrap()
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
+
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn sqlite_repository_runs_migration_and_health_check() {
         let config = sqlite_test_config();
@@ -153,27 +163,38 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_enforces_foreign_key_constraints() {
-        let config = sqlite_test_config();
-        let repository = build_repository(&config).await.unwrap();
-        repository.run_migrations().await.unwrap();
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
 
-        // Downcast to SqliteRepository to access the pool
-        let sqlite_repo = repository
-            .as_any()
-            .downcast_ref::<SqliteRepository>()
-            .expect("expected SqliteRepository");
+        // Positive case: insert a valid client, then a client_pairings row referencing it.
+        sqlx::query(
+            "INSERT INTO clients (client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys) VALUES ('client-1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'tok', '2026-01-01T00:00:00Z', '[]', 'kid-1', '[]')",
+        )
+        .execute(&pool)
+        .await
+        .expect("inserting a valid client should succeed");
 
-        // Inserting a client_pairings row referencing a non-existent client
+        sqlx::query(
+            "INSERT INTO client_pairings (client_id, pairing_id, client_jwt_issued_at) VALUES ('client-1', 'pair-1', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("inserting a client_pairings row with valid FK should succeed");
+
+        // Negative case: inserting a client_pairings row referencing a non-existent client
         // must fail because of the foreign key constraint on client_id.
         let result = sqlx::query(
-            "INSERT INTO client_pairings (client_id, pairing_id, client_jwt_issued_at) VALUES ('nonexistent', 'pair-1', '2026-01-01T00:00:00Z')",
+            "INSERT INTO client_pairings (client_id, pairing_id, client_jwt_issued_at) VALUES ('nonexistent', 'pair-2', '2026-01-01T00:00:00Z')",
         )
-        .execute(&sqlite_repo.pool)
+        .execute(&pool)
         .await;
 
+        let err = result
+            .expect_err("foreign key constraint should reject insert with non-existent client_id");
+        let msg = err.to_string();
         assert!(
-            result.is_err(),
-            "foreign key constraint should reject insert with non-existent client_id"
+            msg.contains("FOREIGN KEY constraint failed"),
+            "expected FK violation error, got: {msg}",
         );
     }
 
