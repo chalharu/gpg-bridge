@@ -903,13 +903,17 @@ paths:
         認証不要。サーバーが正常に稼働していれば200 OKを返却する。
         DB接続の正常性確認を含めるかは実装判断。
         標準ティアのレート制限を適用（認証なしだがリソース作成を行わないため、厳格ティアの対象外）。
+        Acceptは `application/vnd.gpg-sign.v1+json` / `application/json` / `application/*` / `*/*` を受理する（media type比較は大文字小文字を区別しない）。
+        サポート外のAcceptは406 Not Acceptableを返却する。
       responses:
         '200':
           description: サーバー正常稼働
           content:
-            application/json:
+            application/vnd.gpg-sign.v1+json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         default:
@@ -1019,6 +1023,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    NotAcceptable:
+      description: |
+        Acceptヘッダーで要求されたmedia typeがサポート対象外。
+        エラー形式はRFC 9457 Problem Details（`application/problem+json`）。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
     DefaultError:
       description: 予期しないエラー
       content:
@@ -1616,6 +1628,27 @@ components:
           type: string
           enum: [ok]
           description: サーバーの稼働状態
+
+    ProblemDetails:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type:
+            - string
+            - 'null'
 
     ErrorResponse:
       type: object

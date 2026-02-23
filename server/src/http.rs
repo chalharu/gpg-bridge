@@ -41,6 +41,91 @@ enum ApiVersion {
 
 const ACCEPT_VERSION_V1: &str = "application/vnd.gpg-sign.v1+json";
 
+fn parse_qvalue(raw: &str) -> Option<u16> {
+    let raw = raw.trim();
+
+    if raw == "1" {
+        return Some(1000);
+    }
+
+    if let Some(frac) = raw.strip_prefix("1.") {
+        if frac.len() <= 3 && frac.chars().all(|ch| ch == '0') {
+            return Some(1000);
+        }
+        return None;
+    }
+
+    if raw == "0" {
+        return Some(0);
+    }
+
+    if let Some(frac) = raw.strip_prefix("0.") {
+        if frac.is_empty() || frac.len() > 3 || !frac.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+
+        let mut normalized = frac.to_owned();
+        while normalized.len() < 3 {
+            normalized.push('0');
+        }
+        return normalized.parse::<u16>().ok();
+    }
+
+    None
+}
+
+fn is_supported_media_type(media_type: &str) -> bool {
+    media_type == "*/*"
+        || media_type.eq_ignore_ascii_case("application/*")
+        || media_type.eq_ignore_ascii_case("application/json")
+        || media_type.eq_ignore_ascii_case(ACCEPT_VERSION_V1)
+}
+
+fn append_vary_accept(headers: &mut HeaderMap) {
+    let Some(existing) = headers.get(header::VARY) else {
+        headers.insert(header::VARY, HeaderValue::from_static("Accept"));
+        return;
+    };
+
+    let Ok(existing) = existing.to_str() else {
+        return;
+    };
+
+    let has_accept = existing
+        .split(',')
+        .any(|item| item.trim().eq_ignore_ascii_case("Accept"));
+
+    if has_accept {
+        return;
+    }
+
+    if let Ok(combined) = HeaderValue::from_str(&format!("{existing}, Accept")) {
+        headers.insert(header::VARY, combined);
+    }
+}
+
+fn apply_api_version_headers(headers: &mut HeaderMap, version: ApiVersion) {
+    append_vary_accept(headers);
+
+    let is_json_response = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+
+    if !is_json_response {
+        return;
+    }
+
+    match version {
+        ApiVersion::V1 => {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(ACCEPT_VERSION_V1),
+            );
+        }
+    }
+}
+
 fn parse_accept_version(headers: &HeaderMap) -> Result<ApiVersion, AppError> {
     let Some(accept) = headers.get(header::ACCEPT) else {
         return Ok(ApiVersion::V1);
@@ -55,12 +140,25 @@ fn parse_accept_version(headers: &HeaderMap) -> Result<ApiVersion, AppError> {
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
     {
-        let media_type = item.split(';').next().unwrap_or("").trim();
+        let mut parts = item.split(';').map(|part| part.trim());
+        let media_type = parts.next().unwrap_or("");
 
-        if media_type == "*/*"
-            || media_type == "application/json"
-            || media_type == ACCEPT_VERSION_V1
-        {
+        let mut quality = 1000;
+        for parameter in parts {
+            if let Some(qvalue) = parameter.strip_prefix("q=") {
+                quality = parse_qvalue(qvalue).ok_or_else(|| {
+                    AppError::not_acceptable(format!(
+                        "invalid q parameter in Accept header: {qvalue}"
+                    ))
+                })?;
+            }
+        }
+
+        if quality == 0 {
+            continue;
+        }
+
+        if is_supported_media_type(media_type) {
             return Ok(ApiVersion::V1);
         }
     }
@@ -71,11 +169,15 @@ fn parse_accept_version(headers: &HeaderMap) -> Result<ApiVersion, AppError> {
 }
 
 async fn accept_version_middleware(req: Request, next: Next) -> Result<Response, AppError> {
-    if req.method() != Method::OPTIONS {
-        let _ = parse_accept_version(req.headers())?;
+    if req.method() == Method::OPTIONS {
+        return Ok(next.run(req).await);
     }
 
-    Ok(next.run(req).await)
+    let version = parse_accept_version(req.headers())?;
+    let mut response = next.run(req).await;
+    apply_api_version_headers(response.headers_mut(), version);
+
+    Ok(response)
 }
 
 async fn security_headers_middleware(req: Request, next: Next) -> Response {
@@ -112,10 +214,17 @@ pub fn build_router(state: AppState) -> Router {
     let request_id_header = axum::http::header::HeaderName::from_static("x-request-id");
     let cors_layer = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             header::ACCEPT,
             header::CONTENT_TYPE,
+            header::AUTHORIZATION,
             request_id_header.clone(),
         ]);
 
@@ -258,6 +367,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        assert_eq!(
             response
                 .headers()
                 .get(HeaderName::from_static("x-content-type-options"))
@@ -268,6 +381,16 @@ mod tests {
             response.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-store"
         );
+
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_text.contains("\"type\""));
+        assert!(body_text.contains("\"title\""));
+        assert!(body_text.contains("\"status\":406"));
+        assert!(body_text.contains("\"detail\""));
+        assert!(body_text.contains("\"instance\""));
     }
 
     #[tokio::test]
@@ -290,6 +413,19 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            ACCEPT_VERSION_V1
+        );
+        assert!(
+            response
+                .headers()
+                .get(header::VARY)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("Accept")
+        );
+        assert_eq!(
             response
                 .headers()
                 .get(HeaderName::from_static("x-content-type-options"))
@@ -299,6 +435,102 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn router_accepts_application_json_and_returns_versioned_content_type() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/")
+                    .header(header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            ACCEPT_VERSION_V1
+        );
+    }
+
+    #[tokio::test]
+    async fn router_accepts_mixed_case_media_type() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/")
+                    .header(header::ACCEPT, "Application/Vnd.Gpg-Sign.V1+Json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            ACCEPT_VERSION_V1
+        );
+    }
+
+    #[tokio::test]
+    async fn router_rejects_accept_media_type_with_zero_quality() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/")
+                    .header(header::ACCEPT, "application/json;q=0, text/plain")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn router_accepts_application_wildcard() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/")
+                    .header(header::ACCEPT, "application/*")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            ACCEPT_VERSION_V1
         );
     }
 
@@ -338,5 +570,80 @@ mod tests {
                 .unwrap()
                 .contains("GET")
         );
+    }
+
+    #[tokio::test]
+    async fn router_cors_preflight_allows_authorization_header() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/")
+                    .header(header::ORIGIN, "https://example.com")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization,content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status() == StatusCode::OK || response.status() == StatusCode::NO_CONTENT);
+
+        let allow_headers = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(allow_headers.contains("authorization"));
+        assert!(allow_headers.contains("content-type"));
+    }
+
+    #[tokio::test]
+    async fn router_cors_preflight_allows_patch_and_delete_methods() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        for request_method in [Method::PATCH, Method::DELETE] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::OPTIONS)
+                        .uri("/")
+                        .header(header::ORIGIN, "https://example.com")
+                        .header(
+                            header::ACCESS_CONTROL_REQUEST_METHOD,
+                            request_method.as_str(),
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                response.status() == StatusCode::OK || response.status() == StatusCode::NO_CONTENT
+            );
+
+            let allow_methods = response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(allow_methods.contains("PATCH"));
+            assert!(allow_methods.contains("DELETE"));
+        }
     }
 }
