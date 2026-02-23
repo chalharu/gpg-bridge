@@ -73,6 +73,13 @@ Before writing:
 
 If the issue is not in `KAN`, stop and explain that cross-project writes are not allowed.
 
+### Atlassian MCP commentBody Formatting
+
+When using `mcp_com_atlassian_addCommentToJiraIssue`, the `commentBody` parameter must contain **actual newline characters**, not escaped `\n` literals. Escaped `\n` sequences are rendered as literal text in Jira, breaking the comment formatting.
+
+- Good: Pass a multi-line Markdown string directly (the tool parameter value naturally contains real newlines).
+- Bad: Concatenate strings with `\n` — these become literal backslash-n in the comment.
+
 ## Response Style
 
 When operation succeeds, report:
