@@ -7,6 +7,7 @@ use reqwest::{
     header::{ACCEPT, HeaderMap, HeaderValue, RETRY_AFTER},
 };
 use thiserror::Error;
+use tokio::sync::watch;
 
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -97,7 +98,7 @@ impl SseClient {
 
     #[cfg(test)]
     pub async fn receive_single_event(&self) -> Result<DaemonSseEvent, SseClientError> {
-        let response = self.connect().await?;
+        let response = self.connect(None).await?;
         let mut stream = response.bytes_stream().eventsource();
 
         let next = tokio::time::timeout(self.config.heartbeat_timeout, stream.next())
@@ -113,15 +114,20 @@ impl SseClient {
         }
     }
 
-    pub async fn run_with_handler<F, Fut>(&self, mut handler: F) -> Result<(), SseClientError>
+    pub async fn run_with_handler<F, Fut>(
+        &self,
+        mut shutdown_rx: watch::Receiver<bool>,
+        mut handler: F,
+    ) -> Result<(), SseClientError>
     where
         F: FnMut(DaemonSseEvent) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
         let mut attempt: u32 = 0;
+        let mut last_event_id: Option<String> = None;
 
         loop {
-            let response = match self.connect().await {
+            let response = match self.connect(last_event_id.as_deref()).await {
                 Ok(response) => response,
                 Err(error) => {
                     let delay = reconnect_delay_for_error(
@@ -131,7 +137,14 @@ impl SseClient {
                         random_jitter_seed(),
                     );
                     tracing::warn!(?error, attempt, ?delay, "sse connect failed; retrying");
-                    tokio::time::sleep(delay).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {},
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                return Ok(());
+                            }
+                        }
+                    }
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
@@ -141,11 +154,25 @@ impl SseClient {
             let mut stream = response.bytes_stream().eventsource();
 
             loop {
-                let next = tokio::time::timeout(self.config.heartbeat_timeout, stream.next()).await;
+                let next = tokio::select! {
+                    result = tokio::time::timeout(self.config.heartbeat_timeout, stream.next()) => result,
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                };
 
                 match next {
                     Ok(Some(Ok(event))) => {
                         let dispatched = dispatch_event(&event);
+                        if let DaemonSseEvent::Message {
+                            id: Some(ref id), ..
+                        } = dispatched
+                        {
+                            last_event_id = Some(id.clone());
+                        }
                         handler(dispatched).await.map_err(SseClientError::Handler)?;
                     }
                     Ok(Some(Err(error))) => {
@@ -162,7 +189,14 @@ impl SseClient {
                             ?delay,
                             "sse stream read failed; reconnecting"
                         );
-                        tokio::time::sleep(delay).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {},
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    return Ok(());
+                                }
+                            }
+                        }
                         attempt = attempt.saturating_add(1);
                         break;
                     }
@@ -175,7 +209,14 @@ impl SseClient {
                             random_jitter_seed(),
                         );
                         tracing::warn!(attempt, ?delay, "sse stream ended; reconnecting");
-                        tokio::time::sleep(delay).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {},
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    return Ok(());
+                                }
+                            }
+                        }
                         attempt = attempt.saturating_add(1);
                         break;
                     }
@@ -190,7 +231,14 @@ impl SseClient {
                             random_jitter_seed(),
                         );
                         tracing::warn!(attempt, ?delay, "heartbeat timeout; reconnecting");
-                        tokio::time::sleep(delay).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {},
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    return Ok(());
+                                }
+                            }
+                        }
                         attempt = attempt.saturating_add(1);
                         break;
                     }
@@ -199,11 +247,20 @@ impl SseClient {
         }
     }
 
-    async fn connect(&self) -> Result<reqwest::Response, SseClientError> {
-        let response = self
+    async fn connect(
+        &self,
+        last_event_id: Option<&str>,
+    ) -> Result<reqwest::Response, SseClientError> {
+        let mut request = self
             .client
             .get(&self.config.url)
-            .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
+            .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
+
+        if let Some(id) = last_event_id {
+            request = request.header("Last-Event-ID", id);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|source| SseClientError::Connect {
@@ -230,7 +287,7 @@ impl SseClient {
     }
 }
 
-pub fn dispatch_event(event: &Event) -> DaemonSseEvent {
+pub(crate) fn dispatch_event(event: &Event) -> DaemonSseEvent {
     if event.event == "heartbeat" {
         return DaemonSseEvent::Heartbeat;
     }

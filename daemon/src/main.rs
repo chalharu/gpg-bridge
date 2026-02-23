@@ -1,14 +1,15 @@
 use clap::Parser;
 use reqwest::{
     Client, StatusCode,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER, USER_AGENT},
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER},
 };
 use serde::Deserialize;
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
+use tokio::process::Command;
+use tokio::sync::watch;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -19,7 +20,14 @@ use sse::{DaemonSseEvent, SseClient, SseClientConfig};
 
 const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_RETRIES: u32 = 3;
-const FALLBACK_SOCKET_PATH: &str = "tmp/S.gpg-agent";
+
+fn fallback_socket_path(lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    if let Some(home) = lookup("HOME") {
+        format!("{home}/.gnupg/S.gpg-agent")
+    } else {
+        "/tmp/gpg-bridge/S.gpg-agent".to_owned()
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "gpg-bridge-daemon")]
@@ -80,10 +88,11 @@ fn parse_gpgconf_agent_socket_output(output: &str) -> anyhow::Result<String> {
     Ok(socket_path.to_owned())
 }
 
-fn detect_gpg_agent_socket_path() -> anyhow::Result<String> {
+async fn detect_gpg_agent_socket_path() -> anyhow::Result<String> {
     let output = Command::new("gpgconf")
         .args(["--list-dirs", "agent-socket"])
         .output()
+        .await
         .map_err(|error| {
             anyhow::anyhow!("failed to run gpgconf --list-dirs agent-socket: {error}")
         })?;
@@ -106,10 +115,11 @@ fn detect_gpg_agent_socket_path() -> anyhow::Result<String> {
     parse_gpgconf_agent_socket_output(&stdout)
 }
 
-fn kill_existing_gpg_agent() -> anyhow::Result<()> {
+async fn kill_existing_gpg_agent() -> anyhow::Result<()> {
     let output = Command::new("gpgconf")
         .args(["--kill", "gpg-agent"])
         .output()
+        .await
         .map_err(|error| anyhow::anyhow!("failed to run gpgconf --kill gpg-agent: {error}"))?;
 
     if output.status.success() {
@@ -142,7 +152,7 @@ fn resolve_socket_path(
     } else if let Some(value) = detected_default_socket_path {
         (value.to_owned(), SocketPathSource::Detected)
     } else {
-        (FALLBACK_SOCKET_PATH.to_owned(), SocketPathSource::Fallback)
+        (fallback_socket_path(lookup), SocketPathSource::Fallback)
     };
 
     if socket_path.trim().is_empty() {
@@ -192,7 +202,7 @@ fn parse_file_config(path: &Path, content: &str) -> anyhow::Result<FileConfig> {
 
     match extension.as_str() {
         "toml" => Ok(toml::from_str(content)?),
-        "yaml" | "yml" => Ok(serde_yaml::from_str(content)?),
+        "yaml" | "yml" => Ok(serde_yml::from_str(content)?),
         _ => Err(anyhow::anyhow!(
             "unsupported config format: {} (expected .toml, .yaml, .yml)",
             path.display()
@@ -296,7 +306,7 @@ fn default_user_agent() -> String {
     format!("gpg-bridge-daemon/{}", env!("CARGO_PKG_VERSION"))
 }
 
-pub fn build_http_client(timeout: Duration, user_agent: &str) -> anyhow::Result<Client> {
+pub(crate) fn build_http_client(timeout: Duration, user_agent: &str) -> anyhow::Result<Client> {
     let client = Client::builder()
         .timeout(timeout)
         .user_agent(user_agent)
@@ -305,7 +315,7 @@ pub fn build_http_client(timeout: Duration, user_agent: &str) -> anyhow::Result<
     Ok(client)
 }
 
-pub fn build_bearer_header(token: &str) -> anyhow::Result<HeaderValue> {
+pub(crate) fn build_bearer_header(token: &str) -> anyhow::Result<HeaderValue> {
     if token.trim().is_empty() {
         return Err(anyhow::anyhow!("bearer token must not be empty"));
     }
@@ -313,7 +323,13 @@ pub fn build_bearer_header(token: &str) -> anyhow::Result<HeaderValue> {
     Ok(HeaderValue::from_str(&format!("Bearer {token}"))?)
 }
 
-pub fn retry_delay_for(status: StatusCode, headers: &HeaderMap, attempt: u32) -> Option<Duration> {
+// HTTP utility functions used by tests and the upcoming Assuan protocol handler.
+#[allow(dead_code)]
+pub(crate) fn retry_delay_for(
+    status: StatusCode,
+    headers: &HeaderMap,
+    attempt: u32,
+) -> Option<Duration> {
     if attempt >= MAX_HTTP_RETRIES {
         return None;
     }
@@ -334,7 +350,8 @@ pub fn retry_delay_for(status: StatusCode, headers: &HeaderMap, attempt: u32) ->
     None
 }
 
-pub fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
+#[allow(dead_code)]
+pub(crate) fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
     match status {
         StatusCode::UNAUTHORIZED => anyhow::anyhow!("authentication failed for {url} (401)"),
         StatusCode::FORBIDDEN => anyhow::anyhow!("permission denied for {url} (403)"),
@@ -347,18 +364,19 @@ pub fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
     }
 }
 
-pub async fn send_get_with_retry(
+#[allow(dead_code)]
+pub(crate) async fn send_get_with_retry(
     client: &Client,
     url: &str,
-    bearer_token: Option<&str>,
+    bearer: Option<&HeaderValue>,
 ) -> anyhow::Result<String> {
     let mut attempt = 0;
 
     loop {
-        let mut request = client.get(url).header(USER_AGENT, default_user_agent());
+        let mut request = client.get(url);
 
-        if let Some(token) = bearer_token {
-            request = request.header(AUTHORIZATION, build_bearer_header(token)?);
+        if let Some(value) = bearer {
+            request = request.header(AUTHORIZATION, value);
         }
 
         let response = request
@@ -398,7 +416,7 @@ async fn main() -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let config_path = resolve_config_path(&cli, &lookup);
     let file_config = load_file_config(config_path.as_deref())?;
-    let detected_default_socket_path = detect_gpg_agent_socket_path();
+    let detected_default_socket_path = detect_gpg_agent_socket_path().await;
     let config = build_app_config(
         &cli,
         &file_config,
@@ -420,13 +438,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if config.kill_existing_agent {
-        kill_existing_gpg_agent()?;
+        kill_existing_gpg_agent().await?;
         info!("requested existing gpg-agent stop via gpgconf");
     }
 
-    if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
-        let _ = build_bearer_header(&token)?;
-    }
+    let _bearer_header = if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
+        Some(build_bearer_header(&token)?)
+    } else {
+        None
+    };
 
     info!(
         log_level = %config.log_level,
@@ -450,12 +470,13 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     let ipc_server = ipc::IpcServer::start(&config.socket_path).await?;
 
-    let sse_task = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
+    let (sse_shutdown_tx, sse_task) = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
         let sse_client = SseClient::new(http_client.clone(), SseClientConfig::new(sse_url))?;
+        let (tx, rx) = watch::channel(false);
 
-        Some(tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let run_result = sse_client
-                .run_with_handler(|event| async move {
+                .run_with_handler(rx, |event| async move {
                     match event {
                         DaemonSseEvent::Heartbeat => {
                             info!("sse heartbeat");
@@ -476,17 +497,21 @@ async fn main() -> anyhow::Result<()> {
             if let Err(error) = run_result {
                 tracing::warn!(?error, "sse client stopped");
             }
-        }))
+        });
+
+        (Some(tx), Some(task))
     } else {
-        None
+        (None, None)
     };
 
     info!("waiting for shutdown signal");
 
     let shutdown_signal_result = wait_for_shutdown_signal(tokio::signal::ctrl_c()).await;
 
+    if let Some(tx) = sse_shutdown_tx {
+        let _ = tx.send(true);
+    }
     if let Some(task) = sse_task {
-        task.abort();
         let _ = task.await;
     }
 
@@ -685,12 +710,15 @@ mod tests {
     fn build_app_config_fallback_socket_allows_existing_socket_replacement() {
         let cli = parse_cli_from(["gpg-bridge-daemon"]);
         let file = FileConfig::default();
-        let lookup = |_key: &str| None;
+        let lookup = |key: &str| match key {
+            "HOME" => Some("/home/testuser".to_owned()),
+            _ => None,
+        };
 
         let config =
             build_app_config(&cli, &file, &lookup, Some("/tmp/gnupg/S.gpg-agent")).unwrap();
 
-        assert_eq!(config.socket_path, "tmp/S.gpg-agent");
+        assert_eq!(config.socket_path, "/home/testuser/.gnupg/S.gpg-agent");
         assert!(config.allow_replace_existing_socket);
     }
 
@@ -762,17 +790,17 @@ mod tests {
         });
 
         let client = build_http_client(Duration::from_secs(2), "daemon-test/1.0").unwrap();
-        let response =
-            send_get_with_retry(&client, &format!("http://{addr}"), Some("secret-token"))
-                .await
-                .unwrap();
+        let bearer = build_bearer_header("secret-token").unwrap();
+        let response = send_get_with_retry(&client, &format!("http://{addr}"), Some(&bearer))
+            .await
+            .unwrap();
 
         let request = server.await.unwrap();
         let request_lower = request.to_ascii_lowercase();
 
         assert_eq!(response, "ok");
         assert!(request_lower.contains("authorization: bearer secret-token"));
-        assert!(request_lower.contains("user-agent: gpg-bridge-daemon/"));
+        assert!(request_lower.contains("user-agent: daemon-test/1.0"));
     }
 
     #[tokio::test]
@@ -793,5 +821,124 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_status_error_returns_authentication_failed_for_401() {
+        let error = map_status_error(StatusCode::UNAUTHORIZED, "http://example.com");
+        assert!(error.to_string().contains("authentication failed"));
+        assert!(error.to_string().contains("401"));
+    }
+
+    #[test]
+    fn map_status_error_returns_permission_denied_for_403() {
+        let error = map_status_error(StatusCode::FORBIDDEN, "http://example.com");
+        assert!(error.to_string().contains("permission denied"));
+        assert!(error.to_string().contains("403"));
+    }
+
+    #[test]
+    fn map_status_error_returns_not_found_for_404() {
+        let error = map_status_error(StatusCode::NOT_FOUND, "http://example.com");
+        assert!(error.to_string().contains("not found"));
+        assert!(error.to_string().contains("404"));
+    }
+
+    #[test]
+    fn map_status_error_returns_rate_limited_for_429() {
+        let error = map_status_error(StatusCode::TOO_MANY_REQUESTS, "http://example.com");
+        assert!(error.to_string().contains("rate limited"));
+        assert!(error.to_string().contains("429"));
+    }
+
+    #[test]
+    fn map_status_error_returns_server_error_for_500() {
+        let error = map_status_error(StatusCode::INTERNAL_SERVER_ERROR, "http://example.com");
+        assert!(error.to_string().contains("server error"));
+    }
+
+    #[test]
+    fn map_status_error_returns_generic_for_other_status() {
+        let error = map_status_error(StatusCode::BAD_REQUEST, "http://example.com");
+        assert!(error.to_string().contains("request failed"));
+        assert!(error.to_string().contains("400"));
+    }
+
+    #[test]
+    fn retry_delay_for_returns_exponential_backoff_for_5xx() {
+        let headers = HeaderMap::new();
+
+        let delay_0 = retry_delay_for(StatusCode::INTERNAL_SERVER_ERROR, &headers, 0).unwrap();
+        assert_eq!(delay_0, Duration::from_secs(1));
+
+        let delay_1 = retry_delay_for(StatusCode::INTERNAL_SERVER_ERROR, &headers, 1).unwrap();
+        assert_eq!(delay_1, Duration::from_secs(2));
+
+        let delay_2 = retry_delay_for(StatusCode::INTERNAL_SERVER_ERROR, &headers, 2).unwrap();
+        assert_eq!(delay_2, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn retry_delay_for_returns_none_when_max_retries_exceeded() {
+        let headers = HeaderMap::new();
+        let delay = retry_delay_for(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &headers,
+            MAX_HTTP_RETRIES,
+        );
+        assert!(delay.is_none());
+    }
+
+    #[test]
+    fn retry_delay_for_returns_none_for_client_error() {
+        let headers = HeaderMap::new();
+        let delay = retry_delay_for(StatusCode::BAD_REQUEST, &headers, 0);
+        assert!(delay.is_none());
+    }
+
+    #[test]
+    fn retry_delay_for_429_uses_fallback_when_no_retry_after() {
+        let headers = HeaderMap::new();
+        let delay = retry_delay_for(StatusCode::TOO_MANY_REQUESTS, &headers, 0).unwrap();
+        assert_eq!(delay, Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_compat_socket_path_returns_none_when_detected_is_none() {
+        let result = resolve_compat_socket_path("/tmp/custom.sock", None);
+        assert!(result.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_compat_socket_path_returns_none_when_paths_are_equal() {
+        let result = resolve_compat_socket_path("/tmp/S.gpg-agent", Some("/tmp/S.gpg-agent"));
+        assert!(result.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_compat_socket_path_returns_detected_when_paths_differ() {
+        let result = resolve_compat_socket_path("/tmp/custom.sock", Some("/tmp/S.gpg-agent"));
+        assert_eq!(result, Some(PathBuf::from("/tmp/S.gpg-agent")));
+    }
+
+    #[test]
+    fn fallback_socket_path_uses_home_env() {
+        let lookup = |key: &str| match key {
+            "HOME" => Some("/home/testuser".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            fallback_socket_path(&lookup),
+            "/home/testuser/.gnupg/S.gpg-agent"
+        );
+    }
+
+    #[test]
+    fn fallback_socket_path_uses_tmp_when_no_home() {
+        let lookup = |_key: &str| None;
+        assert_eq!(fallback_socket_path(&lookup), "/tmp/gpg-bridge/S.gpg-agent");
     }
 }

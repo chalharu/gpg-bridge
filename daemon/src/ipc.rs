@@ -6,6 +6,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+/// Short delay before retrying after a transient accept error (e.g., EMFILE/ENFILE).
+const ACCEPT_ERROR_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub struct IpcServer {
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<anyhow::Result<()>>>,
@@ -66,6 +69,9 @@ impl IpcServer {
 }
 
 impl Drop for IpcServer {
+    /// Safety-net cleanup: sends shutdown signal, aborts the task, and removes socket files.
+    /// The spawned task also performs cleanup on normal exit. This intentional double-cleanup
+    /// design ensures sockets are removed even if the task is cancelled or panics.
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
@@ -294,7 +300,14 @@ async fn run_unix_accept_loop(
                 }
             }
             accepted = listener.accept() => {
-                let (stream, _) = accepted.map_err(|error| anyhow::anyhow!("failed to accept unix socket connection: {error}"))?;
+                let (stream, _) = match accepted {
+                    Ok(conn) => conn,
+                    Err(error) => {
+                        warn!(?error, "failed to accept unix socket connection");
+                        tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
+                        continue;
+                    }
+                };
                 info!("ipc unix socket connection accepted");
                 tokio::spawn(async move {
                     if let Err(error) = handle_unix_connection(stream).await {
@@ -308,6 +321,8 @@ async fn run_unix_accept_loop(
 
 #[cfg(unix)]
 async fn handle_unix_connection(_stream: tokio::net::UnixStream) -> anyhow::Result<()> {
+    // TODO: Implement Assuan protocol handling (HAVEKEY, KEYINFO, READKEY, PKSIGN, PKDECRYPT).
+    // Currently a no-op stub that accepts and immediately closes the connection.
     #[cfg(test)]
     {
         UNIX_CONNECTION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -316,7 +331,7 @@ async fn handle_unix_connection(_stream: tokio::net::UnixStream) -> anyhow::Resu
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn normalize_pipe_name(endpoint: &str) -> String {
     if endpoint.starts_with(r"\\.\pipe\") {
         return endpoint.to_owned();
@@ -367,7 +382,17 @@ async fn run_windows_accept_loop(
                 }
             }
             connected = listener.connect() => {
-                connected.map_err(|error| anyhow::anyhow!("failed to accept named pipe connection: {error}"))?;
+                if let Err(error) = connected {
+                    warn!(?error, "failed to accept named pipe connection");
+                    tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
+                    match create_named_pipe_server(pipe_name, false) {
+                        Ok(new_listener) => listener = new_listener,
+                        Err(error) => {
+                            return Err(anyhow::anyhow!("failed to recreate named pipe after accept error: {error}"));
+                        }
+                    }
+                    continue;
+                }
                 info!(pipe_name = %pipe_name, "ipc named pipe connection accepted");
 
                 let stream = listener;
@@ -387,6 +412,8 @@ async fn run_windows_accept_loop(
 async fn handle_windows_connection(
     stream: tokio::net::windows::named_pipe::NamedPipeServer,
 ) -> anyhow::Result<()> {
+    // TODO: Implement Assuan protocol handling (HAVEKEY, KEYINFO, READKEY, PKSIGN, PKDECRYPT).
+    // Currently a no-op stub that disconnects immediately.
     stream
         .disconnect()
         .map_err(|error| anyhow::anyhow!("failed to disconnect named pipe: {error}"))
@@ -581,5 +608,29 @@ mod tests {
         assert_eq!(target, socket_path);
 
         server.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn normalize_pipe_name_preserves_full_pipe_prefix() {
+        let result = normalize_pipe_name(r"\\.\pipe\mypipe");
+        assert_eq!(result, r"\\.\pipe\mypipe");
+    }
+
+    #[test]
+    fn normalize_pipe_name_adds_prefix_and_normalizes_slashes() {
+        let result = normalize_pipe_name("path/to/pipe");
+        assert_eq!(result, r"\\.\pipe\path_to_pipe");
+    }
+
+    #[test]
+    fn normalize_pipe_name_normalizes_backslashes_and_colons() {
+        let result = normalize_pipe_name(r"C:\gpg\agent");
+        assert_eq!(result, r"\\.\pipe\C__gpg_agent");
+    }
+
+    #[test]
+    fn normalize_pipe_name_handles_plain_name() {
+        let result = normalize_pipe_name("gpg-agent");
+        assert_eq!(result, r"\\.\pipe\gpg-agent");
     }
 }
