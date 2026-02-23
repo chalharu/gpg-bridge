@@ -165,6 +165,64 @@ void main() {
     );
   });
 
+  test('generateKeyPair rejects unexpected platform response', () async {
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'generateKeyPair') {
+        return false;
+      }
+      return true;
+    });
+
+    final service = AndroidKeystoreService(channel);
+
+    await expectLater(
+      () => service.generateKeyPair(alias: AndroidKeystoreAliases.deviceKey),
+      throwsA(isA<AndroidKeystoreException>()),
+    );
+  });
+
+  test('service wraps MissingPluginException from channel calls', () async {
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      throw MissingPluginException('missing');
+    });
+
+    final service = AndroidKeystoreService(channel);
+
+    await expectLater(
+      () => service.sign(
+        alias: AndroidKeystoreAliases.deviceKey,
+        data: utf8.encode('hello'),
+      ),
+      throwsA(isA<AndroidKeystoreException>()),
+    );
+  });
+
+  test(
+    'service wraps non platform errors from malformed channel payload',
+    () async {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getPublicKeyJwk') {
+          return {
+            'kty': 'EC',
+            'use': 'sig',
+            'crv': 'P-256',
+            'x': 123,
+            'y': 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+            'alg': 'ES256',
+          };
+        }
+        return true;
+      });
+
+      final service = AndroidKeystoreService(channel);
+
+      await expectLater(
+        () => service.getPublicKeyJwk(alias: AndroidKeystoreAliases.deviceKey),
+        throwsA(isA<AndroidKeystoreException>()),
+      );
+    },
+  );
+
   test('exception toString includes cause when present', () {
     final error = AndroidKeystoreException('failed', cause: Exception('boom'));
 
@@ -233,5 +291,45 @@ void main() {
       () => service.getPublicKeyJwk(alias: AndroidKeystoreAliases.deviceKey),
       throwsA(isA<AndroidKeystoreException>()),
     );
+  });
+
+  test('service validates e2e JWK use and algorithm', () async {
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'getPublicKeyJwk') {
+        return {
+          'kty': 'EC',
+          'use': 'enc',
+          'crv': 'P-256',
+          'x': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          'y': 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+          'alg': 'ECDH-ES+A256KW',
+        };
+      }
+      return true;
+    });
+
+    final service = AndroidKeystoreService(channel);
+
+    final jwk = await service.getPublicKeyJwk(
+      alias: AndroidKeystoreAliases.e2eKey,
+    );
+
+    expect(jwk['use'], 'enc');
+    expect(jwk['alg'], 'ECDH-ES+A256KW');
+  });
+
+  test('verify rejects empty signature before channel invocation', () async {
+    final service = AndroidKeystoreService(channel);
+
+    await expectLater(
+      () => service.verify(
+        alias: AndroidKeystoreAliases.deviceKey,
+        data: utf8.encode('hello'),
+        signatureBase64: '',
+      ),
+      throwsA(isA<AndroidKeystoreException>()),
+    );
+
+    expect(methodCalls, isEmpty);
   });
 }
