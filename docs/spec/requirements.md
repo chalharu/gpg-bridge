@@ -1636,11 +1636,13 @@ data: { "signature": "eyJ...(JWE)", "status": "approved|denied|unavailable|expir
 
 - **方式**: HTTP Header方式（`Accept`ヘッダーにバージョンを含める）
 - **ヘッダー形式**: `Accept: application/vnd.gpg-sign.v1+json`
-- **v1.0での実装**: ヘッダー未指定時はv1として扱う（後方互換性保証）
+- **v1.0での実装**: ヘッダー未指定時はv1として扱う。`application/vnd.gpg-sign.v1+json` / `application/json` / `application/*` / `*/*` を受理し、media type比較は大文字小文字を区別しない
+- **未対応Acceptの扱い**: サポート外media typeは `406 Not Acceptable` を返却し、レスポンス形式は `application/problem+json`（RFC 9457 Problem Details）
+- **レスポンスContent-Type**: JSONレスポンスは `application/vnd.gpg-sign.v1+json` で返却（例: `GET /health`。`Accept: application/json` 指定時も同一）
 - **破壊的変更時**: 新バージョンの`Accept`ヘッダーを要求し、旧バージョンは非推奨期間経過後に廃止
 - **非破壊的変更**: バージョン変更不要（フィールド追加等は後方互換）
 - **採用理由**: URLパスを変更しないためSSEエンドポイントの接続先が安定する。また、デバイス登録やペアリング済みのDaemonがリビルドなしでバージョン切替可能
-- **実装フェーズ**: v2.0で実装。v1.0では単一バージョンのため、ヘッダー検証は不要
+- **実装フェーズ**: v1.0でAcceptベースのバージョニング挙動（受理/拒否）を実装済み
 
 ---
 
