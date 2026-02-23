@@ -8,7 +8,9 @@ use tracing::{info, warn};
 
 pub struct IpcServer {
     shutdown_tx: watch::Sender<bool>,
-    task: JoinHandle<anyhow::Result<()>>,
+    task: Option<JoinHandle<anyhow::Result<()>>>,
+    #[cfg(unix)]
+    socket_path: PathBuf,
 }
 
 impl IpcServer {
@@ -17,15 +19,38 @@ impl IpcServer {
 
         let task = spawn_server(endpoint, shutdown_rx)?;
 
-        Ok(Self { task, shutdown_tx })
+        Ok(Self {
+            task: Some(task),
+            shutdown_tx,
+            #[cfg(unix)]
+            socket_path: PathBuf::from(endpoint),
+        })
     }
 
-    pub async fn shutdown(self) -> anyhow::Result<()> {
+    pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.shutdown_tx.send(true);
 
-        match self.task.await {
+        let Some(task) = self.task.take() else {
+            return Ok(());
+        };
+
+        match task.await {
             Ok(result) => result,
             Err(error) => Err(anyhow::anyhow!("ipc task join error: {error}")),
+        }
+    }
+}
+
+impl Drop for IpcServer {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(true);
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+
+        #[cfg(unix)]
+        if let Err(error) = cleanup_unix_socket_path(&self.socket_path) {
+            warn!(socket_path = %self.socket_path.display(), ?error, "failed to cleanup unix socket file on drop");
         }
     }
 }
@@ -298,6 +323,29 @@ mod tests {
         .unwrap();
 
         server.shutdown().await.unwrap();
+
+        assert!(!socket_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ipc_server_drop_cleans_up_socket() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let socket_path = temp_dir.path().join("agent.sock");
+        let socket_path_str = socket_path.to_string_lossy().to_string();
+
+        let server = IpcServer::start(&socket_path_str).await.unwrap();
+        assert!(socket_path.exists());
+
+        drop(server);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while socket_path.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
         assert!(!socket_path.exists());
     }
