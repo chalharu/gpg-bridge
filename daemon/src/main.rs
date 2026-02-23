@@ -7,8 +7,9 @@ use serde::Deserialize;
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod ipc;
@@ -18,6 +19,7 @@ use sse::{DaemonSseEvent, SseClient, SseClientConfig};
 
 const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_RETRIES: u32 = 3;
+const FALLBACK_SOCKET_PATH: &str = "tmp/S.gpg-agent";
 
 #[derive(Debug, Parser)]
 #[command(name = "gpg-bridge-daemon")]
@@ -30,6 +32,8 @@ struct Cli {
     config_path: Option<PathBuf>,
     #[arg(long)]
     log_level: Option<String>,
+    #[arg(long)]
+    kill_existing_agent: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -37,13 +41,130 @@ struct FileConfig {
     server_url: Option<String>,
     socket_path: Option<String>,
     log_level: Option<String>,
+    kill_existing_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
 struct AppConfig {
     server_url: String,
     socket_path: String,
+    allow_replace_existing_socket: bool,
     log_level: String,
+    kill_existing_agent: bool,
+    #[cfg(unix)]
+    compat_socket_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketPathSource {
+    Cli,
+    Env,
+    File,
+    Detected,
+    Fallback,
+}
+
+fn parse_gpgconf_agent_socket_output(output: &str) -> anyhow::Result<String> {
+    let socket_path = output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("gpgconf returned empty agent socket path"))?;
+
+    if socket_path == "0" {
+        return Err(anyhow::anyhow!(
+            "gpgconf returned unavailable marker for agent socket path"
+        ));
+    }
+
+    Ok(socket_path.to_owned())
+}
+
+fn detect_gpg_agent_socket_path() -> anyhow::Result<String> {
+    let output = Command::new("gpgconf")
+        .args(["--list-dirs", "agent-socket"])
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!("failed to run gpgconf --list-dirs agent-socket: {error}")
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(anyhow::anyhow!(
+            "gpgconf --list-dirs agent-socket failed: {}",
+            if stderr.is_empty() {
+                format!("exit status {}", output.status)
+            } else {
+                stderr
+            }
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| anyhow::anyhow!("gpgconf output is not valid UTF-8: {error}"))?;
+
+    parse_gpgconf_agent_socket_output(&stdout)
+}
+
+fn kill_existing_gpg_agent() -> anyhow::Result<()> {
+    let output = Command::new("gpgconf")
+        .args(["--kill", "gpg-agent"])
+        .output()
+        .map_err(|error| anyhow::anyhow!("failed to run gpgconf --kill gpg-agent: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(anyhow::anyhow!(
+        "gpgconf --kill gpg-agent failed: {}",
+        if stderr.is_empty() {
+            format!("exit status {}", output.status)
+        } else {
+            stderr
+        }
+    ))
+}
+
+fn resolve_socket_path(
+    cli: &Cli,
+    file: &FileConfig,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    detected_default_socket_path: Option<&str>,
+) -> anyhow::Result<(String, SocketPathSource)> {
+    let (socket_path, source) = if let Some(value) = cli.socket_path.clone() {
+        (value, SocketPathSource::Cli)
+    } else if let Some(value) = lookup("DAEMON_SOCKET_PATH") {
+        (value, SocketPathSource::Env)
+    } else if let Some(value) = file.socket_path.clone() {
+        (value, SocketPathSource::File)
+    } else if let Some(value) = detected_default_socket_path {
+        (value.to_owned(), SocketPathSource::Detected)
+    } else {
+        (FALLBACK_SOCKET_PATH.to_owned(), SocketPathSource::Fallback)
+    };
+
+    if socket_path.trim().is_empty() {
+        return Err(anyhow::anyhow!("socket_path must not be empty"));
+    }
+
+    Ok((socket_path, source))
+}
+
+#[cfg(unix)]
+fn resolve_compat_socket_path(
+    socket_path: &str,
+    detected_default_socket_path: Option<&str>,
+) -> Option<PathBuf> {
+    let default_socket_path = Path::new(detected_default_socket_path?);
+    let selected_socket_path = Path::new(socket_path);
+
+    if default_socket_path == selected_socket_path {
+        return None;
+    }
+
+    Some(default_socket_path.to_path_buf())
 }
 
 fn parse_cli_from<I, T>(args: I) -> Cli
@@ -105,6 +226,7 @@ fn build_app_config(
     cli: &Cli,
     file: &FileConfig,
     lookup: &dyn Fn(&str) -> Option<String>,
+    detected_default_socket_path: Option<&str>,
 ) -> anyhow::Result<AppConfig> {
     let server_url = cli
         .server_url
@@ -115,17 +237,6 @@ fn build_app_config(
 
     require_http_url(&server_url)?;
 
-    let socket_path = cli
-        .socket_path
-        .clone()
-        .or_else(|| lookup("DAEMON_SOCKET_PATH"))
-        .or_else(|| file.socket_path.clone())
-        .unwrap_or_else(|| "tmp/S.gpg-agent".to_owned());
-
-    if socket_path.trim().is_empty() {
-        return Err(anyhow::anyhow!("socket_path must not be empty"));
-    }
-
     let log_level = cli
         .log_level
         .clone()
@@ -133,10 +244,36 @@ fn build_app_config(
         .or_else(|| file.log_level.clone())
         .unwrap_or_else(|| "info".to_owned());
 
+    let kill_existing_agent = cli.kill_existing_agent
+        || lookup("DAEMON_KILL_EXISTING_AGENT")
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+            .or(file.kill_existing_agent)
+            .unwrap_or(false);
+
+    let detected_default_socket_path = if kill_existing_agent {
+        detected_default_socket_path
+    } else {
+        None
+    };
+
+    let (socket_path, socket_path_source) =
+        resolve_socket_path(cli, file, lookup, detected_default_socket_path)?;
+
+    let allow_replace_existing_socket =
+        kill_existing_agent || !matches!(socket_path_source, SocketPathSource::Detected);
+
+    #[cfg(unix)]
+    let compat_socket_path = resolve_compat_socket_path(&socket_path, detected_default_socket_path);
+
     Ok(AppConfig {
         server_url,
         socket_path,
+        allow_replace_existing_socket,
         log_level,
+        kill_existing_agent,
+        #[cfg(unix)]
+        compat_socket_path,
     })
 }
 
@@ -261,13 +398,31 @@ async fn main() -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let config_path = resolve_config_path(&cli, &lookup);
     let file_config = load_file_config(config_path.as_deref())?;
-    let config = build_app_config(&cli, &file_config, &lookup)?;
+    let detected_default_socket_path = detect_gpg_agent_socket_path();
+    let config = build_app_config(
+        &cli,
+        &file_config,
+        &lookup,
+        detected_default_socket_path.as_deref().ok(),
+    )?;
     let http_client = build_http_client(
         Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECONDS),
         &default_user_agent(),
     )?;
 
     setup_tracing(&config.log_level)?;
+
+    if let Err(error) = detected_default_socket_path {
+        warn!(
+            ?error,
+            "failed to detect default gpg-agent socket path via gpgconf; using fallback resolution"
+        );
+    }
+
+    if config.kill_existing_agent {
+        kill_existing_gpg_agent()?;
+        info!("requested existing gpg-agent stop via gpgconf");
+    }
 
     if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
         let _ = build_bearer_header(&token)?;
@@ -277,11 +432,22 @@ async fn main() -> anyhow::Result<()> {
         log_level = %config.log_level,
         server_url = %config.server_url,
         socket_path = %config.socket_path,
+        allow_replace_existing_socket = config.allow_replace_existing_socket,
         http_timeout_seconds = DEFAULT_HTTP_TIMEOUT_SECONDS,
         max_http_retries = MAX_HTTP_RETRIES,
+        kill_existing_agent = config.kill_existing_agent,
         "daemon started"
     );
 
+    #[cfg(unix)]
+    let ipc_server = ipc::IpcServer::start(
+        &config.socket_path,
+        config.compat_socket_path.as_deref(),
+        config.allow_replace_existing_socket,
+    )
+    .await?;
+
+    #[cfg(windows)]
     let ipc_server = ipc::IpcServer::start(&config.socket_path).await?;
 
     let sse_task = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
@@ -348,6 +514,7 @@ mod tests {
         assert!(cli.server_url.is_none());
         assert!(cli.socket_path.is_none());
         assert!(cli.config_path.is_none());
+        assert!(!cli.kill_existing_agent);
     }
 
     #[test]
@@ -362,12 +529,14 @@ mod tests {
             "tmp/config.toml",
             "--log-level",
             "debug",
+            "--kill-existing-agent",
         ]);
 
         assert_eq!(cli.log_level, Some("debug".to_owned()));
         assert_eq!(cli.server_url, Some("https://example.com".to_owned()));
         assert_eq!(cli.socket_path, Some("tmp/socket".to_owned()));
         assert_eq!(cli.config_path, Some(PathBuf::from("tmp/config.toml")));
+        assert!(cli.kill_existing_agent);
     }
 
     #[test]
@@ -432,6 +601,7 @@ mod tests {
             server_url: Some("https://file.example".to_owned()),
             socket_path: Some("tmp/file.sock".to_owned()),
             log_level: Some("warn".to_owned()),
+            kill_existing_agent: None,
         };
 
         let lookup = |key: &str| match key {
@@ -441,11 +611,12 @@ mod tests {
             _ => None,
         };
 
-        let config = build_app_config(&cli, &file, &lookup).unwrap();
+        let config = build_app_config(&cli, &file, &lookup, None).unwrap();
 
         assert_eq!(config.server_url, "https://cli.example");
         assert_eq!(config.socket_path, "tmp/cli.sock");
         assert_eq!(config.log_level, "error");
+        assert!(!config.kill_existing_agent);
     }
 
     #[test]
@@ -455,6 +626,7 @@ mod tests {
             server_url: Some("https://file.example".to_owned()),
             socket_path: Some("tmp/file.sock".to_owned()),
             log_level: Some("warn".to_owned()),
+            kill_existing_agent: None,
         };
 
         let lookup = |key: &str| match key {
@@ -464,11 +636,12 @@ mod tests {
             _ => None,
         };
 
-        let config = build_app_config(&cli, &file, &lookup).unwrap();
+        let config = build_app_config(&cli, &file, &lookup, None).unwrap();
 
         assert_eq!(config.server_url, "https://env.example");
         assert_eq!(config.socket_path, "tmp/env.sock");
         assert_eq!(config.log_level, "debug");
+        assert!(!config.kill_existing_agent);
     }
 
     #[test]
@@ -477,8 +650,78 @@ mod tests {
         let file = FileConfig::default();
         let lookup = |_key: &str| None;
 
-        let result = build_app_config(&cli, &file, &lookup);
+        let result = build_app_config(&cli, &file, &lookup, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_gpgconf_agent_socket_output_parses_first_non_empty_line() {
+        let result = parse_gpgconf_agent_socket_output("\n  /tmp/gnupg/S.gpg-agent\n").unwrap();
+
+        assert_eq!(result, "/tmp/gnupg/S.gpg-agent");
+    }
+
+    #[test]
+    fn parse_gpgconf_agent_socket_output_rejects_unavailable_marker() {
+        let result = parse_gpgconf_agent_socket_output("0\n");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_app_config_uses_detected_socket_when_not_set_elsewhere() {
+        let cli = parse_cli_from(["gpg-bridge-daemon", "--kill-existing-agent"]);
+        let file = FileConfig::default();
+        let lookup = |_key: &str| None;
+
+        let config =
+            build_app_config(&cli, &file, &lookup, Some("/tmp/gnupg/S.gpg-agent")).unwrap();
+
+        assert_eq!(config.socket_path, "/tmp/gnupg/S.gpg-agent");
+        assert!(config.allow_replace_existing_socket);
+    }
+
+    #[test]
+    fn build_app_config_fallback_socket_allows_existing_socket_replacement() {
+        let cli = parse_cli_from(["gpg-bridge-daemon"]);
+        let file = FileConfig::default();
+        let lookup = |_key: &str| None;
+
+        let config =
+            build_app_config(&cli, &file, &lookup, Some("/tmp/gnupg/S.gpg-agent")).unwrap();
+
+        assert_eq!(config.socket_path, "tmp/S.gpg-agent");
+        assert!(config.allow_replace_existing_socket);
+    }
+
+    #[test]
+    fn build_app_config_applies_kill_existing_agent_from_env_and_file() {
+        let cli = parse_cli_from(["gpg-bridge-daemon"]);
+        let file = FileConfig {
+            kill_existing_agent: Some(false),
+            ..FileConfig::default()
+        };
+
+        let lookup = |key: &str| match key {
+            "DAEMON_KILL_EXISTING_AGENT" => Some("true".to_owned()),
+            _ => None,
+        };
+
+        let config = build_app_config(&cli, &file, &lookup, None).unwrap();
+        assert!(config.kill_existing_agent);
+        assert!(config.allow_replace_existing_socket);
+    }
+
+    #[test]
+    fn build_app_config_allows_existing_socket_replacement_for_explicit_socket_path() {
+        let cli = parse_cli_from(["gpg-bridge-daemon", "--socket-path", "tmp/explicit.sock"]);
+        let file = FileConfig::default();
+        let lookup = |_key: &str| None;
+
+        let config = build_app_config(&cli, &file, &lookup, None).unwrap();
+
+        assert_eq!(config.socket_path, "tmp/explicit.sock");
+        assert!(config.allow_replace_existing_socket);
     }
 
     #[test]
