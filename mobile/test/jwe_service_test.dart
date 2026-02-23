@@ -223,7 +223,7 @@ void main() {
     test('produces correct output for known input', () {
       // RFC 7518 Appendix C test vector (not exhaustive, but verifies format)
       final sharedSecret = Uint8List(32); // all zeros
-      final derived = JweService.concatKdf(
+      final derived = concatKdf(
         sharedSecret: sharedSecret,
         algorithmId: 'ECDH-ES+A256KW',
         keyBitLength: 256,
@@ -234,12 +234,12 @@ void main() {
     test('different algorithm IDs produce different keys', () {
       final sharedSecret = Uint8List.fromList(List.filled(32, 0x42));
 
-      final kek1 = JweService.concatKdf(
+      final kek1 = concatKdf(
         sharedSecret: sharedSecret,
         algorithmId: 'ECDH-ES+A256KW',
         keyBitLength: 256,
       );
-      final kek2 = JweService.concatKdf(
+      final kek2 = concatKdf(
         sharedSecret: sharedSecret,
         algorithmId: 'ECDH-ES+A128KW',
         keyBitLength: 128,
@@ -269,10 +269,10 @@ void main() {
         0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
       ]);
 
-      final wrapped = JweService.aesKeyWrap(kek: kek, keyToWrap: keyData);
+      final wrapped = aesKeyWrap(kek: kek, keyToWrap: keyData);
       expect(wrapped.length, keyData.length + 8);
 
-      final unwrapped = JweService.aesKeyUnwrap(kek: kek, wrappedKey: wrapped);
+      final unwrapped = aesKeyUnwrap(kek: kek, wrappedKey: wrapped);
       expect(unwrapped, keyData);
     });
 
@@ -298,13 +298,10 @@ void main() {
         0xFB, 0x98, 0x8B, 0x9B, 0x7A, 0x02, 0xDD, 0x21,
       ]);
 
-      final wrapped = JweService.aesKeyWrap(kek: kek, keyToWrap: keyData);
+      final wrapped = aesKeyWrap(kek: kek, keyToWrap: keyData);
       expect(wrapped, expectedWrapped);
 
-      final unwrapped = JweService.aesKeyUnwrap(
-        kek: kek,
-        wrappedKey: expectedWrapped,
-      );
+      final unwrapped = aesKeyUnwrap(kek: kek, wrappedKey: expectedWrapped);
       expect(unwrapped, keyData);
     });
 
@@ -313,10 +310,10 @@ void main() {
       final wrongKek = Uint8List.fromList(List.filled(32, 0x02));
       final keyData = Uint8List.fromList(List.filled(32, 0xAB));
 
-      final wrapped = JweService.aesKeyWrap(kek: kek, keyToWrap: keyData);
+      final wrapped = aesKeyWrap(kek: kek, keyToWrap: keyData);
 
       expect(
-        () => JweService.aesKeyUnwrap(kek: wrongKek, wrappedKey: wrapped),
+        () => aesKeyUnwrap(kek: wrongKek, wrappedKey: wrapped),
         throwsA(
           isA<JweException>().having(
             (e) => e.message,
@@ -339,7 +336,7 @@ void main() {
       final plaintext = Uint8List.fromList(utf8.encode('AES-GCM test'));
       final aad = Uint8List.fromList(utf8.encode('additional data'));
 
-      final encrypted = JweService.aesGcmEncrypt(
+      final encrypted = aesGcmEncrypt(
         key: key,
         iv: iv,
         plaintext: plaintext,
@@ -348,7 +345,7 @@ void main() {
 
       expect(encrypted.tag.length, 16);
 
-      final decrypted = JweService.aesGcmDecrypt(
+      final decrypted = aesGcmDecrypt(
         key: key,
         iv: iv,
         ciphertext: encrypted.ciphertext,
@@ -365,7 +362,7 @@ void main() {
       final plaintext = Uint8List.fromList(utf8.encode('secret'));
       final aad = Uint8List.fromList(utf8.encode('aad'));
 
-      final encrypted = JweService.aesGcmEncrypt(
+      final encrypted = aesGcmEncrypt(
         key: key,
         iv: iv,
         plaintext: plaintext,
@@ -377,7 +374,7 @@ void main() {
       tampered[0] ^= 0xFF;
 
       expect(
-        () => JweService.aesGcmDecrypt(
+        () => aesGcmDecrypt(
           key: key,
           iv: iv,
           ciphertext: tampered,
@@ -394,7 +391,7 @@ void main() {
       final plaintext = Uint8List.fromList(utf8.encode('secret'));
       final aad = Uint8List.fromList(utf8.encode('aad'));
 
-      final encrypted = JweService.aesGcmEncrypt(
+      final encrypted = aesGcmEncrypt(
         key: key,
         iv: iv,
         plaintext: plaintext,
@@ -402,7 +399,7 @@ void main() {
       );
 
       expect(
-        () => JweService.aesGcmDecrypt(
+        () => aesGcmDecrypt(
           key: key,
           iv: iv,
           ciphertext: encrypted.ciphertext,
