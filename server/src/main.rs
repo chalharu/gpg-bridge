@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use clap::Parser;
 use gpg_bridge_server::{
     config::AppConfig,
@@ -26,10 +24,6 @@ where
     Cli::parse_from(args)
 }
 
-fn parse_socket_addr(host: &str, port: u16) -> Result<SocketAddr, std::net::AddrParseError> {
-    format!("{}:{}", host, port).parse()
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -40,7 +34,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let host = cli.host.unwrap_or_else(|| config.server_host.clone());
     let port = cli.port.unwrap_or(config.server_port);
-    let addr = parse_socket_addr(&host, port)?;
 
     let repository = build_repository(&config).await?;
     repository.run_migrations().await?;
@@ -48,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState { repository };
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    let addr = listener.local_addr()?;
 
     info!(%addr, "server listening");
 
@@ -82,20 +76,5 @@ mod tests {
 
         assert_eq!(cli.host, None);
         assert_eq!(cli.port, Some(3001));
-    }
-
-    #[test]
-    fn parse_socket_addr_returns_error_for_invalid_host() {
-        let result = parse_socket_addr("invalid host", 3000);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_socket_addr_returns_expected_value_for_valid_input() {
-        let result = parse_socket_addr("127.0.0.1", 8080);
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().to_string(), "127.0.0.1:8080");
     }
 }

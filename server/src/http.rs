@@ -30,8 +30,6 @@ pub struct AppState {
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     status: &'static str,
-    database_backend: &'static str,
-    database_status: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +143,10 @@ fn parse_accept_version(headers: &HeaderMap) -> Result<ApiVersion, AppError> {
 
         let mut quality = 1000;
         for parameter in parts {
-            if let Some(qvalue) = parameter.strip_prefix("q=") {
+            if let Some((name, value)) = parameter.split_once('=')
+                && name.trim().eq_ignore_ascii_case("q")
+            {
+                let qvalue = value.trim();
                 quality = parse_qvalue(qvalue).ok_or_else(|| {
                     AppError::not_acceptable(format!(
                         "invalid q parameter in Accept header: {qvalue}"
@@ -201,13 +202,11 @@ pub async fn health(
         .repository
         .health_check()
         .await
-        .map_err(|error| AppError::from(error).with_instance("/"))?;
+        .map_err(|error| AppError::from(error).with_instance("/health"))?;
 
-    Ok(Json(HealthResponse {
-        status: "ok",
-        database_backend: state.repository.backend_name(),
-        database_status: "ok",
-    }))
+    let _ = state.repository.backend_name();
+
+    Ok(Json(HealthResponse { status: "ok" }))
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -229,7 +228,7 @@ pub fn build_router(state: AppState) -> Router {
         ]);
 
     Router::new()
-        .route("/", get(health))
+        .route("/health", get(health))
         .layer(middleware::from_fn(accept_version_middleware))
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(cors_layer)
@@ -311,8 +310,6 @@ mod tests {
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.database_backend, "sqlite");
-        assert_eq!(response.database_status, "ok");
     }
 
     #[tokio::test]
@@ -357,7 +354,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, "application/vnd.gpg-bridge.v2+json")
                     .body(Body::empty())
                     .unwrap(),
@@ -403,7 +400,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, ACCEPT_VERSION_V1)
                     .body(Body::empty())
                     .unwrap(),
@@ -448,7 +445,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, "application/json")
                     .body(Body::empty())
                     .unwrap(),
@@ -473,7 +470,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, "Application/Vnd.Gpg-Sign.V1+Json")
                     .body(Body::empty())
                     .unwrap(),
@@ -498,7 +495,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, "application/json;q=0, text/plain")
                     .body(Body::empty())
                     .unwrap(),
@@ -519,7 +516,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ACCEPT, "application/*")
                     .body(Body::empty())
                     .unwrap(),
@@ -544,7 +541,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::OPTIONS)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ORIGIN, "https://example.com")
                     .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
                     .body(Body::empty())
@@ -582,7 +579,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::OPTIONS)
-                    .uri("/")
+                    .uri("/health")
                     .header(header::ORIGIN, "https://example.com")
                     .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
                     .header(
@@ -620,7 +617,7 @@ mod tests {
                 .oneshot(
                     Request::builder()
                         .method(Method::OPTIONS)
-                        .uri("/")
+                        .uri("/health")
                         .header(header::ORIGIN, "https://example.com")
                         .header(
                             header::ACCESS_CONTROL_REQUEST_METHOD,
@@ -645,5 +642,26 @@ mod tests {
             assert!(allow_methods.contains("PATCH"));
             assert!(allow_methods.contains("DELETE"));
         }
+    }
+
+    #[tokio::test]
+    async fn router_accepts_uppercase_q_parameter_name() {
+        let app = build_router(AppState {
+            repository: Arc::new(HealthyRepository),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health")
+                    .header(header::ACCEPT, "application/json;Q=0.8")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
