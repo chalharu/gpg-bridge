@@ -68,9 +68,12 @@ impl KeyType for Aes128KeyLen {
     }
 }
 
+/// Application-specific HKDF salt for AES key derivation.
+const HKDF_SALT: &[u8] = b"gpg-bridge-signing-key-v1";
+
 /// Derive a 128-bit AES key from a secret using HKDF-SHA256.
 pub(crate) fn derive_aes_key(secret: &str) -> [u8; 16] {
-    let salt = hkdf::Salt::new(HKDF_SHA256, &[]);
+    let salt = hkdf::Salt::new(HKDF_SHA256, HKDF_SALT);
     let prk = salt.extract(secret.as_bytes());
     let info = [b"gpg-bridge-signing-key-encryption" as &[u8]];
     let okm = prk.expand(&info, Aes128KeyLen).expect("HKDF expand failed");
