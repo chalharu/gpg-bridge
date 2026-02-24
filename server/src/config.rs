@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub db_acquire_timeout_seconds: u64,
     pub log_level: String,
     pub log_format: String,
+    pub signing_key_secret: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,16 @@ impl AppConfig {
         let log_level = lookup("SERVER_LOG_LEVEL").unwrap_or_else(|| "info".to_owned());
         let log_format = lookup("SERVER_LOG_FORMAT").unwrap_or_else(|| "plain".to_owned());
 
+        let signing_key_secret = lookup("SERVER_SIGNING_KEY_SECRET").ok_or_else(|| {
+            anyhow!("missing required environment variable: SERVER_SIGNING_KEY_SECRET")
+        })?;
+
+        if signing_key_secret.len() < 16 {
+            return Err(anyhow!(
+                "SERVER_SIGNING_KEY_SECRET must be at least 16 bytes"
+            ));
+        }
+
         Ok(Self {
             server_host,
             server_port,
@@ -91,6 +102,7 @@ impl AppConfig {
             db_acquire_timeout_seconds,
             log_level,
             log_format,
+            signing_key_secret,
         })
     }
 }
@@ -101,11 +113,10 @@ mod tests {
 
     #[test]
     fn config_uses_defaults_and_required_values() {
-        let config = AppConfig::from_lookup(&|key| {
-            if key == "SERVER_DATABASE_URL" {
-                return Some("postgres://localhost:5432/gpg_bridge".to_owned());
-            }
-            None
+        let config = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("postgres://localhost:5432/gpg_bridge".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            _ => None,
         })
         .unwrap();
 
@@ -154,6 +165,7 @@ mod tests {
     fn config_rejects_min_connections_larger_than_max() {
         let result = AppConfig::from_lookup(&|key| match key {
             "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
             "SERVER_DB_MAX_CONNECTIONS" => Some("2".to_owned()),
             "SERVER_DB_MIN_CONNECTIONS" => Some("3".to_owned()),
             _ => None,
@@ -169,9 +181,43 @@ mod tests {
     }
 
     #[test]
+    fn config_rejects_short_signing_key_secret() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("short".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least 16 bytes")
+        );
+    }
+
+    #[test]
+    fn config_rejects_missing_signing_key_secret() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_SIGNING_KEY_SECRET")
+        );
+    }
+
+    #[test]
     fn config_rejects_zero_acquire_timeout() {
         let result = AppConfig::from_lookup(&|key| match key {
             "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
             "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS" => Some("0".to_owned()),
             _ => None,
         });
