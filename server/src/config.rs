@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -33,6 +33,52 @@ pub fn detect_database_kind(database_url: &str) -> anyhow::Result<DatabaseKind> 
     ))
 }
 
+fn parse_env<T>(
+    lookup: &dyn Fn(&str) -> Option<String>,
+    key: &str,
+    default: &str,
+) -> anyhow::Result<T>
+where
+    T: std::str::FromStr,
+{
+    let raw = lookup(key).unwrap_or_else(|| default.to_owned());
+    raw.parse::<T>().map_err(|_| {
+        anyhow!(
+            "{key} must be a valid {}, got '{raw}'",
+            std::any::type_name::<T>()
+        )
+    })
+}
+
+fn require_env(lookup: &dyn Fn(&str) -> Option<String>, key: &str) -> anyhow::Result<String> {
+    lookup(key).ok_or_else(|| anyhow!("missing required environment variable: {key}"))
+}
+
+fn validate_db_pool(config: &AppConfig) -> anyhow::Result<()> {
+    if config.db_min_connections > config.db_max_connections {
+        return Err(anyhow!(
+            "SERVER_DB_MIN_CONNECTIONS ({}) must be less than or equal to SERVER_DB_MAX_CONNECTIONS ({})",
+            config.db_min_connections,
+            config.db_max_connections
+        ));
+    }
+    if config.db_acquire_timeout_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS must be greater than 0"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_signing_key_secret(secret: &str) -> anyhow::Result<()> {
+    if secret.len() < 16 {
+        return Err(anyhow!(
+            "SERVER_SIGNING_KEY_SECRET must be at least 16 bytes"
+        ));
+    }
+    Ok(())
+}
+
 impl AppConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         Self::from_lookup(&|key| std::env::var(key).ok())
@@ -40,60 +86,17 @@ impl AppConfig {
 
     pub fn from_lookup(lookup: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let server_host = lookup("SERVER_HOST").unwrap_or_else(|| "127.0.0.1".to_owned());
-        let server_port_raw = lookup("SERVER_PORT").unwrap_or_else(|| "3000".to_owned());
-        let server_port: u16 = server_port_raw
-            .parse()
-            .with_context(|| format!("SERVER_PORT must be a valid u16, got '{server_port_raw}'"))?;
-
-        let database_url = lookup("SERVER_DATABASE_URL")
-            .ok_or_else(|| anyhow!("missing required environment variable: SERVER_DATABASE_URL"))?;
-
-        let db_max_connections_raw =
-            lookup("SERVER_DB_MAX_CONNECTIONS").unwrap_or_else(|| "20".to_owned());
-        let db_max_connections: u32 = db_max_connections_raw.parse().with_context(|| {
-            format!("SERVER_DB_MAX_CONNECTIONS must be a valid u32, got '{db_max_connections_raw}'")
-        })?;
-
-        let db_min_connections_raw =
-            lookup("SERVER_DB_MIN_CONNECTIONS").unwrap_or_else(|| "1".to_owned());
-        let db_min_connections: u32 = db_min_connections_raw.parse().with_context(|| {
-            format!("SERVER_DB_MIN_CONNECTIONS must be a valid u32, got '{db_min_connections_raw}'")
-        })?;
-
-        let db_acquire_timeout_seconds_raw =
-            lookup("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS").unwrap_or_else(|| "5".to_owned());
-        let db_acquire_timeout_seconds: u64 = db_acquire_timeout_seconds_raw.parse().with_context(|| {
-            format!(
-                "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS must be a valid u64, got '{db_acquire_timeout_seconds_raw}'"
-            )
-        })?;
-
-        if db_min_connections > db_max_connections {
-            return Err(anyhow!(
-                "SERVER_DB_MIN_CONNECTIONS ({db_min_connections}) must be less than or equal to SERVER_DB_MAX_CONNECTIONS ({db_max_connections})"
-            ));
-        }
-
-        if db_acquire_timeout_seconds == 0 {
-            return Err(anyhow!(
-                "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS must be greater than 0"
-            ));
-        }
-
+        let server_port: u16 = parse_env(lookup, "SERVER_PORT", "3000")?;
+        let database_url = require_env(lookup, "SERVER_DATABASE_URL")?;
+        let db_max_connections: u32 = parse_env(lookup, "SERVER_DB_MAX_CONNECTIONS", "20")?;
+        let db_min_connections: u32 = parse_env(lookup, "SERVER_DB_MIN_CONNECTIONS", "1")?;
+        let db_acquire_timeout_seconds: u64 =
+            parse_env(lookup, "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS", "5")?;
         let log_level = lookup("SERVER_LOG_LEVEL").unwrap_or_else(|| "info".to_owned());
         let log_format = lookup("SERVER_LOG_FORMAT").unwrap_or_else(|| "plain".to_owned());
+        let signing_key_secret = require_env(lookup, "SERVER_SIGNING_KEY_SECRET")?;
 
-        let signing_key_secret = lookup("SERVER_SIGNING_KEY_SECRET").ok_or_else(|| {
-            anyhow!("missing required environment variable: SERVER_SIGNING_KEY_SECRET")
-        })?;
-
-        if signing_key_secret.len() < 16 {
-            return Err(anyhow!(
-                "SERVER_SIGNING_KEY_SECRET must be at least 16 bytes"
-            ));
-        }
-
-        Ok(Self {
+        let config = Self {
             server_host,
             server_port,
             database_url,
@@ -103,7 +106,12 @@ impl AppConfig {
             log_level,
             log_format,
             signing_key_secret,
-        })
+        };
+
+        validate_db_pool(&config)?;
+        validate_signing_key_secret(&config.signing_key_secret)?;
+
+        Ok(config)
     }
 }
 
