@@ -270,6 +270,30 @@ mod tests {
         fn backend_name(&self) -> &'static str {
             "sqlite"
         }
+
+        async fn store_signing_key(
+            &self,
+            _key: &crate::repository::SigningKeyRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_active_signing_key(
+            &self,
+        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
+            unimplemented!()
+        }
+        async fn get_signing_key_by_kid(
+            &self,
+            _kid: &str,
+        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
+            unimplemented!()
+        }
+        async fn retire_signing_key(&self, _kid: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -288,6 +312,30 @@ mod tests {
         fn backend_name(&self) -> &'static str {
             "sqlite"
         }
+
+        async fn store_signing_key(
+            &self,
+            _key: &crate::repository::SigningKeyRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_active_signing_key(
+            &self,
+        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
+            unimplemented!()
+        }
+        async fn get_signing_key_by_kid(
+            &self,
+            _kid: &str,
+        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
+            unimplemented!()
+        }
+        async fn retire_signing_key(&self, _kid: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -301,6 +349,7 @@ mod tests {
             db_acquire_timeout_seconds: 5,
             log_level: "info".to_owned(),
             log_format: "plain".to_owned(),
+            signing_key_secret: "test-secret-key!".to_owned(),
         };
 
         let repository = build_repository(&config).await.unwrap();
