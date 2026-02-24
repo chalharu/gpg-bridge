@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
+mod assuan;
 mod config;
 mod gpg;
 mod http;
