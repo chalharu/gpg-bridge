@@ -100,13 +100,14 @@ fn spawn_server(
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     let socket_path = PathBuf::from(endpoint);
+    let socket_path_str = endpoint.to_owned();
     let listener = bind_unix_listener(&socket_path, allow_replace_existing_socket)?;
     if let Some(path) = compat_socket_path.as_deref() {
         create_unix_socket_symlink(path, &socket_path, allow_replace_existing_socket)?;
     }
 
     Ok(tokio::spawn(async move {
-        let run_result = run_unix_accept_loop(listener, shutdown_rx).await;
+        let run_result = run_unix_accept_loop(listener, shutdown_rx, socket_path_str).await;
         if let Err(error) = cleanup_unix_socket_path(&socket_path) {
             warn!(socket_path = %socket_path.display(), ?error, "failed to cleanup unix socket file");
         }
@@ -125,9 +126,10 @@ fn spawn_server(
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     let pipe_name = normalize_pipe_name(endpoint);
+    let socket_path = endpoint.to_owned();
 
     Ok(tokio::spawn(async move {
-        run_windows_accept_loop(&pipe_name, shutdown_rx).await
+        run_windows_accept_loop(&pipe_name, shutdown_rx, socket_path).await
     }))
 }
 
@@ -290,6 +292,7 @@ fn set_unix_socket_permissions(path: &Path) -> anyhow::Result<()> {
 async fn run_unix_accept_loop(
     listener: tokio::net::UnixListener,
     mut shutdown_rx: watch::Receiver<bool>,
+    socket_path: String,
 ) -> anyhow::Result<()> {
     loop {
         tokio::select! {
@@ -309,8 +312,9 @@ async fn run_unix_accept_loop(
                     }
                 };
                 info!("ipc unix socket connection accepted");
+                let connection_socket_path = socket_path.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_unix_connection(stream).await {
+                    if let Err(error) = handle_unix_connection(stream, connection_socket_path).await {
                         warn!(?error, "ipc unix socket connection handler failed");
                     }
                 });
@@ -320,15 +324,17 @@ async fn run_unix_accept_loop(
 }
 
 #[cfg(unix)]
-async fn handle_unix_connection(_stream: tokio::net::UnixStream) -> anyhow::Result<()> {
-    // TODO: Implement Assuan protocol handling (HAVEKEY, KEYINFO, READKEY, PKSIGN, PKDECRYPT).
-    // Currently a no-op stub that accepts and immediately closes the connection.
+async fn handle_unix_connection(
+    stream: tokio::net::UnixStream,
+    socket_path: String,
+) -> anyhow::Result<()> {
     #[cfg(test)]
     {
         UNIX_CONNECTION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    Ok(())
+    let context = crate::assuan::SessionContext::new(&socket_path);
+    crate::assuan::run_session(stream, &context).await
 }
 
 #[cfg(any(windows, test))]
@@ -369,6 +375,7 @@ fn create_named_pipe_server(
 async fn run_windows_accept_loop(
     pipe_name: &str,
     mut shutdown_rx: watch::Receiver<bool>,
+    socket_path: String,
 ) -> anyhow::Result<()> {
     let mut listener = create_named_pipe_server(pipe_name, true)?;
     info!(pipe_name = %pipe_name, "ipc named pipe listener started");
@@ -396,8 +403,9 @@ async fn run_windows_accept_loop(
                 info!(pipe_name = %pipe_name, "ipc named pipe connection accepted");
 
                 let stream = listener;
+                let connection_socket_path = socket_path.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_windows_connection(stream).await {
+                    if let Err(error) = handle_windows_connection(stream, connection_socket_path).await {
                         warn!(?error, "ipc named pipe connection handler failed");
                     }
                 });
@@ -411,12 +419,10 @@ async fn run_windows_accept_loop(
 #[cfg(windows)]
 async fn handle_windows_connection(
     stream: tokio::net::windows::named_pipe::NamedPipeServer,
+    socket_path: String,
 ) -> anyhow::Result<()> {
-    // TODO: Implement Assuan protocol handling (HAVEKEY, KEYINFO, READKEY, PKSIGN, PKDECRYPT).
-    // Currently a no-op stub that disconnects immediately.
-    stream
-        .disconnect()
-        .map_err(|error| anyhow::anyhow!("failed to disconnect named pipe: {error}"))
+    let context = crate::assuan::SessionContext::new(&socket_path);
+    crate::assuan::run_session(stream, &context).await
 }
 
 #[cfg(all(test, unix))]
