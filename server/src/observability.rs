@@ -48,6 +48,7 @@ mod tests {
             log_level: "info".to_owned(),
             log_format: "invalid".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            base_url: "http://localhost:3000".to_owned(),
         };
 
         let result = init_tracing(&config);

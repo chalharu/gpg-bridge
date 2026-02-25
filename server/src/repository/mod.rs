@@ -29,6 +29,30 @@ pub struct SigningKeyRow {
     pub is_active: bool,
 }
 
+/// A row in the `clients` table.
+#[derive(Debug, Clone)]
+pub struct ClientRow {
+    pub client_id: String,
+    pub public_keys: String,
+    pub default_kid: String,
+}
+
+/// A row in the `client_pairings` table.
+#[derive(Debug, Clone)]
+pub struct ClientPairingRow {
+    pub client_id: String,
+    pub pairing_id: String,
+    pub client_jwt_issued_at: String,
+}
+
+/// A row in the `requests` table (subset for auth).
+#[derive(Debug, Clone)]
+pub struct RequestRow {
+    pub request_id: String,
+    pub status: String,
+    pub daemon_public_key: String,
+}
+
 #[async_trait]
 pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     async fn run_migrations(&self) -> anyhow::Result<()>;
@@ -49,6 +73,27 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     /// as a lexicographic string comparison in the database, so a consistent
     /// format is required for correct behaviour.
     async fn delete_expired_signing_keys(&self, now: &str) -> anyhow::Result<u64>;
+
+    // ---- clients operations ----
+
+    async fn get_client_by_id(&self, client_id: &str) -> anyhow::Result<Option<ClientRow>>;
+
+    // ---- client_pairings operations ----
+
+    async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>>;
+
+    // ---- requests operations ----
+
+    async fn get_request_by_id(&self, request_id: &str) -> anyhow::Result<Option<RequestRow>>;
+
+    // ---- jtis operations ----
+
+    /// Store a JTI for replay prevention. Returns `true` if newly inserted,
+    /// `false` if the JTI already exists.
+    async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool>;
+
+    /// Delete JTIs whose `expired` timestamp is before `now`.
+    async fn delete_expired_jtis(&self, now: &str) -> anyhow::Result<u64>;
 }
 
 async fn build_postgres_repository(

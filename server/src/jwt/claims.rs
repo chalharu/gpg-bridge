@@ -71,6 +71,27 @@ pub struct SignClaims {
     pub exp: i64,
 }
 
+/// device_assertion_jwt claims (used by DeviceAssertionAuth extractor).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeviceAssertionClaims {
+    pub iss: String,
+    pub sub: String,
+    pub aud: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub jti: String,
+}
+
+/// daemon_auth_jws outer claims (used by DaemonAuthJws extractor).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DaemonAuthClaims {
+    pub request_jwt: String,
+    pub aud: String,
+    pub iat: i64,
+    pub exp: i64,
+    pub jti: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +197,35 @@ mod tests {
         };
         let json = serde_json::to_string(&claims).unwrap();
         let back: RequestClaims = serde_json::from_str(&json).unwrap();
+        assert_eq!(claims, back);
+    }
+
+    #[test]
+    fn device_assertion_claims_roundtrip() {
+        let claims = DeviceAssertionClaims {
+            iss: "fid-1".into(),
+            sub: "fid-1".into(),
+            aud: "https://api.example.com/sign".into(),
+            exp: 1_900_000_000,
+            iat: 1_900_000_000 - 30,
+            jti: "jti-uuid".into(),
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let back: DeviceAssertionClaims = serde_json::from_str(&json).unwrap();
+        assert_eq!(claims, back);
+    }
+
+    #[test]
+    fn daemon_auth_claims_roundtrip() {
+        let claims = DaemonAuthClaims {
+            request_jwt: "inner.jwt.token".into(),
+            aud: "https://api.example.com/sign".into(),
+            iat: 1_900_000_000 - 30,
+            exp: 1_900_000_000,
+            jti: "jti-uuid".into(),
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let back: DaemonAuthClaims = serde_json::from_str(&json).unwrap();
         assert_eq!(claims, back);
     }
 }

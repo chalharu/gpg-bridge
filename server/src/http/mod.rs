@@ -1,4 +1,5 @@
 mod accept;
+pub mod auth;
 mod middleware;
 
 use std::sync::Arc;
@@ -28,6 +29,8 @@ use accept::accept_version_middleware;
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub repository: Arc<dyn SignatureRepository>,
+    pub base_url: String,
+    pub signing_key_secret: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,6 +138,30 @@ mod tests {
         async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
             unimplemented!()
         }
+        async fn get_client_by_id(
+            &self,
+            _client_id: &str,
+        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
+            unimplemented!()
+        }
+        async fn get_client_pairings(
+            &self,
+            _client_id: &str,
+        ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
+            unimplemented!()
+        }
+        async fn get_request_by_id(
+            &self,
+            _request_id: &str,
+        ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
+            unimplemented!()
+        }
+        async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -177,6 +204,30 @@ mod tests {
         async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
             unimplemented!()
         }
+        async fn get_client_by_id(
+            &self,
+            _client_id: &str,
+        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
+            unimplemented!()
+        }
+        async fn get_client_pairings(
+            &self,
+            _client_id: &str,
+        ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
+            unimplemented!()
+        }
+        async fn get_request_by_id(
+            &self,
+            _request_id: &str,
+        ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
+            unimplemented!()
+        }
+        async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -191,12 +242,17 @@ mod tests {
             log_level: "info".to_owned(),
             log_format: "plain".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            base_url: "http://localhost:3000".to_owned(),
         };
 
         let repository = build_repository(&config).await.unwrap();
         repository.run_migrations().await.unwrap();
 
-        let state = AppState { repository };
+        let state = AppState {
+            repository,
+            base_url: "http://localhost:3000".to_owned(),
+            signing_key_secret: "test-secret-key!".to_owned(),
+        };
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
         assert_eq!(response.status, "ok");
@@ -206,6 +262,8 @@ mod tests {
     async fn health_returns_problem_details_when_repository_unavailable() {
         let state = AppState {
             repository: Arc::new(FailingRepository),
+            base_url: "http://localhost:3000".to_owned(),
+            signing_key_secret: "test-secret-key!".to_owned(),
         };
 
         let error = health(axum::extract::State(state)).await.unwrap_err();
@@ -234,11 +292,17 @@ mod tests {
         assert!(body_text.contains("\"instance\""));
     }
 
+    fn test_state(repo: impl SignatureRepository + 'static) -> AppState {
+        AppState {
+            repository: Arc::new(repo),
+            base_url: "http://localhost:3000".to_owned(),
+            signing_key_secret: "test-secret-key!".to_owned(),
+        }
+    }
+
     #[tokio::test]
     async fn router_rejects_unsupported_accept_with_406() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -282,9 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_v1_media_type_and_adds_security_headers() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -327,9 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_json_and_returns_versioned_content_type() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -352,9 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_mixed_case_media_type() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -377,9 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_rejects_accept_media_type_with_zero_quality() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -398,9 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_wildcard() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -423,9 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_handles_cors_preflight_options() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -461,9 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_authorization_header() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(
@@ -497,9 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_patch_and_delete_methods() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         for request_method in [Method::PATCH, Method::DELETE] {
             let response = app
@@ -536,9 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_uppercase_q_parameter_name() {
-        let app = build_router(AppState {
-            repository: Arc::new(HealthyRepository),
-        });
+        let app = build_router(test_state(HealthyRepository));
 
         let response = app
             .oneshot(

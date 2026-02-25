@@ -61,6 +61,40 @@ pub fn extract_kid(token: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("JWT header has no kid"))
 }
 
+/// Decode a JWS payload without verifying the signature.
+///
+/// **Caution:** This does NOT validate the signature. Use it only to
+/// extract claims needed *before* the signing key is known.
+pub fn decode_jws_unverified<T: DeserializeOwned>(token: &str) -> anyhow::Result<T> {
+    let parts: Vec<&str> = token.splitn(4, '.').collect();
+    anyhow::ensure!(parts.len() == 3, "invalid JWT format: expected 3 parts");
+
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .context("failed to decode JWT payload")?;
+
+    serde_json::from_slice(&payload_bytes).context("failed to parse JWT payload")
+}
+
+/// Verify a JWS token (ES256), check `exp`, and deserialize to `T`.
+///
+/// Unlike [`verify_jws`], this does **not** check `payload_type`.
+/// Use for tokens that do not carry a `payload_type` field.
+pub fn verify_jws_with_key<T: DeserializeOwned>(
+    token: &str,
+    public_jwk: &Jwk,
+) -> anyhow::Result<T> {
+    let verifier = ES256
+        .verifier_from_jwk(public_jwk)
+        .map_err(|e| anyhow!("failed to create ES256 verifier: {e}"))?;
+
+    let (payload, _header) = jwt::decode_with_verifier(token, &verifier)
+        .map_err(|e| anyhow!("JWS verification failed: {e}"))?;
+
+    check_exp(&payload)?;
+    payload_to_claims(&payload)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -220,5 +254,84 @@ mod tests {
         let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
         let verified: DeviceClaims = verify_jws(&token, &pub_jwk, PayloadType::Device).unwrap();
         assert_eq!(verified.sub, "fid-valid");
+    }
+
+    #[test]
+    fn decode_jws_unverified_returns_payload() {
+        let (priv_jwk, _pub_jwk, kid) = test_key_pair();
+        let claims = DeviceClaims {
+            sub: "fid-unverified".into(),
+            payload_type: PayloadType::Device,
+            exp: 1_900_000_000,
+        };
+        let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
+
+        let decoded: DeviceClaims = decode_jws_unverified(&token).unwrap();
+        assert_eq!(decoded.sub, "fid-unverified");
+    }
+
+    #[test]
+    fn decode_jws_unverified_rejects_garbage() {
+        assert!(decode_jws_unverified::<DeviceClaims>("not-a-jwt").is_err());
+    }
+
+    #[test]
+    fn verify_jws_with_key_roundtrip() {
+        use crate::jwt::claims::DeviceAssertionClaims;
+
+        let (priv_jwk, pub_jwk, kid) = test_key_pair();
+        let claims = DeviceAssertionClaims {
+            iss: "fid-1".into(),
+            sub: "fid-1".into(),
+            aud: "https://api.example.com/sign".into(),
+            exp: 1_900_000_000,
+            iat: 1_900_000_000 - 30,
+            jti: "jti-uuid".into(),
+        };
+        let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
+
+        let verified: DeviceAssertionClaims = verify_jws_with_key(&token, &pub_jwk).unwrap();
+        assert_eq!(verified.sub, "fid-1");
+        assert_eq!(verified.aud, "https://api.example.com/sign");
+    }
+
+    #[test]
+    fn verify_jws_with_key_wrong_key_fails() {
+        use crate::jwt::claims::DeviceAssertionClaims;
+
+        let (priv_jwk, _pub_jwk, kid) = test_key_pair();
+        let (_other_priv, other_pub, _) = test_key_pair();
+        let claims = DeviceAssertionClaims {
+            iss: "fid-1".into(),
+            sub: "fid-1".into(),
+            aud: "https://api.example.com/sign".into(),
+            exp: 1_900_000_000,
+            iat: 1_900_000_000 - 30,
+            jti: "jti-uuid".into(),
+        };
+        let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
+
+        let result: anyhow::Result<DeviceAssertionClaims> = verify_jws_with_key(&token, &other_pub);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_jws_with_key_rejects_expired() {
+        use crate::jwt::claims::DeviceAssertionClaims;
+
+        let (priv_jwk, pub_jwk, kid) = test_key_pair();
+        let claims = DeviceAssertionClaims {
+            iss: "fid-1".into(),
+            sub: "fid-1".into(),
+            aud: "https://api.example.com/sign".into(),
+            exp: 1_000_000_000, // past
+            iat: 1_000_000_000 - 30,
+            jti: "jti-uuid".into(),
+        };
+        let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
+
+        let result: anyhow::Result<DeviceAssertionClaims> = verify_jws_with_key(&token, &pub_jwk);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expired"));
     }
 }
