@@ -37,12 +37,12 @@ impl SessionContext {
 
 /// Mutable per-session state that can be modified by commands.
 #[derive(Debug, Default)]
-pub(crate) struct SessionState {
+pub(super) struct SessionState {
     options: HashMap<String, Option<String>>,
 }
 
 impl SessionState {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::default()
     }
 
@@ -56,7 +56,7 @@ impl SessionState {
 }
 
 /// Dispatch a parsed command to its handler and return the appropriate response.
-pub(crate) fn handle(
+pub(super) fn handle(
     command: &Command,
     context: &SessionContext,
     state: &mut SessionState,
@@ -83,6 +83,10 @@ pub(crate) fn handle(
             code: GPG_ERR_NOT_SUPPORTED,
             message: "Not supported".to_owned(),
         },
+        // NOTE: The spec table (§7.1) says "ERR Not supported" for unknown
+        // commands as a simplification. We follow the real gpg-agent convention
+        // of returning GPG_ERR_ASS_UNKNOWN_CMD (275) for unknown commands, which
+        // matches the Assuan protocol standard and is what gpg clients expect.
         Command::Unknown { .. } => Response::Err {
             code: GPG_ERR_ASS_UNKNOWN_CMD,
             message: "unknown IPC command".to_owned(),

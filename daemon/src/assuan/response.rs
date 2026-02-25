@@ -1,6 +1,6 @@
 /// Assuan protocol response.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Response {
+pub(super) enum Response {
     /// `OK [message]\n`
     Ok(Option<String>),
     /// `D <data>\nOK\n`
@@ -11,7 +11,7 @@ pub(crate) enum Response {
 
 impl Response {
     /// Format the response as an Assuan protocol wire string.
-    pub(crate) fn format(&self) -> String {
+    pub(super) fn format(&self) -> String {
         match self {
             Self::Ok(None) => "OK\n".to_owned(),
             Self::Ok(Some(msg)) => format!("OK {msg}\n"),
