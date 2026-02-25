@@ -266,6 +266,12 @@ mod tests {
             log_format: "plain".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             base_url: "http://localhost:3000".to_owned(),
+            rate_limit_strict_quota: 10,
+            rate_limit_strict_window_seconds: 60,
+            rate_limit_standard_quota: 60,
+            rate_limit_standard_window_seconds: 60,
+            rate_limit_sse_max_per_ip: 20,
+            rate_limit_sse_max_per_key: 1,
         };
 
         let repository = build_repository(&config).await.unwrap();

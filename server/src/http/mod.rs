@@ -1,6 +1,7 @@
 mod accept;
 pub mod auth;
 mod middleware;
+pub mod rate_limit;
 
 use std::sync::Arc;
 
@@ -24,6 +25,9 @@ use crate::error::AppError;
 use crate::repository::SignatureRepository;
 
 use self::middleware::security_headers_middleware;
+use self::rate_limit::RateLimitConfig;
+use self::rate_limit::SlidingWindowLimiter;
+use self::rate_limit::rate_limit_middleware;
 use accept::accept_version_middleware;
 
 #[derive(Debug, Clone)]
@@ -52,7 +56,7 @@ pub async fn health(
     Ok(Json(HealthResponse { status: "ok" }))
 }
 
-pub fn build_router(state: AppState) -> Router {
+pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Router {
     let request_id_header = axum::http::header::HeaderName::from_static("x-request-id");
     let cors_layer = CorsLayer::new()
         .allow_origin(Any)
@@ -70,9 +74,29 @@ pub fn build_router(state: AppState) -> Router {
             request_id_header.clone(),
         ]);
 
+    let rl_state = rate_limit::middleware::RateLimiterState {
+        limiter: Arc::new(SlidingWindowLimiter::new()),
+        config: rate_limit_config,
+    };
+
+    // Determine the longest window for cleanup eviction.
+    let max_window_secs = rl_state
+        .config
+        .strict
+        .window_seconds
+        .max(rl_state.config.standard.window_seconds);
+    rl_state.limiter.spawn_cleanup_task(
+        std::time::Duration::from_secs(max_window_secs),
+        std::time::Duration::from_secs(max_window_secs),
+    );
+
     Router::new()
         .route("/health", get(health))
         .layer(axum::middleware::from_fn(accept_version_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            rl_state,
+            rate_limit_middleware,
+        ))
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(cors_layer)
         .layer(
@@ -97,6 +121,25 @@ mod tests {
     use super::accept::ACCEPT_VERSION_V1;
     use crate::{config::AppConfig, repository::build_repository};
     use async_trait::async_trait;
+
+    use super::rate_limit::config::{SseConnectionConfig, TierConfig};
+
+    fn test_rate_limit_config() -> RateLimitConfig {
+        RateLimitConfig {
+            strict: TierConfig {
+                quota: 1000,
+                window_seconds: 60,
+            },
+            standard: TierConfig {
+                quota: 1000,
+                window_seconds: 60,
+            },
+            sse: SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            },
+        }
+    }
 
     #[derive(Debug)]
     struct HealthyRepository;
@@ -243,6 +286,12 @@ mod tests {
             log_format: "plain".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             base_url: "http://localhost:3000".to_owned(),
+            rate_limit_strict_quota: 10,
+            rate_limit_strict_window_seconds: 60,
+            rate_limit_standard_quota: 60,
+            rate_limit_standard_window_seconds: 60,
+            rate_limit_sse_max_per_ip: 20,
+            rate_limit_sse_max_per_key: 1,
         };
 
         let repository = build_repository(&config).await.unwrap();
@@ -302,7 +351,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_rejects_unsupported_accept_with_406() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -346,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_v1_media_type_and_adds_security_headers() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -389,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_json_and_returns_versioned_content_type() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -412,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_mixed_case_media_type() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -435,7 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_rejects_accept_media_type_with_zero_quality() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -454,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_wildcard() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -477,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_handles_cors_preflight_options() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -513,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_authorization_header() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -547,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_patch_and_delete_methods() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         for request_method in [Method::PATCH, Method::DELETE] {
             let response = app
@@ -584,7 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_uppercase_q_parameter_name() {
-        let app = build_router(test_state(HealthyRepository));
+        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -599,5 +648,86 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_returns_429_when_rate_limit_exceeded() {
+        let rl_config = RateLimitConfig {
+            strict: TierConfig {
+                quota: 1000,
+                window_seconds: 60,
+            },
+            standard: TierConfig {
+                quota: 2,
+                window_seconds: 60,
+            },
+            sse: SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            },
+        };
+
+        let app = build_router(
+            test_state(HealthyRepository),
+            rl_config,
+        );
+
+        // Exhaust the standard quota (2 requests).
+        for _ in 0..2 {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri("/health")
+                        .header(header::ACCEPT, "application/json")
+                        .header("x-forwarded-for", "10.0.0.99")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        // Third request should be rejected with 429.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health")
+                    .header(header::ACCEPT, "application/json")
+                    .header("x-forwarded-for", "10.0.0.99")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        assert!(response.headers().get(header::RETRY_AFTER).is_some());
+        assert!(
+            response
+                .headers()
+                .get(HeaderName::from_static("ratelimit-policy"))
+                .is_some()
+        );
+        assert!(
+            response
+                .headers()
+                .get(HeaderName::from_static("ratelimit"))
+                .is_some()
+        );
+
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_text = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert!(body_text.contains("\"status\":429"));
+        assert!(body_text.contains("rate-limit"));
     }
 }

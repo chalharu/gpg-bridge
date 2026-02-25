@@ -21,6 +21,16 @@ enum AppErrorKind {
     Validation,
     Database,
     Internal,
+    TooManyRequests,
+}
+
+/// Optional rate limit metadata attached to 429 responses.
+#[derive(Debug, Clone, Copy)]
+pub struct RateLimitMeta {
+    pub quota: u32,
+    pub window_seconds: u64,
+    pub remaining: u32,
+    pub reset_after_seconds: u64,
 }
 
 #[derive(Debug)]
@@ -28,6 +38,7 @@ pub struct AppError {
     kind: AppErrorKind,
     detail: String,
     instance: Option<String>,
+    rate_limit: Option<RateLimitMeta>,
 }
 
 impl AppError {
@@ -36,6 +47,7 @@ impl AppError {
             kind: AppErrorKind::NotAcceptable,
             detail: detail.into(),
             instance: None,
+            rate_limit: None,
         }
     }
 
@@ -44,6 +56,7 @@ impl AppError {
             kind: AppErrorKind::Unauthorized,
             detail: detail.into(),
             instance: None,
+            rate_limit: None,
         }
     }
 
@@ -52,6 +65,7 @@ impl AppError {
             kind: AppErrorKind::Validation,
             detail: detail.into(),
             instance: None,
+            rate_limit: None,
         }
     }
 
@@ -60,6 +74,7 @@ impl AppError {
             kind: AppErrorKind::Database,
             detail: detail.into(),
             instance: None,
+            rate_limit: None,
         }
     }
 
@@ -68,7 +83,33 @@ impl AppError {
             kind: AppErrorKind::Internal,
             detail: detail.into(),
             instance: None,
+            rate_limit: None,
         }
+    }
+
+    pub fn too_many_requests(detail: impl Into<String>) -> Self {
+        Self {
+            kind: AppErrorKind::TooManyRequests,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
+    /// Attach rate limit metadata (used for 429 response headers).
+    pub fn set_rate_limit_headers(
+        &mut self,
+        quota: u32,
+        window_seconds: u64,
+        remaining: u32,
+        reset_after_seconds: u64,
+    ) {
+        self.rate_limit = Some(RateLimitMeta {
+            quota,
+            window_seconds,
+            remaining,
+            reset_after_seconds,
+        });
     }
 
     pub fn with_instance(mut self, instance: impl Into<String>) -> Self {
@@ -83,6 +124,7 @@ impl AppError {
             AppErrorKind::Validation => StatusCode::BAD_REQUEST,
             AppErrorKind::Database => StatusCode::SERVICE_UNAVAILABLE,
             AppErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            AppErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -93,6 +135,7 @@ impl AppError {
             AppErrorKind::Validation => "Validation error",
             AppErrorKind::Database => "Database error",
             AppErrorKind::Internal => "Internal server error",
+            AppErrorKind::TooManyRequests => "Too many requests",
         }
     }
 
@@ -103,6 +146,7 @@ impl AppError {
             AppErrorKind::Validation => "https://gpg-bridge.dev/problems/validation",
             AppErrorKind::Database => "https://gpg-bridge.dev/problems/database",
             AppErrorKind::Internal => "https://gpg-bridge.dev/problems/internal",
+            AppErrorKind::TooManyRequests => "https://gpg-bridge.dev/problems/rate-limit",
         }
     }
 
@@ -132,6 +176,7 @@ impl From<anyhow::Error> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status_code();
+        let rate_limit = self.rate_limit;
         let body = serde_json::to_vec(&self.to_problem_details()).unwrap_or_else(|_| {
             b"{\"type\":\"about:blank\",\"title\":\"Internal server error\",\"status\":500,\"detail\":\"failed to serialize error response\",\"instance\":null}".to_vec()
         });
@@ -142,7 +187,31 @@ impl IntoResponse for AppError {
             CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
+
+        if let Some(rl) = rate_limit {
+            append_rate_limit_response_headers(response.headers_mut(), &rl);
+        }
+
         response
+    }
+}
+
+/// Append rate limit + Retry-After headers to a 429 error response.
+fn append_rate_limit_response_headers(headers: &mut axum::http::HeaderMap, meta: &RateLimitMeta) {
+    use crate::http::rate_limit::headers::append_rate_limit_headers;
+    use crate::http::rate_limit::sliding_window::RateLimitResult;
+
+    let result = RateLimitResult {
+        allowed: false,
+        remaining: meta.remaining,
+        reset_after_seconds: meta.reset_after_seconds,
+        quota: meta.quota,
+        window_seconds: meta.window_seconds,
+    };
+    append_rate_limit_headers(headers, &result);
+
+    if let Ok(v) = HeaderValue::from_str(&meta.reset_after_seconds.to_string()) {
+        headers.insert(axum::http::header::RETRY_AFTER, v);
     }
 }
 
