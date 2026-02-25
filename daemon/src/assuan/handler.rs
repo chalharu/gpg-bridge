@@ -16,6 +16,11 @@ const GPG_ERR_ASS_UNKNOWN_CMD: u32 = 275;
 /// Kept consistent with [`GPG_ERR_ASS_UNKNOWN_CMD`] — see its doc comment.
 const GPG_ERR_NOT_SUPPORTED: u32 = 69;
 
+/// Error code for syntax errors (e.g., OPTION with no name).
+///
+/// Raw libgpg-error code `GPG_ERR_SYNTAX` (147) with source = 0.
+const GPG_ERR_SYNTAX: u32 = 147;
+
 /// Immutable session configuration shared across all commands in a connection.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionContext {
@@ -59,6 +64,12 @@ pub(crate) fn handle(
     match command {
         Command::Nop | Command::End => Response::Ok(None),
         Command::Option { name, value } => {
+            if name.is_empty() {
+                return Response::Err {
+                    code: GPG_ERR_SYNTAX,
+                    message: "option name missing".to_owned(),
+                };
+            }
             state.set_option(name.clone(), value.clone());
             Response::Ok(None)
         }
@@ -68,9 +79,13 @@ pub(crate) fn handle(
         }
         Command::GetInfo { subcommand } => handle_getinfo(subcommand, context),
         Command::Bye => Response::Ok(None),
-        Command::PkDecrypt | Command::Auth | Command::Unknown { .. } => Response::Err {
+        Command::PkDecrypt | Command::Auth => Response::Err {
             code: GPG_ERR_NOT_SUPPORTED,
             message: "Not supported".to_owned(),
+        },
+        Command::Unknown { .. } => Response::Err {
+            code: GPG_ERR_ASS_UNKNOWN_CMD,
+            message: "unknown IPC command".to_owned(),
         },
     }
 }
@@ -250,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_unknown_returns_not_supported() {
+    fn handle_unknown_returns_unknown_command_error() {
         let mut state = SessionState::new();
         let cmd = Command::Unknown {
             name: "FOOBAR".to_owned(),
@@ -259,8 +274,25 @@ mod tests {
         assert_eq!(
             response,
             Response::Err {
-                code: 69,
-                message: "Not supported".to_owned(),
+                code: 275,
+                message: "unknown IPC command".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn handle_option_empty_name_returns_syntax_error() {
+        let mut state = SessionState::new();
+        let cmd = Command::Option {
+            name: String::new(),
+            value: None,
+        };
+        let response = handle(&cmd, &test_context(), &mut state);
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 147,
+                message: "option name missing".to_owned(),
             }
         );
     }

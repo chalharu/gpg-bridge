@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 /// Short delay before retrying after a transient accept error (e.g., EMFILE/ENFILE).
-pub(crate) const ACCEPT_ERROR_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
+pub(super) const ACCEPT_ERROR_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub struct IpcServer {
     shutdown_tx: watch::Sender<bool>,
