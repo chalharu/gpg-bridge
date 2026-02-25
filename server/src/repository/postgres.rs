@@ -2,7 +2,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use super::{MIGRATOR, SignatureRepository, SigningKeyRow};
+use super::{
+    ClientPairingRow, ClientRow, MIGRATOR, RequestRow, SignatureRepository, SigningKeyRow,
+};
 
 #[derive(Debug, Clone)]
 pub struct PostgresRepository {
@@ -85,6 +87,60 @@ impl SignatureRepository for PostgresRepository {
             .context("failed to delete expired signing keys")?;
         Ok(result.rows_affected())
     }
+
+    async fn get_client_by_id(&self, client_id: &str) -> anyhow::Result<Option<ClientRow>> {
+        let row = sqlx::query_as::<_, PgClientRow>(
+            "SELECT client_id, public_keys, default_kid FROM clients WHERE client_id = $1",
+        )
+        .bind(client_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get client by id")?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
+        let rows = sqlx::query_as::<_, PgClientPairingRow>(
+            "SELECT client_id, pairing_id, client_jwt_issued_at FROM client_pairings WHERE client_id = $1",
+        )
+        .bind(client_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to get client pairings")?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn get_request_by_id(&self, request_id: &str) -> anyhow::Result<Option<RequestRow>> {
+        let row = sqlx::query_as::<_, PgRequestRow>(
+            "SELECT request_id, status, daemon_public_key FROM requests WHERE request_id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get request by id")?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "INSERT INTO jtis (jti, expired) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING",
+        )
+        .bind(jti)
+        .bind(expired)
+        .execute(&self.pool)
+        .await
+        .context("failed to store jti")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_expired_jtis(&self, now: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM jtis WHERE expired < $1")
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete expired jtis")?;
+        Ok(result.rows_affected())
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -106,6 +162,57 @@ impl From<PgSigningKeyRow> for SigningKeyRow {
             created_at: r.created_at,
             expires_at: r.expires_at,
             is_active: r.is_active,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct PgClientRow {
+    client_id: String,
+    public_keys: String,
+    default_kid: String,
+}
+
+impl From<PgClientRow> for ClientRow {
+    fn from(r: PgClientRow) -> Self {
+        Self {
+            client_id: r.client_id,
+            public_keys: r.public_keys,
+            default_kid: r.default_kid,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct PgClientPairingRow {
+    client_id: String,
+    pairing_id: String,
+    client_jwt_issued_at: String,
+}
+
+impl From<PgClientPairingRow> for ClientPairingRow {
+    fn from(r: PgClientPairingRow) -> Self {
+        Self {
+            client_id: r.client_id,
+            pairing_id: r.pairing_id,
+            client_jwt_issued_at: r.client_jwt_issued_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct PgRequestRow {
+    request_id: String,
+    status: String,
+    daemon_public_key: String,
+}
+
+impl From<PgRequestRow> for RequestRow {
+    fn from(r: PgRequestRow) -> Self {
+        Self {
+            request_id: r.request_id,
+            status: r.status,
+            daemon_public_key: r.daemon_public_key,
         }
     }
 }
@@ -158,6 +265,7 @@ mod tests {
             log_level: "info".to_owned(),
             log_format: "plain".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            base_url: "http://localhost:3000".to_owned(),
         };
 
         let repository = build_repository(&config).await.unwrap();

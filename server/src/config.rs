@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub log_level: String,
     pub log_format: String,
     pub signing_key_secret: String,
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +96,8 @@ impl AppConfig {
         let log_level = lookup("SERVER_LOG_LEVEL").unwrap_or_else(|| "info".to_owned());
         let log_format = lookup("SERVER_LOG_FORMAT").unwrap_or_else(|| "plain".to_owned());
         let signing_key_secret = require_env(lookup, "SERVER_SIGNING_KEY_SECRET")?;
+        let base_url = lookup("SERVER_BASE_URL")
+            .unwrap_or_else(|| format!("http://{server_host}:{server_port}"));
 
         let config = Self {
             server_host,
@@ -106,6 +109,7 @@ impl AppConfig {
             log_level,
             log_format,
             signing_key_secret,
+            base_url,
         };
 
         validate_db_pool(&config)?;

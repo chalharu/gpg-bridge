@@ -39,7 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     repository.run_migrations().await?;
     repository.health_check().await?;
 
-    let state = AppState { repository };
+    let state = AppState {
+        repository,
+        base_url: config.base_url.clone(),
+        signing_key_secret: config.signing_key_secret.clone(),
+    };
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let addr = listener.local_addr()?;
