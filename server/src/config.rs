@@ -12,6 +12,12 @@ pub struct AppConfig {
     pub log_format: String,
     pub signing_key_secret: String,
     pub base_url: String,
+    pub rate_limit_strict_quota: u32,
+    pub rate_limit_strict_window_seconds: u64,
+    pub rate_limit_standard_quota: u32,
+    pub rate_limit_standard_window_seconds: u64,
+    pub rate_limit_sse_max_per_ip: u32,
+    pub rate_limit_sse_max_per_key: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +104,18 @@ impl AppConfig {
         let signing_key_secret = require_env(lookup, "SERVER_SIGNING_KEY_SECRET")?;
         let base_url = lookup("SERVER_BASE_URL")
             .unwrap_or_else(|| format!("http://{server_host}:{server_port}"));
+        let rate_limit_strict_quota: u32 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_STRICT_QUOTA", "10")?;
+        let rate_limit_strict_window_seconds: u64 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS", "60")?;
+        let rate_limit_standard_quota: u32 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_STANDARD_QUOTA", "60")?;
+        let rate_limit_standard_window_seconds: u64 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS", "60")?;
+        let rate_limit_sse_max_per_ip: u32 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_IP", "20")?;
+        let rate_limit_sse_max_per_key: u32 =
+            parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_KEY", "1")?;
 
         let config = Self {
             server_host,
@@ -110,13 +128,44 @@ impl AppConfig {
             log_format,
             signing_key_secret,
             base_url,
+            rate_limit_strict_quota,
+            rate_limit_strict_window_seconds,
+            rate_limit_standard_quota,
+            rate_limit_standard_window_seconds,
+            rate_limit_sse_max_per_ip,
+            rate_limit_sse_max_per_key,
         };
 
         validate_db_pool(&config)?;
         validate_signing_key_secret(&config.signing_key_secret)?;
+        validate_rate_limit(&config)?;
 
         Ok(config)
     }
+}
+
+fn validate_rate_limit(config: &AppConfig) -> anyhow::Result<()> {
+    if config.rate_limit_strict_quota == 0 {
+        return Err(anyhow!(
+            "SERVER_RATE_LIMIT_STRICT_QUOTA must be greater than 0"
+        ));
+    }
+    if config.rate_limit_strict_window_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS must be greater than 0"
+        ));
+    }
+    if config.rate_limit_standard_quota == 0 {
+        return Err(anyhow!(
+            "SERVER_RATE_LIMIT_STANDARD_QUOTA must be greater than 0"
+        ));
+    }
+    if config.rate_limit_standard_window_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS must be greater than 0"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -140,6 +189,12 @@ mod tests {
         assert_eq!(config.db_max_connections, 20);
         assert_eq!(config.db_min_connections, 1);
         assert_eq!(config.db_acquire_timeout_seconds, 5);
+        assert_eq!(config.rate_limit_strict_quota, 10);
+        assert_eq!(config.rate_limit_strict_window_seconds, 60);
+        assert_eq!(config.rate_limit_standard_quota, 60);
+        assert_eq!(config.rate_limit_standard_window_seconds, 60);
+        assert_eq!(config.rate_limit_sse_max_per_ip, 20);
+        assert_eq!(config.rate_limit_sse_max_per_key, 1);
     }
 
     #[test]
@@ -240,6 +295,42 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_strict_quota() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_RATE_LIMIT_STRICT_QUOTA" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_RATE_LIMIT_STRICT_QUOTA")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_standard_window() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS")
         );
     }
 }

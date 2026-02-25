@@ -1,7 +1,7 @@
 use clap::Parser;
 use gpg_bridge_server::{
     config::AppConfig,
-    http::{AppState, build_router},
+    http::{AppState, build_router, rate_limit::RateLimitConfig},
     observability::init_tracing,
     repository::build_repository,
 };
@@ -44,13 +44,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_url: config.base_url.clone(),
         signing_key_secret: config.signing_key_secret.clone(),
     };
-    let app = build_router(state);
+    let rate_limit_config = RateLimitConfig::from_app_config(&config);
+    let app = build_router(state, rate_limit_config);
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let addr = listener.local_addr()?;
 
     info!(%addr, "server listening");
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
