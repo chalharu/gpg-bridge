@@ -28,9 +28,7 @@ where
 {
     let mut stream = BufReader::new(stream);
     let mut state = SessionState::new();
-
-    let greeting = Response::Ok(Some(GREETING.to_owned()));
-    write_response(&mut stream, &greeting).await?;
+    write_response(&mut stream, &Response::Ok(Some(GREETING.to_owned()))).await?;
 
     loop {
         match read_bounded_line(&mut stream).await? {
@@ -38,22 +36,10 @@ where
                 debug!("client disconnected (EOF)");
                 break;
             }
-            ReadLineResult::TooLong => {
-                let err = Response::Err {
-                    code: GPG_ERR_ASS_LINE_TOO_LONG,
-                    message: "Line too long".to_owned(),
-                };
-                write_response(&mut stream, &err).await?;
-            }
+            ReadLineResult::TooLong => write_too_long_error(&mut stream).await?,
             ReadLineResult::Empty => {}
             ReadLineResult::Line(trimmed) => {
-                let command = Command::parse(&trimmed);
-                debug!(?command, "received command");
-                let is_bye = matches!(command, Command::Bye);
-                let response = handle(&command, context, &mut state);
-                write_response(&mut stream, &response).await?;
-
-                if is_bye {
+                if process_line(&mut stream, &trimmed, context, &mut state).await? {
                     debug!("client sent BYE, closing session");
                     break;
                 }
@@ -62,6 +48,30 @@ where
     }
 
     Ok(())
+}
+
+/// Process a single parsed command line. Returns `true` if the session should end (BYE).
+async fn process_line<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    trimmed: &str,
+    context: &SessionContext,
+    state: &mut SessionState,
+) -> anyhow::Result<bool> {
+    let command = Command::parse(trimmed);
+    debug!(?command, "received command");
+    let is_bye = matches!(command, Command::Bye);
+    let response = handle(&command, context, state);
+    write_response(writer, &response).await?;
+    Ok(is_bye)
+}
+
+/// Send a line-too-long error response.
+async fn write_too_long_error<W: AsyncWrite + Unpin>(writer: &mut W) -> anyhow::Result<()> {
+    let err = Response::Err {
+        code: GPG_ERR_ASS_LINE_TOO_LONG,
+        message: "Line too long".to_owned(),
+    };
+    write_response(writer, &err).await
 }
 
 /// Outcome of a single bounded line read.
@@ -239,9 +249,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_unknown_command_returns_not_supported() {
+    async fn session_unknown_command_returns_unknown_error() {
         let output = run_test_session("/tmp/test.sock", "FOOBAR\nBYE\n").await;
-        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+        assert_eq!(
+            output,
+            "OK Pleased to meet you\nERR 275 unknown IPC command\nOK\n"
+        );
     }
 
     #[tokio::test]
@@ -294,7 +307,10 @@ mod tests {
         let line = "A".repeat(999);
         let input = format!("{line}\nBYE\n");
         let output = run_test_session("/tmp/test.sock", &input).await;
-        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+        assert_eq!(
+            output,
+            "OK Pleased to meet you\nERR 275 unknown IPC command\nOK\n"
+        );
     }
 
     #[tokio::test]
@@ -318,5 +334,11 @@ mod tests {
     async fn session_immediate_eof() {
         let output = run_test_session("/tmp/test.sock", "").await;
         assert_eq!(output, "OK Pleased to meet you\n");
+    }
+
+    #[tokio::test]
+    async fn session_command_without_trailing_newline() {
+        let output = run_test_session("/tmp/test.sock", "NOP").await;
+        assert_eq!(output, "OK Pleased to meet you\nOK\n");
     }
 }
