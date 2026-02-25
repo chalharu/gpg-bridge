@@ -24,13 +24,12 @@ If missing, ask for it before any action.
 
 ## Docker Execution Rule
 
-All work (implementation, tests, format, lint, static analysis, coverage, and Git operations) **must** run inside a Docker container.
+Build, test, format, lint, static analysis, and coverage commands **must** run inside a Docker container.
 
 - Build the image once if not already built: `docker build -t gpg-bridge-dev .` (from the worktree root).
-- Run every command via: `docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev <command>`.
-- For Git operations that need user identity, add: `-v "$HOME/.gitconfig:/root/.gitconfig:ro"`.
+- Run every build/test command via: `docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev <command>`.
 - Never install or run Rust/Flutter/cargo tools directly on the host.
-- **Exception:** Worktree management (`git worktree add/remove`) and `git push` run on the host since they manage the host filesystem and require host credentials.
+- **Git operations** (commit, push, worktree management, etc.) run on the host, not inside Docker.
 
 ## End-to-End Workflow
 
@@ -65,7 +64,7 @@ All work (implementation, tests, format, lint, static analysis, coverage, and Gi
     - Re-run the quality gate (step 8).
     - Re-submit to the review agent (step 9).
     - Repeat until the review agent approves with no remaining issues.
-11. Commit changes using `git-commit` skill workflow (Git commands run inside Docker).
+11. Commit changes using `git-commit` skill workflow (Git commands run on the host).
 12. Push the branch to the remote: `git push -u origin <branch>` (runs on the host — requires host credentials).
 13. Create pull request following `CONTRIBUTING.md` PR template requirements.
 14. Report summary and PR URL.

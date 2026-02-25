@@ -46,7 +46,8 @@
 - Follow the existing patterns in the codebase
 - Prefer explicit over clever
 - Delete dead code immediately
-- **All commands must run inside Docker**: `docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev <command>`
+- **Build/test/lint commands run inside Docker**: `docker run --rm -v "$PWD:/workspace" -v gpg-bridge-cargo-registry:/usr/local/cargo/registry -v gpg-bridge-cargo-git:/usr/local/cargo/git -w /workspace gpg-bridge-dev <command>`
+- **Git operations (commit, push, etc.) run on the host**, not inside Docker
 - For any source code changes, always run format/lint or static analysis/tests/coverage commands relevant to the changed area before updating a PR
 - If coverage is low for the changed area (Rust/Flutter/others), add or adjust tests and re-run until coverage improves before PR update
 - If Rust source code is modified, always run inside Docker: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo llvm-cov --workspace --summary-only`
