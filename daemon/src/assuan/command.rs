@@ -1,6 +1,6 @@
 /// Parsed Assuan protocol command.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Command {
+pub(super) enum Command {
     Nop,
     Option { name: String, value: Option<String> },
     Reset,
@@ -16,7 +16,7 @@ impl Command {
     /// Parse a trimmed (no trailing newline) line into a [`Command`].
     ///
     /// Command names are matched case-insensitively per the Assuan protocol spec.
-    pub(crate) fn parse(line: &str) -> Self {
+    pub(super) fn parse(line: &str) -> Self {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Self::Unknown {

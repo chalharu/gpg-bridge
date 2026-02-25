@@ -635,7 +635,7 @@ API契約（OpenAPI）: `openapi.yaml`
 | `BYE` | 対応 | 不要 | セッション終了 |
 | `PKDECRYPT` | 非対応（`ERR Not supported`） | - | 将来拡張（復号） |
 | `AUTH` | 非対応（`ERR Not supported`） | - | 将来拡張（認証） |
-| その他全コマンド | 非対応（`ERR Not supported`） | - | `GENKEY`, `IMPORT_KEY`, `EXPORT_KEY`, `DELETE_KEY`, `GET_PASSPHRASE`, `SCD`, `LEARN` 等 |
+| その他全コマンド | 非対応（`ERR 275 unknown IPC command`） | - | `GENKEY`, `IMPORT_KEY`, `EXPORT_KEY`, `DELETE_KEY`, `GET_PASSPHRASE`, `SCD`, `LEARN` 等。実際のgpg-agentと同じ`GPG_ERR_ASS_UNKNOWN_CMD`を返す |
 
 #### 7.1.1 GETINFOプロトコル（v1実装対象）
 

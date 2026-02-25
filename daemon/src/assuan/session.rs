@@ -341,4 +341,13 @@ mod tests {
         let output = run_test_session("/tmp/test.sock", "NOP").await;
         assert_eq!(output, "OK Pleased to meet you\nOK\n");
     }
+
+    #[tokio::test]
+    async fn session_option_no_args_returns_syntax_error() {
+        let output = run_test_session("/tmp/test.sock", "OPTION\nBYE\n").await;
+        assert_eq!(
+            output,
+            "OK Pleased to meet you\nERR 147 option name missing\nOK\n"
+        );
+    }
 }
