@@ -274,6 +274,15 @@ mod tests {
         ) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn update_client_gpg_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
         async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }

@@ -1,4 +1,5 @@
 mod delete;
+mod gpg_key;
 mod public_key;
 mod refresh;
 mod register;
@@ -6,6 +7,8 @@ mod update;
 mod validation;
 
 pub use delete::delete_device;
+pub(crate) use gpg_key::GpgKeyEntry;
+pub use gpg_key::{add_gpg_key, delete_gpg_key, list_gpg_keys};
 pub use public_key::{add_public_key, delete_public_key, list_public_keys};
 pub use refresh::refresh_device_jwt;
 pub use register::register_device;
