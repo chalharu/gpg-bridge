@@ -195,6 +195,19 @@ mod tests {
         async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
             Ok(None)
         }
+        async fn update_client_public_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
         async fn store_jti(&self, _: &str, _: &str) -> anyhow::Result<bool> {
             Ok(self.jti_accepted)
         }

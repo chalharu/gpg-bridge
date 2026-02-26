@@ -116,6 +116,24 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
 
     // ---- jtis operations ----
 
+    /// Update public_keys and default_kid for a client in one query.
+    ///
+    /// Uses optimistic locking: the update only succeeds if the current
+    /// `updated_at` matches `expected_updated_at`.  Returns `true` if the
+    /// row was updated, `false` on a concurrent modification.
+    async fn update_client_public_keys(
+        &self,
+        client_id: &str,
+        public_keys: &str,
+        default_kid: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool>;
+
+    /// Check if any in-flight request (status=created/pending) references
+    /// this kid in `e2e_kids`.
+    async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool>;
+
     /// Store a JTI for replay prevention. Returns `true` if newly inserted,
     /// `false` if the JTI already exists.
     async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool>;

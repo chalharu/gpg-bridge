@@ -101,6 +101,12 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         .route("/device", patch(device::update_device))
         .route("/device", delete(device::delete_device))
         .route("/device/refresh", post(device::refresh_device_jwt))
+        .route("/device/public_key", post(device::add_public_key))
+        .route("/device/public_key", get(device::list_public_keys))
+        .route(
+            "/device/public_key/{kid}",
+            delete(device::delete_public_key),
+        )
         .layer(axum::middleware::from_fn(accept_version_middleware))
         .layer(axum::middleware::from_fn_with_state(
             rl_state,
@@ -242,6 +248,19 @@ mod tests {
         ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
             unimplemented!()
         }
+        async fn update_client_public_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
         async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
@@ -340,6 +359,19 @@ mod tests {
             &self,
             _request_id: &str,
         ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
+            unimplemented!()
+        }
+        async fn update_client_public_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
         async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {

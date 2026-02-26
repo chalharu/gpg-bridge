@@ -1,10 +1,12 @@
 mod delete;
+mod public_key;
 mod refresh;
 mod register;
 mod update;
 mod validation;
 
 pub use delete::delete_device;
+pub use public_key::{add_public_key, delete_public_key, list_public_keys};
 pub use refresh::refresh_device_jwt;
 pub use register::register_device;
 pub use update::update_device;

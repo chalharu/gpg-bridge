@@ -222,6 +222,39 @@ impl SignatureRepository for PostgresRepository {
         Ok(row.map(Into::into))
     }
 
+    async fn update_client_public_keys(
+        &self,
+        client_id: &str,
+        public_keys: &str,
+        default_kid: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE clients SET public_keys = $1, default_kid = $2, updated_at = $3 WHERE client_id = $4 AND updated_at = $5",
+        )
+        .bind(public_keys)
+        .bind(default_kid)
+        .bind(updated_at)
+        .bind(client_id)
+        .bind(expected_updated_at)
+        .execute(&self.pool)
+        .await
+        .context("failed to update client public_keys")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool> {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM requests CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e2e_kids::jsonb) = 'array' THEN e2e_kids::jsonb ELSE '[]'::jsonb END) AS elem WHERE requests.status IN ('created', 'pending') AND elem = $1)",
+        )
+        .bind(kid)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to check kid in-flight")?;
+        Ok(found)
+    }
+
     async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool> {
         let result = sqlx::query(
             "INSERT INTO jtis (jti, expired) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING",
