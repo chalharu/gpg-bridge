@@ -264,6 +264,19 @@ mod tests {
         ) -> anyhow::Result<()> {
             unimplemented!()
         }
+        async fn update_client_public_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
