@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub rate_limit_standard_window_seconds: u64,
     pub rate_limit_sse_max_per_ip: u32,
     pub rate_limit_sse_max_per_key: u32,
+    pub device_jwt_validity_seconds: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +117,8 @@ impl AppConfig {
             parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_IP", "20")?;
         let rate_limit_sse_max_per_key: u32 =
             parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_KEY", "1")?;
+        let device_jwt_validity_seconds: u64 =
+            parse_env(lookup, "SERVER_DEVICE_JWT_VALIDITY_SECONDS", "31536000")?;
 
         let config = Self {
             server_host,
@@ -134,11 +137,13 @@ impl AppConfig {
             rate_limit_standard_window_seconds,
             rate_limit_sse_max_per_ip,
             rate_limit_sse_max_per_key,
+            device_jwt_validity_seconds,
         };
 
         validate_db_pool(&config)?;
         validate_signing_key_secret(&config.signing_key_secret)?;
         validate_rate_limit(&config)?;
+        validate_device_jwt_validity(&config)?;
 
         Ok(config)
     }
@@ -163,6 +168,15 @@ fn validate_rate_limit(config: &AppConfig) -> anyhow::Result<()> {
     if config.rate_limit_standard_window_seconds == 0 {
         return Err(anyhow!(
             "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS must be greater than 0"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_jwt_validity(config: &AppConfig) -> anyhow::Result<()> {
+    if config.device_jwt_validity_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_DEVICE_JWT_VALIDITY_SECONDS must be greater than 0"
         ));
     }
     Ok(())
@@ -195,6 +209,7 @@ mod tests {
         assert_eq!(config.rate_limit_standard_window_seconds, 60);
         assert_eq!(config.rate_limit_sse_max_per_ip, 20);
         assert_eq!(config.rate_limit_sse_max_per_key, 1);
+        assert_eq!(config.device_jwt_validity_seconds, 31_536_000);
     }
 
     #[test]

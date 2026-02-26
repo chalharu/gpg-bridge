@@ -158,6 +158,37 @@ mod tests {
         async fn get_client_by_id(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
             Ok(self.client.clone())
         }
+        async fn create_client(&self, _: &ClientRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn client_by_device_token(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
+            unimplemented!()
+        }
+        async fn update_client_device_token(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_device_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
         async fn get_client_pairings(&self, _: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
             Ok(vec![])
         }
@@ -179,6 +210,8 @@ mod tests {
             repository: Arc::new(repo),
             base_url: "https://api.example.com".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
         }
     }
 
@@ -208,8 +241,13 @@ mod tests {
         let pub_json = jwk_to_json(pub_jwk).unwrap();
         ClientRow {
             client_id: "fid-1".into(),
+            created_at: "2026-01-01T00:00:00+00:00".into(),
+            updated_at: "2026-01-01T00:00:00+00:00".into(),
+            device_token: "tok".into(),
+            device_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
             public_keys: format!("[{pub_json}]"),
             default_kid: kid.into(),
+            gpg_keys: "[]".into(),
         }
     }
 
@@ -386,8 +424,13 @@ mod tests {
         let pub_json = jwk_to_json(&pub_jwk).unwrap();
         let client = ClientRow {
             client_id: "fid-1".into(),
+            created_at: "2026-01-01T00:00:00+00:00".into(),
+            updated_at: "2026-01-01T00:00:00+00:00".into(),
+            device_token: "tok".into(),
+            device_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
             public_keys: format!("[{pub_json}]"),
             default_kid: kid.clone(),
+            gpg_keys: "[]".into(),
         };
         let repo = MockRepo {
             client: Some(client),

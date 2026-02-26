@@ -90,13 +90,114 @@ impl SignatureRepository for SqliteRepository {
 
     async fn get_client_by_id(&self, client_id: &str) -> anyhow::Result<Option<ClientRow>> {
         let row = sqlx::query_as::<_, SqliteClientRow>(
-            "SELECT client_id, public_keys, default_kid FROM clients WHERE client_id = $1",
+            "SELECT client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys FROM clients WHERE client_id = $1",
         )
         .bind(client_id)
         .fetch_optional(&self.pool)
         .await
         .context("failed to get client by id")?;
         Ok(row.map(Into::into))
+    }
+
+    async fn create_client(&self, row: &ClientRow) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO clients (client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(&row.client_id)
+        .bind(&row.created_at)
+        .bind(&row.updated_at)
+        .bind(&row.device_token)
+        .bind(&row.device_jwt_issued_at)
+        .bind(&row.public_keys)
+        .bind(&row.default_kid)
+        .bind(&row.gpg_keys)
+        .execute(&self.pool)
+        .await
+        .context("failed to create client")?;
+        Ok(())
+    }
+
+    async fn client_exists(&self, client_id: &str) -> anyhow::Result<bool> {
+        let count =
+            sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM clients WHERE client_id = $1")
+                .bind(client_id)
+                .fetch_one(&self.pool)
+                .await
+                .context("failed to check client existence")?;
+        Ok(count > 0)
+    }
+
+    async fn client_by_device_token(
+        &self,
+        device_token: &str,
+    ) -> anyhow::Result<Option<ClientRow>> {
+        let row = sqlx::query_as::<_, SqliteClientRow>(
+            "SELECT client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys FROM clients WHERE device_token = $1",
+        )
+        .bind(device_token)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get client by device_token")?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn update_client_device_token(
+        &self,
+        client_id: &str,
+        device_token: &str,
+        updated_at: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE clients SET device_token = $1, updated_at = $2 WHERE client_id = $3")
+            .bind(device_token)
+            .bind(updated_at)
+            .bind(client_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to update client device_token")?;
+        Ok(())
+    }
+
+    async fn update_client_default_kid(
+        &self,
+        client_id: &str,
+        default_kid: &str,
+        updated_at: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE clients SET default_kid = $1, updated_at = $2 WHERE client_id = $3")
+            .bind(default_kid)
+            .bind(updated_at)
+            .bind(client_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to update client default_kid")?;
+        Ok(())
+    }
+
+    async fn delete_client(&self, client_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM clients WHERE client_id = $1")
+            .bind(client_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete client")?;
+        Ok(())
+    }
+
+    async fn update_device_jwt_issued_at(
+        &self,
+        client_id: &str,
+        issued_at: &str,
+        updated_at: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE clients SET device_jwt_issued_at = $1, updated_at = $2 WHERE client_id = $3",
+        )
+        .bind(issued_at)
+        .bind(updated_at)
+        .bind(client_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update device_jwt_issued_at")?;
+        Ok(())
     }
 
     async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
@@ -169,16 +270,26 @@ impl From<SqliteSigningKeyRow> for SigningKeyRow {
 #[derive(sqlx::FromRow)]
 struct SqliteClientRow {
     client_id: String,
+    created_at: String,
+    updated_at: String,
+    device_token: String,
+    device_jwt_issued_at: String,
     public_keys: String,
     default_kid: String,
+    gpg_keys: String,
 }
 
 impl From<SqliteClientRow> for ClientRow {
     fn from(r: SqliteClientRow) -> Self {
         Self {
             client_id: r.client_id,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            device_token: r.device_token,
+            device_jwt_issued_at: r.device_jwt_issued_at,
             public_keys: r.public_keys,
             default_kid: r.default_kid,
+            gpg_keys: r.gpg_keys,
         }
     }
 }
@@ -243,6 +354,7 @@ mod tests {
             rate_limit_standard_window_seconds: 60,
             rate_limit_sse_max_per_ip: 20,
             rate_limit_sse_max_per_key: 1,
+            device_jwt_validity_seconds: 31_536_000,
         }
     }
 

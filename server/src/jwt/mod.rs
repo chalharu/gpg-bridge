@@ -14,4 +14,7 @@ pub use key_management::{
     build_signing_key_row, decrypt_private_key, encrypt_private_key, generate_signing_key_pair,
     jwk_from_json, jwk_to_json,
 };
-pub use signing::{decode_jws_unverified, extract_kid, sign_jws, verify_jws, verify_jws_with_key};
+pub use signing::{
+    decode_jws_unverified, extract_kid, sign_jws, verify_jws, verify_jws_ignore_exp,
+    verify_jws_with_key,
+};

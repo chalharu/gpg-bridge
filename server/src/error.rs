@@ -19,6 +19,8 @@ enum AppErrorKind {
     NotAcceptable,
     Unauthorized,
     Validation,
+    Conflict,
+    NotFound,
     Database,
     Internal,
     TooManyRequests,
@@ -87,6 +89,24 @@ impl AppError {
         }
     }
 
+    pub fn conflict(detail: impl Into<String>) -> Self {
+        Self {
+            kind: AppErrorKind::Conflict,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
+    pub fn not_found(detail: impl Into<String>) -> Self {
+        Self {
+            kind: AppErrorKind::NotFound,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
     pub fn too_many_requests(detail: impl Into<String>) -> Self {
         Self {
             kind: AppErrorKind::TooManyRequests,
@@ -122,6 +142,8 @@ impl AppError {
             AppErrorKind::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
             AppErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
             AppErrorKind::Validation => StatusCode::BAD_REQUEST,
+            AppErrorKind::Conflict => StatusCode::CONFLICT,
+            AppErrorKind::NotFound => StatusCode::NOT_FOUND,
             AppErrorKind::Database => StatusCode::SERVICE_UNAVAILABLE,
             AppErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             AppErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
@@ -133,6 +155,8 @@ impl AppError {
             AppErrorKind::NotAcceptable => "Not acceptable",
             AppErrorKind::Unauthorized => "Unauthorized",
             AppErrorKind::Validation => "Validation error",
+            AppErrorKind::Conflict => "Conflict",
+            AppErrorKind::NotFound => "Not found",
             AppErrorKind::Database => "Database error",
             AppErrorKind::Internal => "Internal server error",
             AppErrorKind::TooManyRequests => "Too many requests",
@@ -144,6 +168,8 @@ impl AppError {
             AppErrorKind::NotAcceptable => "https://gpg-bridge.dev/problems/not-acceptable",
             AppErrorKind::Unauthorized => "https://gpg-bridge.dev/problems/unauthorized",
             AppErrorKind::Validation => "https://gpg-bridge.dev/problems/validation",
+            AppErrorKind::Conflict => "https://gpg-bridge.dev/problems/conflict",
+            AppErrorKind::NotFound => "https://gpg-bridge.dev/problems/not-found",
             AppErrorKind::Database => "https://gpg-bridge.dev/problems/database",
             AppErrorKind::Internal => "https://gpg-bridge.dev/problems/internal",
             AppErrorKind::TooManyRequests => "https://gpg-bridge.dev/problems/rate-limit",
