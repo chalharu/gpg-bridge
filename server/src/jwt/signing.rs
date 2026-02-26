@@ -76,6 +76,26 @@ pub fn decode_jws_unverified<T: DeserializeOwned>(token: &str) -> anyhow::Result
     serde_json::from_slice(&payload_bytes).context("failed to parse JWT payload")
 }
 
+/// Verify a JWS token (ES256), check `payload_type`, and deserialize to `T`.
+///
+/// Unlike [`verify_jws`], this does **not** check `exp`. Use for tokens
+/// that may already be expired (e.g. during device_jwt refresh).
+pub fn verify_jws_ignore_exp<T: DeserializeOwned>(
+    token: &str,
+    public_jwk: &Jwk,
+    expected_payload_type: PayloadType,
+) -> anyhow::Result<T> {
+    let verifier = ES256
+        .verifier_from_jwk(public_jwk)
+        .map_err(|e| anyhow!("failed to create ES256 verifier: {e}"))?;
+
+    let (payload, _header) = jwt::decode_with_verifier(token, &verifier)
+        .map_err(|e| anyhow!("JWS verification failed: {e}"))?;
+
+    check_payload_type(&payload, expected_payload_type)?;
+    payload_to_claims(&payload)
+}
+
 /// Verify a JWS token (ES256), check `exp`, and deserialize to `T`.
 ///
 /// Unlike [`verify_jws`], this does **not** check `payload_type`.

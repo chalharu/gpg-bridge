@@ -1,7 +1,7 @@
 use clap::Parser;
 use gpg_bridge_server::{
     config::AppConfig,
-    http::{AppState, build_router, rate_limit::RateLimitConfig},
+    http::{AppState, build_router, fcm::NoopFcmValidator, rate_limit::RateLimitConfig},
     observability::init_tracing,
     repository::build_repository,
 };
@@ -43,6 +43,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         repository,
         base_url: config.base_url.clone(),
         signing_key_secret: config.signing_key_secret.clone(),
+        device_jwt_validity_seconds: config.device_jwt_validity_seconds,
+        fcm_validator: std::sync::Arc::new(NoopFcmValidator),
     };
     let rate_limit_config = RateLimitConfig::from_app_config(&config);
     let app = build_router(state, rate_limit_config);

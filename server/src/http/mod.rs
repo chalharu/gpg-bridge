@@ -1,5 +1,7 @@
 mod accept;
 pub mod auth;
+mod device;
+pub mod fcm;
 mod middleware;
 pub mod rate_limit;
 
@@ -11,7 +13,7 @@ use axum::{
         Method,
         header::{self},
     },
-    routing::get,
+    routing::{delete, get, patch, post},
 };
 use serde::Serialize;
 use tower_http::{
@@ -24,6 +26,7 @@ use tracing::Level;
 use crate::error::AppError;
 use crate::repository::SignatureRepository;
 
+use self::fcm::FcmValidator;
 use self::middleware::security_headers_middleware;
 use self::rate_limit::RateLimitConfig;
 use self::rate_limit::SlidingWindowLimiter;
@@ -35,6 +38,8 @@ pub struct AppState {
     pub repository: Arc<dyn SignatureRepository>,
     pub base_url: String,
     pub signing_key_secret: String,
+    pub device_jwt_validity_seconds: u64,
+    pub fcm_validator: Arc<dyn FcmValidator>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +97,10 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
 
     Router::new()
         .route("/health", get(health))
+        .route("/device", post(device::register_device))
+        .route("/device", patch(device::update_device))
+        .route("/device", delete(device::delete_device))
+        .route("/device/refresh", post(device::refresh_device_jwt))
         .layer(axum::middleware::from_fn(accept_version_middleware))
         .layer(axum::middleware::from_fn_with_state(
             rl_state,
@@ -187,6 +196,40 @@ mod tests {
         ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
             unimplemented!()
         }
+        async fn create_client(&self, _: &crate::repository::ClientRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn client_by_device_token(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
+            unimplemented!()
+        }
+        async fn update_client_device_token(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_device_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
         async fn get_client_pairings(
             &self,
             _client_id: &str,
@@ -253,6 +296,40 @@ mod tests {
         ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
             unimplemented!()
         }
+        async fn create_client(&self, _: &crate::repository::ClientRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn client_by_device_token(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
+            unimplemented!()
+        }
+        async fn update_client_device_token(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_device_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
         async fn get_client_pairings(
             &self,
             _client_id: &str,
@@ -292,6 +369,7 @@ mod tests {
             rate_limit_standard_window_seconds: 60,
             rate_limit_sse_max_per_ip: 20,
             rate_limit_sse_max_per_key: 1,
+            device_jwt_validity_seconds: 31_536_000,
         };
 
         let repository = build_repository(&config).await.unwrap();
@@ -301,6 +379,8 @@ mod tests {
             repository,
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            fcm_validator: Arc::new(fcm::NoopFcmValidator),
         };
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
@@ -313,6 +393,8 @@ mod tests {
             repository: Arc::new(FailingRepository),
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            fcm_validator: Arc::new(fcm::NoopFcmValidator),
         };
 
         let error = health(axum::extract::State(state)).await.unwrap_err();
@@ -346,6 +428,8 @@ mod tests {
             repository: Arc::new(repo),
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            fcm_validator: Arc::new(fcm::NoopFcmValidator),
         }
     }
 
@@ -667,10 +751,7 @@ mod tests {
             },
         };
 
-        let app = build_router(
-            test_state(HealthyRepository),
-            rl_config,
-        );
+        let app = build_router(test_state(HealthyRepository), rl_config);
 
         // Exhaust the standard quota (2 requests).
         for _ in 0..2 {

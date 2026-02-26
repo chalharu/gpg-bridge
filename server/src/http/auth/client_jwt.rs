@@ -233,6 +233,37 @@ mod tests {
         async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
             Ok(0)
         }
+        async fn create_client(&self, _: &ClientRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn client_by_device_token(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
+            unimplemented!()
+        }
+        async fn update_client_device_token(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update_device_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
@@ -281,6 +312,8 @@ mod tests {
             repository: Arc::new(repo),
             base_url: "https://api.example.com".to_owned(),
             signing_key_secret: TEST_SECRET.to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
         }
     }
 

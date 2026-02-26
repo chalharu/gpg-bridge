@@ -87,6 +87,7 @@ mod tests {
             log_format: "json".to_owned(),
             signing_key_secret: "test-secret-that-is-long-enough".to_owned(),
             base_url: "http://localhost:8080".to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
             rate_limit_strict_quota: 5,
             rate_limit_strict_window_seconds: 30,
             rate_limit_standard_quota: 100,
