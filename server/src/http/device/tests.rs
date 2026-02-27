@@ -270,8 +270,19 @@ fn make_signing_key_row() -> (SigningKeyRow, josekit::jwk::Jwk) {
 }
 
 fn make_state(repo: impl SignatureRepository + 'static) -> AppState {
+    make_state_with_arc_repo(Arc::new(repo))
+}
+
+fn make_state_with_repo(repo: Arc<DeviceMockRepo>) -> AppState {
+    make_state_with_arc_repo(repo)
+}
+
+fn make_state_with_arc_repo(repository: Arc<dyn SignatureRepository>) -> AppState {
+    use crate::http::pairing::notifier::PairingNotifier;
+    use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+
     AppState {
-        repository: Arc::new(repo),
+        repository,
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
@@ -279,6 +290,11 @@ fn make_state(repo: impl SignatureRepository + 'static) -> AppState {
         client_jwt_validity_seconds: 31_536_000,
         unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
+        sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
+            max_per_ip: 20,
+            max_per_key: 1,
+        }),
+        pairing_notifier: PairingNotifier::new(),
     }
 }
 
@@ -1112,16 +1128,7 @@ async fn delete_public_key_auto_reassign_default_kid() {
     );
     let client = make_client_row("fid-reassign", "tok-reassign", &keys, "enc-del");
     let repo = Arc::new(DeviceMockRepo::with_client(sk, client));
-    let state = AppState {
-        repository: repo.clone(),
-        base_url: BASE_URL.to_owned(),
-        signing_key_secret: SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(NoopFcmValidator),
-    };
+    let state = make_state_with_repo(repo.clone());
     let app = build_test_router(state);
 
     let token = make_device_assertion(
@@ -1221,16 +1228,7 @@ async fn delete_public_key_no_default_kid_reassign_when_not_affected() {
     );
     let client = make_client_row("fid-noreassign", "tok-noreassign", &keys, "enc-1");
     let repo = Arc::new(DeviceMockRepo::with_client(sk, client));
-    let state = AppState {
-        repository: repo.clone(),
-        base_url: BASE_URL.to_owned(),
-        signing_key_secret: SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(NoopFcmValidator),
-    };
+    let state = make_state_with_repo(repo.clone());
     let app = build_test_router(state);
 
     // Delete a sig key that is NOT the default_kid
@@ -1472,16 +1470,7 @@ async fn add_gpg_key_upsert_overwrites_existing() {
     }]);
     let client = make_gpg_client_row("fid-upsert", &keys, "enc-1", &existing_gpg.to_string());
     let repo = Arc::new(DeviceMockRepo::with_client(sk, client));
-    let state = AppState {
-        repository: repo.clone(),
-        base_url: BASE_URL.to_owned(),
-        signing_key_secret: SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(NoopFcmValidator),
-    };
+    let state = make_state_with_repo(repo.clone());
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-upsert", "/device/gpg_key");
@@ -1649,16 +1638,7 @@ async fn delete_gpg_key_not_found() {
 async fn add_gpg_key_multiple_keys_success() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
     let repo = Arc::new(DeviceMockRepo::with_client(sk, client));
-    let state = AppState {
-        repository: repo.clone(),
-        base_url: BASE_URL.to_owned(),
-        signing_key_secret: SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(NoopFcmValidator),
-    };
+    let state = make_state_with_repo(repo.clone());
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");

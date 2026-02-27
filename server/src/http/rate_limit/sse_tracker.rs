@@ -5,12 +5,13 @@ use std::sync::{Arc, Mutex};
 use super::config::SseConnectionConfig;
 
 /// Tracks concurrent SSE connections per IP and per logical key.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SseConnectionTracker {
     inner: Arc<Mutex<TrackerState>>,
     config: SseConnectionConfig,
 }
 
+#[derive(Debug)]
 struct TrackerState {
     per_ip: HashMap<IpAddr, u32>,
     per_key: HashMap<String, u32>,

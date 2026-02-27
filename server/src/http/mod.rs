@@ -3,7 +3,7 @@ pub mod auth;
 mod device;
 pub mod fcm;
 mod middleware;
-mod pairing;
+pub mod pairing;
 pub mod rate_limit;
 
 use std::sync::Arc;
@@ -29,8 +29,10 @@ use crate::repository::SignatureRepository;
 
 use self::fcm::FcmValidator;
 use self::middleware::security_headers_middleware;
+use self::pairing::notifier::PairingNotifier;
 use self::rate_limit::RateLimitConfig;
 use self::rate_limit::SlidingWindowLimiter;
+use self::rate_limit::SseConnectionTracker;
 use self::rate_limit::rate_limit_middleware;
 use accept::accept_version_middleware;
 
@@ -44,6 +46,8 @@ pub struct AppState {
     pub client_jwt_validity_seconds: u64,
     pub unconsumed_pairing_limit: i64,
     pub fcm_validator: Arc<dyn FcmValidator>,
+    pub sse_tracker: SseConnectionTracker,
+    pub pairing_notifier: PairingNotifier,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,7 +103,8 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         std::time::Duration::from_secs(max_window_secs),
     );
 
-    Router::new()
+    // JSON API routes (with accept_version_middleware).
+    let json_routes = Router::new()
         .route("/health", get(health))
         .route("/device", post(device::register_device))
         .route("/device", patch(device::update_device))
@@ -123,7 +128,13 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
             delete(pairing::delete_pairing_by_phone),
         )
         .route("/pairing/refresh", post(pairing::refresh_client_jwt))
-        .layer(axum::middleware::from_fn(accept_version_middleware))
+        .layer(axum::middleware::from_fn(accept_version_middleware));
+
+    // SSE routes (no accept_version_middleware).
+    let sse_routes = Router::new().route("/pairing-session", get(pairing::get_pairing_session));
+
+    json_routes
+        .merge(sse_routes)
         .layer(axum::middleware::from_fn_with_state(
             rl_state,
             rate_limit_middleware,
@@ -531,6 +542,11 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
         };
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
@@ -548,6 +564,11 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
         };
 
         let error = health(axum::extract::State(state)).await.unwrap_err();
@@ -586,6 +607,11 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
         }
     }
 
