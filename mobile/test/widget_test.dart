@@ -5,9 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpg_bridge_mobile/main.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
 import 'package:gpg_bridge_mobile/state/auth_state.dart';
+import 'package:gpg_bridge_mobile/state/device_registration_service.dart';
 
 import 'helpers/in_memory_secure_storage_backend.dart';
-import 'helpers/throwing_secure_storage_backend.dart';
 
 class _TestAuthState extends AuthState {
   _TestAuthState(this._initial);
@@ -17,13 +17,54 @@ class _TestAuthState extends AuthState {
   Future<bool> build() async => _initial;
 }
 
+class _MockDeviceRegistrationService implements DeviceRegistrationService {
+  _MockDeviceRegistrationService({
+    this.onRegisterCalled,
+    this.registerError,
+    this.unregisterError,
+  });
+
+  final VoidCallback? onRegisterCalled;
+  final DeviceRegistrationException? registerError;
+  final DeviceRegistrationException? unregisterError;
+
+  @override
+  Future<void> register() async {
+    if (registerError != null) throw registerError!;
+    onRegisterCalled?.call();
+  }
+
+  @override
+  void startTokenRefreshListener() {}
+
+  @override
+  Future<void> checkAndRefreshDeviceJwt() async {}
+
+  @override
+  Future<void> checkAndRefreshFcmToken() async {}
+
+  @override
+  Future<void> unregister() async {
+    if (unregisterError != null) throw unregisterError!;
+  }
+}
+
 void main() {
   testWidgets('Registration flow routes to home', (WidgetTester tester) async {
     final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [secureStorageProvider.overrideWithValue(secureStorage)],
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService(
+              onRegisterCalled: () {
+                ref.read(authStateProvider.notifier).setRegistered(true);
+              },
+            );
+          }),
+        ],
         child: const GpgBridgeApp(),
       ),
     );
@@ -39,14 +80,21 @@ void main() {
     expect(find.text('Reset registration'), findsOneWidget);
   });
 
-  testWidgets('Shows snackbar when registration storage write fails', (
+  testWidgets('Shows snackbar when registration fails', (
     WidgetTester tester,
   ) async {
-    final secureStorage = SecureStorageService(ThrowingSecureStorageBackend());
+    final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [secureStorageProvider.overrideWithValue(secureStorage)],
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService(
+              registerError: DeviceRegistrationException('registration failed'),
+            );
+          }),
+        ],
         child: const GpgBridgeApp(),
       ),
     );
@@ -55,20 +103,27 @@ void main() {
     await tester.tap(find.text('Complete registration'));
     await tester.pump();
 
-    expect(find.text('failed to write secure value'), findsOneWidget);
+    expect(find.text('registration failed'), findsOneWidget);
     expect(find.text('Register'), findsOneWidget);
   });
 
-  testWidgets('Shows snackbar when reset storage delete fails', (
+  testWidgets('Shows snackbar when unregistration fails', (
     WidgetTester tester,
   ) async {
-    final secureStorage = SecureStorageService(ThrowingSecureStorageBackend());
+    final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService(
+              unregisterError: DeviceRegistrationException(
+                'unregistration failed',
+              ),
+            );
+          }),
         ],
         child: const GpgBridgeApp(),
       ),
@@ -80,7 +135,7 @@ void main() {
     await tester.tap(find.text('Reset registration'));
     await tester.pump();
 
-    expect(find.text('failed to delete secure value'), findsOneWidget);
+    expect(find.text('unregistration failed'), findsOneWidget);
     expect(find.text('ホーム'), findsWidgets);
   });
 
@@ -94,6 +149,9 @@ void main() {
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService();
+          }),
         ],
         child: const GpgBridgeApp(),
       ),
@@ -134,6 +192,9 @@ void main() {
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService();
+          }),
         ],
         child: const GpgBridgeApp(),
       ),
