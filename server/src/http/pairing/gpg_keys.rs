@@ -36,8 +36,10 @@ pub async fn query_gpg_keys(
             .map_err(AppError::from)?;
 
         if let Some(client) = client {
-            let keys: Vec<GpgKeyEntry> = serde_json::from_str(&client.gpg_keys)
-                .map_err(|e| AppError::internal(format!("invalid gpg_keys JSON: {e}")))?;
+            let keys: Vec<GpgKeyEntry> = serde_json::from_str(&client.gpg_keys).map_err(|e| {
+                tracing::error!(client_id = %client_info.client_id, "invalid gpg_keys JSON: {e}");
+                AppError::internal("internal server error")
+            })?;
 
             for key in keys {
                 result.push(PairingGpgKeyEntry {

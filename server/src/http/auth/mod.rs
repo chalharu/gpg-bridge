@@ -3,6 +3,7 @@ mod daemon_auth;
 mod device_assertion;
 mod error;
 
+pub(crate) use client_jwt::verify_one_token;
 pub use client_jwt::{ClientInfo, ClientJwtAuth};
 pub use daemon_auth::DaemonAuthJws;
 pub use device_assertion::DeviceAssertionAuth;

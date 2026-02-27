@@ -235,6 +235,45 @@ mod tests {
         async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_pairing_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
+            unimplemented!()
+        }
+        async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing_and_cleanup(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<(bool, bool)> {
+            unimplemented!()
+        }
+        async fn update_client_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
@@ -262,6 +301,9 @@ mod tests {
             base_url: "https://api.example.com".to_owned(),
             signing_key_secret: TEST_SECRET.to_owned(),
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
         }
     }

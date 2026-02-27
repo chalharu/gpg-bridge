@@ -40,6 +40,9 @@ pub struct AppState {
     pub base_url: String,
     pub signing_key_secret: String,
     pub device_jwt_validity_seconds: u64,
+    pub pairing_jwt_validity_seconds: u64,
+    pub client_jwt_validity_seconds: u64,
+    pub unconsumed_pairing_limit: i64,
     pub fcm_validator: Arc<dyn FcmValidator>,
 }
 
@@ -112,6 +115,14 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         .route("/device/gpg_key", get(device::list_gpg_keys))
         .route("/device/gpg_key/{keygrip}", delete(device::delete_gpg_key))
         .route("/pairing/gpg-keys", post(pairing::query_gpg_keys))
+        .route("/pairing-token", get(pairing::get_pairing_token))
+        .route("/pairing", post(pairing::pair_device))
+        .route("/pairing", delete(pairing::delete_pairing_by_daemon))
+        .route(
+            "/pairing/{pairing_id}",
+            delete(pairing::delete_pairing_by_phone),
+        )
+        .route("/pairing/refresh", post(pairing::refresh_client_jwt))
         .layer(axum::middleware::from_fn(accept_version_middleware))
         .layer(axum::middleware::from_fn_with_state(
             rl_state,
@@ -247,6 +258,45 @@ mod tests {
         ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
             unimplemented!()
         }
+        async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing_and_cleanup(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<(bool, bool)> {
+            unimplemented!()
+        }
+        async fn update_client_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_pairing_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
+            unimplemented!()
+        }
+        async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
         async fn get_request_by_id(
             &self,
             _request_id: &str,
@@ -369,6 +419,45 @@ mod tests {
         ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
             unimplemented!()
         }
+        async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn delete_client_pairing_and_cleanup(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<(bool, bool)> {
+            unimplemented!()
+        }
+        async fn update_client_jwt_issued_at(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_pairing_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
+            unimplemented!()
+        }
+        async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
         async fn get_request_by_id(
             &self,
             _request_id: &str,
@@ -425,6 +514,9 @@ mod tests {
             rate_limit_sse_max_per_ip: 20,
             rate_limit_sse_max_per_key: 1,
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
         };
 
         let repository = build_repository(&config).await.unwrap();
@@ -435,6 +527,9 @@ mod tests {
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
         };
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
@@ -449,6 +544,9 @@ mod tests {
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
         };
 
@@ -484,6 +582,9 @@ mod tests {
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
         }
     }
