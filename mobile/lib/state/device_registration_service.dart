@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../fcm/fcm_token_service.dart';
 import '../http/device_api_service.dart';
+import '../http/device_jwt_checker.dart';
 import '../security/device_assertion_jwt_service.dart';
 import '../security/keystore_platform_service.dart';
 import '../security/secure_storage_service.dart';
@@ -159,30 +159,21 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
       );
       if (jwt == null) return;
 
-      final parts = jwt.split('.');
-      if (parts.length != 3) return;
-
-      final normalized = base64Url.normalize(parts[1]);
-      final payload =
-          jsonDecode(utf8.decode(base64Url.decode(normalized)))
-              as Map<String, dynamic>;
-      final exp = payload['exp'] as int?;
-      final iat = payload['iat'] as int?;
-      if (exp == null || iat == null) return;
-
-      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final totalValidity = exp - iat;
-      final remaining = exp - now;
-
-      if (remaining > 0 && remaining < totalValidity ~/ 3) {
-        final response = await _deviceApiService.refreshDeviceJwt(
-          currentDeviceJwt: jwt,
-        );
-        await _storageService.writeValue(
-          key: SecureStorageKeys.deviceJwt,
-          value: response.deviceJwt,
-        );
+      if (DeviceJwtChecker.isExpired(jwt)) {
+        await _storageService.deleteValue(key: SecureStorageKeys.deviceJwt);
+        _onRegistrationChanged(false);
+        return;
       }
+
+      if (!DeviceJwtChecker.needsRefresh(jwt)) return;
+
+      final response = await _deviceApiService.refreshDeviceJwt(
+        currentDeviceJwt: jwt,
+      );
+      await _storageService.writeValue(
+        key: SecureStorageKeys.deviceJwt,
+        value: response.deviceJwt,
+      );
     } catch (_) {
       // Best-effort; will retry on next check.
     }

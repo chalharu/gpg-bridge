@@ -3,10 +3,13 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../security/device_assertion_jwt_service.dart';
 import '../security/secure_storage_service.dart';
+import '../state/auth_state.dart';
 import 'api_config.dart';
+import 'api_exception.dart';
 import 'auth_interceptor.dart';
 import 'debug_log_interceptor.dart';
 import 'device_api_service.dart';
+import 'device_jwt_refresh_interceptor.dart';
 import 'error_interceptor.dart';
 import 'token_refresh_interceptor.dart';
 
@@ -56,7 +59,10 @@ TokenRefresher tokenRefresher(Ref ref) {
     final currentJwt = await storageService.readValue(
       key: SecureStorageKeys.deviceJwt,
     );
-    if (currentJwt == null || currentJwt.isEmpty) return false;
+    if (currentJwt == null || currentJwt.isEmpty) {
+      await _clearAuthState(ref, storageService);
+      return false;
+    }
 
     try {
       final response = await deviceApiService.refreshDeviceJwt(
@@ -67,19 +73,30 @@ TokenRefresher tokenRefresher(Ref ref) {
         value: response.deviceJwt,
       );
       return true;
+    } on ApiException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _clearAuthState(ref, storageService);
+      }
+      return false;
     } catch (_) {
       return false;
     }
   };
 }
 
+Future<void> _clearAuthState(Ref ref, SecureStorageService storage) async {
+  await storage.deleteValue(key: SecureStorageKeys.deviceJwt);
+  await ref.read(authStateProvider.notifier).setRegistered(false);
+}
+
 /// Creates and configures the [Dio] HTTP client with all interceptors.
 ///
 /// Interceptor order:
 /// 1. [DebugLogInterceptor] – logs requests/responses in debug builds
-/// 2. [AuthInterceptor] – attaches `Authorization: Bearer` header
-/// 3. [ErrorInterceptor] – parses error responses into [ApiException]
-/// 4. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
+/// 2. [DeviceJwtRefreshInterceptor] – proactively refreshes device_jwt
+/// 3. [AuthInterceptor] – attaches `Authorization: Bearer` header
+/// 4. [ErrorInterceptor] – parses error responses into [ApiException]
+/// 5. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
 @Riverpod(keepAlive: true)
 Dio httpClient(Ref ref) {
   final dio = Dio(
@@ -95,6 +112,14 @@ Dio httpClient(Ref ref) {
 
   dio.interceptors.addAll([
     DebugLogInterceptor(),
+    DeviceJwtRefreshInterceptor(
+      jwtReader: () => ref
+          .read(secureStorageProvider)
+          .readValue(key: SecureStorageKeys.deviceJwt),
+      refreshCallback: () async {
+        await ref.read(tokenRefresherProvider)();
+      },
+    ),
     AuthInterceptor(tokenProvider: ref.watch(tokenProviderProvider)),
     ErrorInterceptor(),
     TokenRefreshInterceptor(
