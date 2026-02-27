@@ -218,6 +218,40 @@ impl SignatureRepository for DeviceMockRepo {
     async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
         Ok(0)
     }
+    async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+    async fn get_pairing_by_id(
+        &self,
+        _: &str,
+    ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
+        unimplemented!()
+    }
+    async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+    async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
+        unimplemented!()
+    }
+    async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+    async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+    async fn delete_client_pairing_and_cleanup(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<(bool, bool)> {
+        unimplemented!()
+    }
+    async fn update_client_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +275,9 @@ fn make_state(repo: impl SignatureRepository + 'static) -> AppState {
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
+        pairing_jwt_validity_seconds: 300,
+        client_jwt_validity_seconds: 31_536_000,
+        unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
     }
 }
@@ -1080,6 +1117,9 @@ async fn delete_public_key_auto_reassign_default_kid() {
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
+        pairing_jwt_validity_seconds: 300,
+        client_jwt_validity_seconds: 31_536_000,
+        unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
     };
     let app = build_test_router(state);
@@ -1186,6 +1226,9 @@ async fn delete_public_key_no_default_kid_reassign_when_not_affected() {
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
+        pairing_jwt_validity_seconds: 300,
+        client_jwt_validity_seconds: 31_536_000,
+        unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
     };
     let app = build_test_router(state);
@@ -1434,6 +1477,9 @@ async fn add_gpg_key_upsert_overwrites_existing() {
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
+        pairing_jwt_validity_seconds: 300,
+        client_jwt_validity_seconds: 31_536_000,
+        unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
     };
     let app = build_test_router(state);
@@ -1608,6 +1654,9 @@ async fn add_gpg_key_multiple_keys_success() {
         base_url: BASE_URL.to_owned(),
         signing_key_secret: SECRET.to_owned(),
         device_jwt_validity_seconds: 31_536_000,
+        pairing_jwt_validity_seconds: 300,
+        client_jwt_validity_seconds: 31_536_000,
+        unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
     };
     let app = build_test_router(state);
