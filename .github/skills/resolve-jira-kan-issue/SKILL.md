@@ -54,6 +54,7 @@ Build, test, format, lint, static analysis, and coverage commands **must** run i
    - For Rust changes: `docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev sh -c "cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo llvm-cov --workspace --summary-only"`.
    - For Flutter changes: `docker run --rm -v "$PWD:/workspace" -w /workspace gpg-bridge-dev sh -c "cd mobile && dart format --output=none --set-exit-if-changed lib test && flutter analyze && flutter test --coverage"`.
    - If coverage is low for the changed area, add/adjust tests and re-run until coverage improves.
+   - **File and function size check**: For each new or modified source file (excluding test files), verify that the file is around 200 lines or fewer and that every function/method is around 20–30 lines. If any file or function exceeds these guidelines, refactor (split files/extract helpers) before proceeding. Use `wc -l` for file counts and an `awk`-based scan for function lengths.
    - All checks must pass before proceeding to review.
 9. **Review** using a **different** subagent (the "review agent").
    - The review agent must **never modify code**. It only inspects and reports findings.
