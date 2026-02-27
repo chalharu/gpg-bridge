@@ -1735,6 +1735,44 @@ async fn add_gpg_key_key_id_too_long_rejected() {
 }
 
 #[tokio::test]
+async fn delete_gpg_key_concurrent_modification_conflict() {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let (sk, _) = make_signing_key_row();
+    let pub_json = jwk_to_json(&pub_jwk).unwrap();
+    let keys = format!(
+        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
+    );
+    let gpg = json!([{
+        "keygrip": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        "key_id": "0xDEAD",
+        "public_key": { "kty": "EC" }
+    }]);
+    let client = make_gpg_client_row("fid-del-conflict", &keys, "enc-1", &gpg.to_string());
+    let mut repo = DeviceMockRepo::with_client(sk, client);
+    repo.force_gpg_update_conflict = true;
+    let state = make_state(repo);
+    let app = build_test_router(state);
+
+    let token = make_device_assertion(
+        &priv_jwk,
+        &kid,
+        "fid-del-conflict",
+        "/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    );
+    let response = app
+        .oneshot(
+            Request::delete("/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn delete_gpg_key_invalid_keygrip_format() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
     let state = make_state(DeviceMockRepo::with_client(sk, client));

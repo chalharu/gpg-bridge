@@ -3,6 +3,7 @@ use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::DeviceAssertionAuth;
+use crate::repository::ClientRow;
 
 use super::{GpgKeyEntry, GpgKeyRegisterRequest};
 
@@ -21,16 +22,7 @@ pub async fn add_gpg_key(
 
     validate_gpg_keys(&body.gpg_keys)?;
 
-    let client = state
-        .repository
-        .get_client_by_id(&auth.client_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::not_found("client not found"))?;
-
-    let existing: Vec<GpgKeyEntry> = serde_json::from_str(&client.gpg_keys)
-        .map_err(|e| AppError::internal(format!("invalid gpg_keys JSON: {e}")))?;
-
+    let (client, existing) = load_client_gpg_keys(&state, &auth.client_id).await?;
     let merged = merge_gpg_keys(existing, body.gpg_keys);
 
     save_gpg_keys(&state, &auth.client_id, &merged, &client.updated_at).await
@@ -88,8 +80,26 @@ fn merge_gpg_keys(existing: Vec<GpgKeyEntry>, new_keys: Vec<GpgKeyEntry>) -> Vec
     merged
 }
 
+/// Load a client row and parse its `gpg_keys` JSON into a `Vec<GpgKeyEntry>`.
+pub(super) async fn load_client_gpg_keys(
+    state: &AppState,
+    client_id: &str,
+) -> Result<(ClientRow, Vec<GpgKeyEntry>), AppError> {
+    let client = state
+        .repository
+        .get_client_by_id(client_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("client not found"))?;
+
+    let keys: Vec<GpgKeyEntry> = serde_json::from_str(&client.gpg_keys)
+        .map_err(|e| AppError::internal(format!("invalid gpg_keys JSON: {e}")))?;
+
+    Ok((client, keys))
+}
+
 /// Serialize keys and persist via optimistic locking.
-async fn save_gpg_keys(
+pub(super) async fn save_gpg_keys(
     state: &AppState,
     client_id: &str,
     keys: &[GpgKeyEntry],
