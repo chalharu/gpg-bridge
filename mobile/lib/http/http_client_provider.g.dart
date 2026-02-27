@@ -10,24 +10,24 @@ part of 'http_client_provider.dart';
 // ignore_for_file: type=lint, type=warning
 /// Provides a callback to generate a device_assertion_jwt.
 ///
-/// Override this provider to supply the actual JWT generation logic
-/// (e.g. signing with the device private key from Keystore / Secure Enclave).
+/// Generates a fresh ES256-signed JWT for each API call using the device
+/// private key from Keystore / Secure Enclave.
 
 @ProviderFor(tokenProvider)
 const tokenProviderProvider = TokenProviderProvider._();
 
 /// Provides a callback to generate a device_assertion_jwt.
 ///
-/// Override this provider to supply the actual JWT generation logic
-/// (e.g. signing with the device private key from Keystore / Secure Enclave).
+/// Generates a fresh ES256-signed JWT for each API call using the device
+/// private key from Keystore / Secure Enclave.
 
 final class TokenProviderProvider
     extends $FunctionalProvider<TokenProvider, TokenProvider, TokenProvider>
     with $Provider<TokenProvider> {
   /// Provides a callback to generate a device_assertion_jwt.
   ///
-  /// Override this provider to supply the actual JWT generation logic
-  /// (e.g. signing with the device private key from Keystore / Secure Enclave).
+  /// Generates a fresh ES256-signed JWT for each API call using the device
+  /// private key from Keystore / Secure Enclave.
   const TokenProviderProvider._()
     : super(
         from: null,
@@ -61,25 +61,37 @@ final class TokenProviderProvider
   }
 }
 
-String _$tokenProviderHash() => r'4c650446be89070259c7c73a00fea157d9706dc0';
+String _$tokenProviderHash() => r'446fffe8031366b86491092e1a18b95953547a1b';
 
 /// Provides a callback to refresh the device_jwt via POST /device/refresh.
 ///
-/// Override this provider to supply the actual refresh logic.
+/// Reads the current device_jwt from secure storage, calls the refresh
+/// endpoint, and stores the new JWT.
+///
+/// Providers are read lazily inside the closure to avoid a circular
+/// dependency with [httpClientProvider] → [deviceApiProvider].
 
 @ProviderFor(tokenRefresher)
 const tokenRefresherProvider = TokenRefresherProvider._();
 
 /// Provides a callback to refresh the device_jwt via POST /device/refresh.
 ///
-/// Override this provider to supply the actual refresh logic.
+/// Reads the current device_jwt from secure storage, calls the refresh
+/// endpoint, and stores the new JWT.
+///
+/// Providers are read lazily inside the closure to avoid a circular
+/// dependency with [httpClientProvider] → [deviceApiProvider].
 
 final class TokenRefresherProvider
     extends $FunctionalProvider<TokenRefresher, TokenRefresher, TokenRefresher>
     with $Provider<TokenRefresher> {
   /// Provides a callback to refresh the device_jwt via POST /device/refresh.
   ///
-  /// Override this provider to supply the actual refresh logic.
+  /// Reads the current device_jwt from secure storage, calls the refresh
+  /// endpoint, and stores the new JWT.
+  ///
+  /// Providers are read lazily inside the closure to avoid a circular
+  /// dependency with [httpClientProvider] → [deviceApiProvider].
   const TokenRefresherProvider._()
     : super(
         from: null,
@@ -113,7 +125,7 @@ final class TokenRefresherProvider
   }
 }
 
-String _$tokenRefresherHash() => r'0a1cf6ef0c16bdd683265f2a275a99e900636394';
+String _$tokenRefresherHash() => r'616900f81f95507ae5ea93ca47f2ed23d639090b';
 
 /// Creates and configures the [Dio] HTTP client with all interceptors.
 ///
