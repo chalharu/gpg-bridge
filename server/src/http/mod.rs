@@ -3,6 +3,7 @@ pub mod auth;
 mod device;
 pub mod fcm;
 mod middleware;
+mod pairing;
 pub mod rate_limit;
 
 use std::sync::Arc;
@@ -107,6 +108,10 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
             "/device/public_key/{kid}",
             delete(device::delete_public_key),
         )
+        .route("/device/gpg_key", post(device::add_gpg_key))
+        .route("/device/gpg_key", get(device::list_gpg_keys))
+        .route("/device/gpg_key/{keygrip}", delete(device::delete_gpg_key))
+        .route("/pairing/gpg-keys", post(pairing::query_gpg_keys))
         .layer(axum::middleware::from_fn(accept_version_middleware))
         .layer(axum::middleware::from_fn_with_state(
             rl_state,
@@ -258,6 +263,15 @@ mod tests {
         ) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn update_client_gpg_keys(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
         async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
@@ -364,6 +378,15 @@ mod tests {
         async fn update_client_public_keys(
             &self,
             _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn update_client_gpg_keys(
+            &self,
             _: &str,
             _: &str,
             _: &str,

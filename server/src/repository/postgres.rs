@@ -244,6 +244,26 @@ impl SignatureRepository for PostgresRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn update_client_gpg_keys(
+        &self,
+        client_id: &str,
+        gpg_keys: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE clients SET gpg_keys = $1, updated_at = $2 WHERE client_id = $3 AND updated_at = $4",
+        )
+        .bind(gpg_keys)
+        .bind(updated_at)
+        .bind(client_id)
+        .bind(expected_updated_at)
+        .execute(&self.pool)
+        .await
+        .context("failed to update client gpg_keys")?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool> {
         let found = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM requests CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e2e_kids::jsonb) = 'array' THEN e2e_kids::jsonb ELSE '[]'::jsonb END) AS elem WHERE requests.status IN ('created', 'pending') AND elem = $1)",

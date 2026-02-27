@@ -134,6 +134,19 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     /// this kid in `e2e_kids`.
     async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool>;
 
+    /// Update gpg_keys for a client.
+    ///
+    /// Uses optimistic locking: the update only succeeds if the current
+    /// `updated_at` matches `expected_updated_at`.  Returns `true` if the
+    /// row was updated, `false` on a concurrent modification.
+    async fn update_client_gpg_keys(
+        &self,
+        client_id: &str,
+        gpg_keys: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool>;
+
     /// Store a JTI for replay prevention. Returns `true` if newly inserted,
     /// `false` if the JTI already exists.
     async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool>;

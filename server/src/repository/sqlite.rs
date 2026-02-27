@@ -244,6 +244,26 @@ impl SignatureRepository for SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn update_client_gpg_keys(
+        &self,
+        client_id: &str,
+        gpg_keys: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE clients SET gpg_keys = $1, updated_at = $2 WHERE client_id = $3 AND updated_at = $4",
+        )
+        .bind(gpg_keys)
+        .bind(updated_at)
+        .bind(client_id)
+        .bind(expected_updated_at)
+        .execute(&self.pool)
+        .await
+        .context("failed to update client gpg_keys")?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool> {
         let count = sqlx::query_scalar::<_, i32>(
             "SELECT EXISTS(SELECT 1 FROM requests, json_each(requests.e2e_kids) AS je WHERE requests.status IN ('created', 'pending') AND je.value = $1)",
