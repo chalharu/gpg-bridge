@@ -10,6 +10,7 @@ use crate::jwt::{PairingClaims, PayloadType, extract_kid, jwk_from_json, verify_
 use crate::repository::{PairingRow, SigningKeyRow};
 
 use super::helpers::build_client_jwt_token;
+use super::notifier::PairedEventData;
 
 // ---------------------------------------------------------------------------
 // POST /pairing
@@ -40,10 +41,15 @@ pub async fn pair_device(
     fetch_and_validate_pairing(&state, &pairing_id).await?;
     consume_and_link_pairing(&state, &pairing_id, &auth.client_id).await?;
 
-    // Build the client_jwt for later SSE delivery to the daemon.
-    // Currently unused until SSE paired-event delivery is implemented.
-    let _client_jwt = build_client_jwt_token(&state, &signing_key, &auth.client_id, &pairing_id)?;
-    // TODO: Deliver _client_jwt to Daemon via SSE paired event.
+    // Build the client_jwt and deliver via SSE paired event.
+    let client_jwt = build_client_jwt_token(&state, &signing_key, &auth.client_id, &pairing_id)?;
+    state.pairing_notifier.notify(
+        &pairing_id,
+        PairedEventData {
+            client_jwt,
+            client_id: auth.client_id.clone(),
+        },
+    );
 
     Ok(Json(PairingResponse {
         ok: true,

@@ -1,7 +1,12 @@
 use clap::Parser;
 use gpg_bridge_server::{
     config::AppConfig,
-    http::{AppState, build_router, fcm::NoopFcmValidator, rate_limit::RateLimitConfig},
+    http::{
+        AppState, build_router,
+        fcm::NoopFcmValidator,
+        pairing::notifier::PairingNotifier,
+        rate_limit::{RateLimitConfig, SseConnectionTracker, config::SseConnectionConfig},
+    },
     observability::init_tracing,
     repository::build_repository,
 };
@@ -48,6 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client_jwt_validity_seconds: config.client_jwt_validity_seconds,
         unconsumed_pairing_limit: config.unconsumed_pairing_limit,
         fcm_validator: std::sync::Arc::new(NoopFcmValidator),
+        sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
+            max_per_ip: config.rate_limit_sse_max_per_ip,
+            max_per_key: config.rate_limit_sse_max_per_key,
+        }),
+        pairing_notifier: PairingNotifier::new(),
     };
     let rate_limit_config = RateLimitConfig::from_app_config(&config);
     let app = build_router(state, rate_limit_config);

@@ -296,6 +296,9 @@ mod tests {
     }
 
     fn make_state(repo: MockRepo) -> AppState {
+        use crate::http::pairing::notifier::PairingNotifier;
+        use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+
         AppState {
             repository: Arc::new(repo),
             base_url: "https://api.example.com".to_owned(),
@@ -305,6 +308,11 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
+            sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
         }
     }
 
