@@ -9,8 +9,8 @@ class AuthState extends _$AuthState {
   @override
   Future<bool> build() async {
     final storage = ref.read(secureStorageProvider);
-    final token = await storage.readValue(key: SecureStorageKeys.deviceToken);
-    return token != null && token.isNotEmpty;
+    final jwt = await storage.readValue(key: SecureStorageKeys.deviceJwt);
+    return jwt != null && jwt.isNotEmpty;
   }
 
   Future<void> setRegistered(bool registered) async {
