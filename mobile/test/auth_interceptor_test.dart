@@ -6,7 +6,7 @@ void main() {
   group('AuthInterceptor', () {
     test('adds Bearer header when token provider returns a token', () async {
       final interceptor = AuthInterceptor(
-        tokenProvider: () async => 'test-jwt-token',
+        tokenProvider: (_) async => 'test-jwt-token',
       );
 
       final options = RequestOptions(path: '/test');
@@ -21,7 +21,7 @@ void main() {
     });
 
     test('does not add header when token provider returns null', () async {
-      final interceptor = AuthInterceptor(tokenProvider: () async => null);
+      final interceptor = AuthInterceptor(tokenProvider: (_) async => null);
 
       final options = RequestOptions(path: '/test');
       late RequestOptions captured;
@@ -37,7 +37,7 @@ void main() {
     test(
       'does not add header when token provider returns empty string',
       () async {
-        final interceptor = AuthInterceptor(tokenProvider: () async => '');
+        final interceptor = AuthInterceptor(tokenProvider: (_) async => '');
 
         final options = RequestOptions(path: '/test');
         late RequestOptions captured;
@@ -53,7 +53,7 @@ void main() {
 
     test('rejects request when token provider throws', () async {
       final interceptor = AuthInterceptor(
-        tokenProvider: () async => throw Exception('key store failure'),
+        tokenProvider: (_) async => throw Exception('key store failure'),
       );
 
       final options = RequestOptions(path: '/test');
@@ -67,6 +67,30 @@ void main() {
       expect(rejectedError, isNotNull);
       expect(rejectedError!.message, 'failed to generate auth token');
       expect(rejectedError!.error, isA<Exception>());
+    });
+
+    test('skips token injection when skipAuth extra flag is set', () async {
+      var tokenCalled = false;
+      final interceptor = AuthInterceptor(
+        tokenProvider: (_) async {
+          tokenCalled = true;
+          return 'should-not-be-used';
+        },
+      );
+
+      final options = RequestOptions(
+        path: '/device',
+        extra: {skipAuthExtraKey: true},
+      );
+      late RequestOptions captured;
+
+      await interceptor.onRequest(
+        options,
+        _CaptureRequestHandler(onNext: (opts) => captured = opts),
+      );
+
+      expect(tokenCalled, isFalse);
+      expect(captured.headers.containsKey('Authorization'), isFalse);
     });
   });
 }

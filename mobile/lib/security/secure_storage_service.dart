@@ -20,6 +20,10 @@ class SecureStorageException implements Exception {
 
 abstract final class SecureStorageKeys {
   static const String deviceToken = 'device_token';
+  static const String deviceJwt = 'device_jwt';
+  static const String deviceId = 'device_id';
+  static const String fcmToken = 'fcm_token';
+  static const String sigKid = 'sig_kid';
 }
 
 abstract interface class SecureStorageBackend {
