@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use super::{
-    ClientPairingRow, ClientRow, MIGRATOR, RequestRow, SignatureRepository, SigningKeyRow,
+    ClientPairingRow, ClientRow, MIGRATOR, PairingRow, RequestRow, SignatureRepository,
+    SigningKeyRow,
 };
 
 #[derive(Debug, Clone)]
@@ -211,6 +212,154 @@ impl SignatureRepository for PostgresRepository {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    async fn create_client_pairing(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+        client_jwt_issued_at: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO client_pairings (client_id, pairing_id, client_jwt_issued_at) VALUES ($1, $2, $3)",
+        )
+        .bind(client_id)
+        .bind(pairing_id)
+        .bind(client_jwt_issued_at)
+        .execute(&self.pool)
+        .await
+        .context("failed to create client pairing")?;
+        Ok(())
+    }
+
+    async fn delete_client_pairing(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+    ) -> anyhow::Result<bool> {
+        let result =
+            sqlx::query("DELETE FROM client_pairings WHERE client_id = $1 AND pairing_id = $2")
+                .bind(client_id)
+                .bind(pairing_id)
+                .execute(&self.pool)
+                .await
+                .context("failed to delete client pairing")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_client_pairing_and_cleanup(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+    ) -> anyhow::Result<(bool, bool)> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let del =
+            sqlx::query("DELETE FROM client_pairings WHERE client_id = $1 AND pairing_id = $2")
+                .bind(client_id)
+                .bind(pairing_id)
+                .execute(&mut *tx)
+                .await
+                .context("failed to delete client pairing")?;
+        let pairing_deleted = del.rows_affected() > 0;
+
+        let mut client_deleted = false;
+        if pairing_deleted {
+            let remaining = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM client_pairings WHERE client_id = $1",
+            )
+            .bind(client_id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to count remaining pairings")?;
+
+            if remaining == 0 {
+                sqlx::query("DELETE FROM clients WHERE client_id = $1")
+                    .bind(client_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("failed to delete client")?;
+                client_deleted = true;
+            }
+        }
+
+        tx.commit().await.context("failed to commit transaction")?;
+        Ok((pairing_deleted, client_deleted))
+    }
+
+    async fn update_client_jwt_issued_at(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+        issued_at: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE client_pairings SET client_jwt_issued_at = $1 WHERE client_id = $2 AND pairing_id = $3",
+        )
+        .bind(issued_at)
+        .bind(client_id)
+        .bind(pairing_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update client_jwt_issued_at")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn create_pairing(&self, pairing_id: &str, expired: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO pairings (pairing_id, expired) VALUES ($1, $2)")
+            .bind(pairing_id)
+            .bind(expired)
+            .execute(&self.pool)
+            .await
+            .context("failed to create pairing")?;
+        Ok(())
+    }
+
+    async fn get_pairing_by_id(&self, pairing_id: &str) -> anyhow::Result<Option<PairingRow>> {
+        let row = sqlx::query_as::<_, PgPairingRow>(
+            "SELECT pairing_id, expired, client_id FROM pairings WHERE pairing_id = $1",
+        )
+        .bind(pairing_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get pairing by id")?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn consume_pairing(&self, pairing_id: &str, client_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE pairings SET client_id = $1 WHERE pairing_id = $2 AND client_id IS NULL",
+        )
+        .bind(client_id)
+        .bind(pairing_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to consume pairing")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn count_unconsumed_pairings(&self, now: &str) -> anyhow::Result<i64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pairings WHERE client_id IS NULL AND expired > $1",
+        )
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count unconsumed pairings")?;
+        Ok(count)
+    }
+
+    async fn delete_expired_pairings(&self, now: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM pairings WHERE expired < $1")
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete expired pairings")?;
+        Ok(result.rows_affected())
+    }
+
     async fn get_request_by_id(&self, request_id: &str) -> anyhow::Result<Option<RequestRow>> {
         let row = sqlx::query_as::<_, PgRequestRow>(
             "SELECT request_id, status, daemon_public_key FROM requests WHERE request_id = $1",
@@ -365,6 +514,23 @@ impl From<PgClientPairingRow> for ClientPairingRow {
 }
 
 #[derive(sqlx::FromRow)]
+struct PgPairingRow {
+    pairing_id: String,
+    expired: String,
+    client_id: Option<String>,
+}
+
+impl From<PgPairingRow> for PairingRow {
+    fn from(r: PgPairingRow) -> Self {
+        Self {
+            pairing_id: r.pairing_id,
+            expired: r.expired,
+            client_id: r.client_id,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
 struct PgRequestRow {
     request_id: String,
     status: String,
@@ -437,6 +603,9 @@ mod tests {
             rate_limit_sse_max_per_ip: 20,
             rate_limit_sse_max_per_key: 1,
             device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            unconsumed_pairing_limit: 100,
         };
 
         let repository = build_repository(&config).await.unwrap();
