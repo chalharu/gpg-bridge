@@ -260,7 +260,7 @@ void main() {
       },
     );
 
-    test('checkAndRefreshDeviceJwt does nothing when JWT is expired', () async {
+    test('checkAndRefreshDeviceJwt clears auth when JWT is expired', () async {
       final service = createService();
 
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -273,6 +273,14 @@ void main() {
 
       await service.checkAndRefreshDeviceJwt();
 
+      // JWT should be deleted from storage.
+      expect(
+        await storageService.readValue(key: SecureStorageKeys.deviceJwt),
+        isNull,
+      );
+      // Auth state should be false (via onRegistrationChanged callback).
+      expect(registeredState, isFalse);
+      // Refresh API should NOT have been called.
       expect(mockApi.refreshJwtCalled, isFalse);
     });
 

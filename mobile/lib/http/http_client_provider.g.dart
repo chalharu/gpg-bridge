@@ -125,15 +125,16 @@ final class TokenRefresherProvider
   }
 }
 
-String _$tokenRefresherHash() => r'616900f81f95507ae5ea93ca47f2ed23d639090b';
+String _$tokenRefresherHash() => r'd216357c61e681bd0ef280b76c2f9dc41735d733';
 
 /// Creates and configures the [Dio] HTTP client with all interceptors.
 ///
 /// Interceptor order:
 /// 1. [DebugLogInterceptor] – logs requests/responses in debug builds
-/// 2. [AuthInterceptor] – attaches `Authorization: Bearer` header
-/// 3. [ErrorInterceptor] – parses error responses into [ApiException]
-/// 4. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
+/// 2. [DeviceJwtRefreshInterceptor] – proactively refreshes device_jwt
+/// 3. [AuthInterceptor] – attaches `Authorization: Bearer` header
+/// 4. [ErrorInterceptor] – parses error responses into [ApiException]
+/// 5. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
 
 @ProviderFor(httpClient)
 const httpClientProvider = HttpClientProvider._();
@@ -142,9 +143,10 @@ const httpClientProvider = HttpClientProvider._();
 ///
 /// Interceptor order:
 /// 1. [DebugLogInterceptor] – logs requests/responses in debug builds
-/// 2. [AuthInterceptor] – attaches `Authorization: Bearer` header
-/// 3. [ErrorInterceptor] – parses error responses into [ApiException]
-/// 4. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
+/// 2. [DeviceJwtRefreshInterceptor] – proactively refreshes device_jwt
+/// 3. [AuthInterceptor] – attaches `Authorization: Bearer` header
+/// 4. [ErrorInterceptor] – parses error responses into [ApiException]
+/// 5. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
 
 final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
     with $Provider<Dio> {
@@ -152,9 +154,10 @@ final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
   ///
   /// Interceptor order:
   /// 1. [DebugLogInterceptor] – logs requests/responses in debug builds
-  /// 2. [AuthInterceptor] – attaches `Authorization: Bearer` header
-  /// 3. [ErrorInterceptor] – parses error responses into [ApiException]
-  /// 4. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
+  /// 2. [DeviceJwtRefreshInterceptor] – proactively refreshes device_jwt
+  /// 3. [AuthInterceptor] – attaches `Authorization: Bearer` header
+  /// 4. [ErrorInterceptor] – parses error responses into [ApiException]
+  /// 5. [TokenRefreshInterceptor] – retries on 401 after device_jwt refresh
   const HttpClientProvider._()
     : super(
         from: null,
@@ -188,4 +191,4 @@ final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
   }
 }
 
-String _$httpClientHash() => r'55015cf5a7e64a80f505c6669da8bc20a46ffae1';
+String _$httpClientHash() => r'38f714957f6b8b6a77582862e712d24b0d46a66e';
