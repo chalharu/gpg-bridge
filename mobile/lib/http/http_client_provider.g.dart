@@ -191,4 +191,4 @@ final class HttpClientProvider extends $FunctionalProvider<Dio, Dio, Dio>
   }
 }
 
-String _$httpClientHash() => r'38f714957f6b8b6a77582862e712d24b0d46a66e';
+String _$httpClientHash() => r'748b60c0a1f7875c198c91c38dbfe3265d39949a';

@@ -24,6 +24,12 @@ abstract final class SecureStorageKeys {
   static const String deviceId = 'device_id';
   static const String fcmToken = 'fcm_token';
   static const String sigKid = 'sig_kid';
+
+  /// Prefix for GPG private key storage. Full key: "gpg_private_{keygrip}".
+  static const String gpgPrivateKeyPrefix = 'gpg_private_';
+
+  /// Prefix for E2E private key storage. Full key: "e2e_private_{kid}".
+  static const String e2ePrivateKeyPrefix = 'e2e_private_';
 }
 
 abstract interface class SecureStorageBackend {
