@@ -8,7 +8,16 @@ mod config;
 mod gpg;
 mod http;
 mod ipc;
+// Pairing flow, token storage, and token refresh modules are ready for
+// integration once CLI subcommand support is added.
+// TODO(KAN-38): Remove #[allow(dead_code)] when these modules are wired into CLI subcommands.
+#[allow(dead_code)]
+mod pairing;
 mod sse;
+#[allow(dead_code)]
+mod token_refresh;
+#[allow(dead_code)]
+mod token_store;
 
 use config::{
     build_app_config, load_file_config, parse_cli_from, resolve_config_path, setup_tracing,
