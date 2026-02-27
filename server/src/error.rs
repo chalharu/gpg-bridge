@@ -21,6 +21,7 @@ enum AppErrorKind {
     Validation,
     Conflict,
     NotFound,
+    Gone,
     Database,
     Internal,
     TooManyRequests,
@@ -107,6 +108,15 @@ impl AppError {
         }
     }
 
+    pub fn gone(detail: impl Into<String>) -> Self {
+        Self {
+            kind: AppErrorKind::Gone,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
     pub fn too_many_requests(detail: impl Into<String>) -> Self {
         Self {
             kind: AppErrorKind::TooManyRequests,
@@ -144,6 +154,7 @@ impl AppError {
             AppErrorKind::Validation => StatusCode::BAD_REQUEST,
             AppErrorKind::Conflict => StatusCode::CONFLICT,
             AppErrorKind::NotFound => StatusCode::NOT_FOUND,
+            AppErrorKind::Gone => StatusCode::GONE,
             AppErrorKind::Database => StatusCode::SERVICE_UNAVAILABLE,
             AppErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             AppErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
@@ -157,6 +168,7 @@ impl AppError {
             AppErrorKind::Validation => "Validation error",
             AppErrorKind::Conflict => "Conflict",
             AppErrorKind::NotFound => "Not found",
+            AppErrorKind::Gone => "Gone",
             AppErrorKind::Database => "Database error",
             AppErrorKind::Internal => "Internal server error",
             AppErrorKind::TooManyRequests => "Too many requests",
@@ -170,6 +182,7 @@ impl AppError {
             AppErrorKind::Validation => "https://gpg-bridge.dev/problems/validation",
             AppErrorKind::Conflict => "https://gpg-bridge.dev/problems/conflict",
             AppErrorKind::NotFound => "https://gpg-bridge.dev/problems/not-found",
+            AppErrorKind::Gone => "https://gpg-bridge.dev/problems/gone",
             AppErrorKind::Database => "https://gpg-bridge.dev/problems/database",
             AppErrorKind::Internal => "https://gpg-bridge.dev/problems/internal",
             AppErrorKind::TooManyRequests => "https://gpg-bridge.dev/problems/rate-limit",

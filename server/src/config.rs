@@ -19,6 +19,9 @@ pub struct AppConfig {
     pub rate_limit_sse_max_per_ip: u32,
     pub rate_limit_sse_max_per_key: u32,
     pub device_jwt_validity_seconds: u64,
+    pub pairing_jwt_validity_seconds: u64,
+    pub client_jwt_validity_seconds: u64,
+    pub unconsumed_pairing_limit: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +122,12 @@ impl AppConfig {
             parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_KEY", "1")?;
         let device_jwt_validity_seconds: u64 =
             parse_env(lookup, "SERVER_DEVICE_JWT_VALIDITY_SECONDS", "31536000")?;
+        let pairing_jwt_validity_seconds: u64 =
+            parse_env(lookup, "SERVER_PAIRING_JWT_VALIDITY_SECONDS", "300")?;
+        let client_jwt_validity_seconds: u64 =
+            parse_env(lookup, "SERVER_CLIENT_JWT_VALIDITY_SECONDS", "31536000")?;
+        let unconsumed_pairing_limit: i64 =
+            parse_env(lookup, "SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
 
         let config = Self {
             server_host,
@@ -138,12 +147,16 @@ impl AppConfig {
             rate_limit_sse_max_per_ip,
             rate_limit_sse_max_per_key,
             device_jwt_validity_seconds,
+            pairing_jwt_validity_seconds,
+            client_jwt_validity_seconds,
+            unconsumed_pairing_limit,
         };
 
         validate_db_pool(&config)?;
         validate_signing_key_secret(&config.signing_key_secret)?;
         validate_rate_limit(&config)?;
         validate_device_jwt_validity(&config)?;
+        validate_pairing_config(&config)?;
 
         Ok(config)
     }
@@ -182,6 +195,25 @@ fn validate_device_jwt_validity(config: &AppConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_pairing_config(config: &AppConfig) -> anyhow::Result<()> {
+    if config.pairing_jwt_validity_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_PAIRING_JWT_VALIDITY_SECONDS must be greater than 0"
+        ));
+    }
+    if config.client_jwt_validity_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_CLIENT_JWT_VALIDITY_SECONDS must be greater than 0"
+        ));
+    }
+    if config.unconsumed_pairing_limit <= 0 {
+        return Err(anyhow!(
+            "SERVER_UNCONSUMED_PAIRING_LIMIT must be greater than 0"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +242,9 @@ mod tests {
         assert_eq!(config.rate_limit_sse_max_per_ip, 20);
         assert_eq!(config.rate_limit_sse_max_per_key, 1);
         assert_eq!(config.device_jwt_validity_seconds, 31_536_000);
+        assert_eq!(config.pairing_jwt_validity_seconds, 300);
+        assert_eq!(config.client_jwt_validity_seconds, 31_536_000);
+        assert_eq!(config.unconsumed_pairing_limit, 100);
     }
 
     #[test]

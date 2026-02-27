@@ -44,6 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_url: config.base_url.clone(),
         signing_key_secret: config.signing_key_secret.clone(),
         device_jwt_validity_seconds: config.device_jwt_validity_seconds,
+        pairing_jwt_validity_seconds: config.pairing_jwt_validity_seconds,
+        client_jwt_validity_seconds: config.client_jwt_validity_seconds,
+        unconsumed_pairing_limit: config.unconsumed_pairing_limit,
         fcm_validator: std::sync::Arc::new(NoopFcmValidator),
     };
     let rate_limit_config = RateLimitConfig::from_app_config(&config);
