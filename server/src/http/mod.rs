@@ -5,6 +5,7 @@ pub mod fcm;
 mod middleware;
 pub mod pairing;
 pub mod rate_limit;
+pub mod signing;
 
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ pub struct AppState {
     pub device_jwt_validity_seconds: u64,
     pub pairing_jwt_validity_seconds: u64,
     pub client_jwt_validity_seconds: u64,
+    pub request_jwt_validity_seconds: u64,
     pub unconsumed_pairing_limit: i64,
     pub fcm_validator: Arc<dyn FcmValidator>,
     pub sse_tracker: SseConnectionTracker,
@@ -128,6 +130,7 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
             delete(pairing::delete_pairing_by_phone),
         )
         .route("/pairing/refresh", post(pairing::refresh_client_jwt))
+        .route("/sign-request", post(signing::post_sign_request))
         .layer(axum::middleware::from_fn(accept_version_middleware));
 
     // SSE routes (no accept_version_middleware).
@@ -342,6 +345,22 @@ mod tests {
         async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
             unimplemented!()
         }
+        async fn create_request(
+            &self,
+            _: &crate::repository::CreateRequestRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn count_pending_requests_for_pairing(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -503,6 +522,22 @@ mod tests {
         async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
             unimplemented!()
         }
+        async fn create_request(
+            &self,
+            _: &crate::repository::CreateRequestRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn count_pending_requests_for_pairing(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -527,6 +562,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
         };
 
@@ -540,6 +576,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
@@ -562,6 +599,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
@@ -605,6 +643,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {

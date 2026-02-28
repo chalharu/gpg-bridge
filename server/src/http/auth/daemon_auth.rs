@@ -274,6 +274,22 @@ mod tests {
         ) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn create_request(
+            &self,
+            _: &crate::repository::CreateRequestRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn count_pending_requests_for_pairing(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
@@ -306,6 +322,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
             sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
