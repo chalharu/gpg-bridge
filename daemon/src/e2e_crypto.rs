@@ -107,6 +107,16 @@ pub(crate) fn encrypt_jwe_a256kw(
         .map_err(|e| anyhow!("JWE encryption failed: {e}"))
 }
 
+/// Decrypt a JWE compact serialization using ECDH-ES+A256KW + A256GCM.
+pub(crate) fn decrypt_jwe(jwe_compact: &str, private_jwk: &Jwk) -> anyhow::Result<Vec<u8>> {
+    let decrypter = EcdhEsJweAlgorithm::EcdhEsA256kw
+        .decrypter_from_jwk(private_jwk)
+        .map_err(|e| anyhow!("failed to create ECDH-ES+A256KW decrypter: {e}"))?;
+    let (plaintext, _header) = jwe::deserialize_compact(jwe_compact, &*decrypter)
+        .map_err(|e| anyhow!("JWE decryption failed: {e}"))?;
+    Ok(plaintext)
+}
+
 /// Extract the `exp` claim from a JWT without verifying the signature.
 pub(crate) fn extract_jwt_exp(token: &str) -> anyhow::Result<i64> {
     let parts: Vec<&str> = token.splitn(4, '.').collect();
@@ -287,5 +297,28 @@ mod tests {
         let invalid_key = serde_json::json!({"kty": "oct"});
         let result = encrypt_jwe_a256kw(&invalid_key, b"data");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_jwe_roundtrip() {
+        let (private, public) = generate_ecdh_keypair().unwrap();
+        let plaintext = b"test decrypt function";
+        let jwe_token = encrypt_jwe_a256kw(&public, plaintext).unwrap();
+        let recovered = decrypt_jwe(&jwe_token, &private).unwrap();
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn decrypt_jwe_with_wrong_key_fails() {
+        let (_private1, public1) = generate_ecdh_keypair().unwrap();
+        let (private2, _public2) = generate_ecdh_keypair().unwrap();
+        let jwe_token = encrypt_jwe_a256kw(&public1, b"secret").unwrap();
+        assert!(decrypt_jwe(&jwe_token, &private2).is_err());
+    }
+
+    #[test]
+    fn decrypt_jwe_with_invalid_token_fails() {
+        let (private, _public) = generate_ecdh_keypair().unwrap();
+        assert!(decrypt_jwe("not.a.valid.jwe.token", &private).is_err());
     }
 }
