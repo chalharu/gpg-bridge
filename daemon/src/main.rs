@@ -18,6 +18,7 @@ mod ipc;
 #[allow(dead_code)]
 mod pairing;
 mod sexp;
+mod sign_event_sse;
 mod sign_flow;
 mod sse;
 #[allow(dead_code)]
