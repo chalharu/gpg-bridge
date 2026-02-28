@@ -7,6 +7,7 @@ use tracing::{info, warn};
 
 mod assuan;
 mod config;
+mod e2e_crypto;
 mod gpg;
 mod gpg_key_cache;
 mod http;
@@ -17,6 +18,7 @@ mod ipc;
 #[allow(dead_code)]
 mod pairing;
 mod sexp;
+mod sign_flow;
 mod sse;
 #[allow(dead_code)]
 mod token_refresh;
@@ -92,6 +94,8 @@ async fn main() -> anyhow::Result<()> {
         &config.socket_path,
         gpg_key_cache,
         token_store_path,
+        http_client.clone(),
+        config.server_url.clone(),
     ));
 
     info!(

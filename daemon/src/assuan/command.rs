@@ -37,6 +37,8 @@ pub(super) enum Command {
         algorithm: u32,
         hash_hex: String,
     },
+    Pksign,
+    Cancel,
     Unknown {
         name: String,
     },
@@ -76,6 +78,8 @@ impl Command {
             "SIGKEY" => parse_sigkey(args),
             "SETKEYDESC" => parse_setkeydesc(args),
             "SETHASH" => parse_sethash(args),
+            "PKSIGN" => Self::Pksign,
+            "CANCEL" => Self::Cancel,
             _ => Self::Unknown {
                 name: cmd.to_owned(),
             },
@@ -607,5 +611,33 @@ mod tests {
                 name: "SETHASH".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn parse_pksign() {
+        assert_eq!(Command::parse("PKSIGN"), Command::Pksign);
+    }
+
+    #[test]
+    fn parse_pksign_case_insensitive() {
+        assert_eq!(Command::parse("pksign"), Command::Pksign);
+        assert_eq!(Command::parse("PkSign"), Command::Pksign);
+    }
+
+    #[test]
+    fn parse_pksign_with_options_ignored() {
+        // PKSIGN can have options and cache_nonce, but we don't use them
+        assert_eq!(Command::parse("PKSIGN --something"), Command::Pksign);
+    }
+
+    #[test]
+    fn parse_cancel() {
+        assert_eq!(Command::parse("CANCEL"), Command::Cancel);
+    }
+
+    #[test]
+    fn parse_cancel_case_insensitive() {
+        assert_eq!(Command::parse("cancel"), Command::Cancel);
+        assert_eq!(Command::parse("Cancel"), Command::Cancel);
     }
 }

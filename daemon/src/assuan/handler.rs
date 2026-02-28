@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::command::Command;
 use super::response::Response;
 use crate::gpg_key_cache::GpgKeyCache;
+use crate::sign_flow;
 
 /// Error code for unknown IPC command (e.g., unknown GETINFO subcommand).
 ///
@@ -30,8 +31,20 @@ const GPG_ERR_NO_SECKEY: u32 = 17;
 /// No data available.
 const GPG_ERR_NO_DATA: u32 = 58;
 
+/// Timeout (used as PKSIGN placeholder until KAN-39 adds SSE waiting).
+const GPG_ERR_TIMEOUT: u32 = 62;
+
 /// Invalid length (e.g., SETHASH with wrong hash byte count).
 const GPG_ERR_INV_LENGTH: u32 = 71;
+
+/// Operation cancelled.
+const GPG_ERR_CANCELED: u32 = 99;
+
+/// Missing value (e.g., SETHASH not called before PKSIGN).
+const GPG_ERR_MISSING_VALUE: u32 = 178;
+
+/// General error for unclassified failures.
+const GPG_ERR_GENERAL: u32 = 1;
 
 /// Immutable session configuration shared across all commands in a connection.
 #[derive(Debug, Clone)]
@@ -39,6 +52,8 @@ pub(crate) struct SessionContext {
     socket_path: String,
     gpg_key_cache: Arc<GpgKeyCache>,
     token_store_path: PathBuf,
+    pub(super) http_client: reqwest::Client,
+    pub(super) server_url: String,
 }
 
 impl SessionContext {
@@ -46,11 +61,15 @@ impl SessionContext {
         socket_path: &str,
         gpg_key_cache: Arc<GpgKeyCache>,
         token_store_path: PathBuf,
+        http_client: reqwest::Client,
+        server_url: String,
     ) -> Self {
         Self {
             socket_path: socket_path.to_owned(),
             gpg_key_cache,
             token_store_path,
+            http_client,
+            server_url,
         }
     }
 }
@@ -63,6 +82,7 @@ pub(super) struct SessionState {
     key_description: Option<String>,
     hash_algorithm: Option<u32>,
     hash_value: Option<Vec<u8>>,
+    pub(super) sign_flow: Option<sign_flow::SignFlowState>,
 }
 
 impl SessionState {
@@ -80,6 +100,7 @@ impl SessionState {
         self.key_description = None;
         self.hash_algorithm = None;
         self.hash_value = None;
+        self.sign_flow = None;
     }
 }
 
@@ -133,6 +154,8 @@ pub(super) async fn handle(
             algorithm,
             hash_hex,
         } => handle_sethash(*algorithm, hash_hex, state),
+        Command::Pksign => handle_pksign(context, state).await,
+        Command::Cancel => handle_cancel(context, state).await,
         Command::Unknown { .. } => Response::Err {
             code: GPG_ERR_ASS_UNKNOWN_CMD,
             message: "unknown IPC command".to_owned(),
@@ -296,6 +319,92 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+async fn handle_pksign(context: &SessionContext, state: &mut SessionState) -> Response {
+    let keygrip = match &state.signing_keygrip {
+        Some(kg) => kg.clone(),
+        None => return err_response(GPG_ERR_NO_SECKEY, "No secret key"),
+    };
+    let algorithm = match state.hash_algorithm {
+        Some(a) => a,
+        None => return err_response(GPG_ERR_MISSING_VALUE, "Missing hash value"),
+    };
+    let hash_value = match &state.hash_value {
+        Some(h) => h.clone(),
+        None => return err_response(GPG_ERR_MISSING_VALUE, "Missing hash value"),
+    };
+    let algo_name = match sign_flow::algo_number_to_name(algorithm) {
+        Some(n) => n,
+        None => return err_response(GPG_ERR_GENERAL, "Unsupported hash algorithm"),
+    };
+    let key_id = match resolve_key_id(&keygrip, context).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match execute_sign_flow(context, state, &hash_value, algo_name, &key_id).await {
+        Ok(()) => {
+            // TODO(KAN-39): Wait for SSE signature result and return D <signature> + OK
+            err_response(GPG_ERR_TIMEOUT, "Timeout waiting for signature approval")
+        }
+        Err(err) => {
+            tracing::warn!(?err, "sign flow failed");
+            err_response(GPG_ERR_GENERAL, "Sign request failed")
+        }
+    }
+}
+
+async fn handle_cancel(context: &SessionContext, state: &mut SessionState) -> Response {
+    if let Some(flow_state) = state.sign_flow.take()
+        && let Err(err) = sign_flow::cancel(&context.http_client, &flow_state).await
+    {
+        tracing::warn!(?err, "sign flow cancel request failed");
+    }
+    err_response(GPG_ERR_CANCELED, "Operation cancelled")
+}
+
+async fn resolve_key_id(keygrip: &str, context: &SessionContext) -> Result<String, Response> {
+    match context
+        .gpg_key_cache
+        .find_by_keygrip(keygrip, &context.token_store_path)
+        .await
+    {
+        Ok(Some(entry)) => Ok(entry.key_id),
+        _ => Err(err_response(GPG_ERR_NO_SECKEY, "No secret key")),
+    }
+}
+
+async fn execute_sign_flow(
+    context: &SessionContext,
+    state: &mut SessionState,
+    hash_value: &[u8],
+    algo_name: &str,
+    key_id: &str,
+) -> anyhow::Result<()> {
+    let (flow_state, e2e_keys) = sign_flow::run_phase1(
+        &context.http_client,
+        &context.server_url,
+        &context.token_store_path,
+    )
+    .await?;
+    sign_flow::run_phase2(
+        &context.http_client,
+        &flow_state,
+        &e2e_keys,
+        hash_value,
+        algo_name,
+        key_id,
+    )
+    .await?;
+    state.sign_flow = Some(flow_state);
+    Ok(())
+}
+
+fn err_response(code: u32, message: &str) -> Response {
+    Response::Err {
+        code,
+        message: message.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +415,13 @@ mod tests {
             "http://localhost:0".to_owned(),
             None,
         );
-        SessionContext::new("/tmp/test.sock", cache, PathBuf::from("/tmp/test-tokens"))
+        SessionContext::new(
+            "/tmp/test.sock",
+            cache,
+            PathBuf::from("/tmp/test-tokens"),
+            reqwest::Client::new(),
+            "http://localhost:0".to_owned(),
+        )
     }
 
     #[tokio::test]
@@ -632,5 +747,106 @@ mod tests {
     #[test]
     fn hex_to_bytes_invalid_chars() {
         assert_eq!(hex_to_bytes("GGGG"), None);
+    }
+
+    #[tokio::test]
+    async fn handle_pksign_without_keygrip_returns_no_seckey() {
+        let mut state = SessionState::new();
+        state.hash_algorithm = Some(8);
+        state.hash_value = Some(vec![0u8; 32]);
+        let response = handle(&Command::Pksign, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_NO_SECKEY,
+                message: "No secret key".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_pksign_without_hash_returns_missing_value() {
+        let mut state = SessionState::new();
+        state.signing_keygrip = Some("ABCD1234".to_owned());
+        let response = handle(&Command::Pksign, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_MISSING_VALUE,
+                message: "Missing hash value".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_pksign_without_hash_value_returns_missing_value() {
+        let mut state = SessionState::new();
+        state.signing_keygrip = Some("ABCD1234".to_owned());
+        state.hash_algorithm = Some(8);
+        // hash_value is None
+        let response = handle(&Command::Pksign, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_MISSING_VALUE,
+                message: "Missing hash value".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_cancel_returns_canceled() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::Cancel, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_CANCELED,
+                message: "Operation cancelled".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_reset_clears_sign_flow() {
+        let mut state = SessionState::new();
+        // Simulate having a sign flow (we can't easily construct one here,
+        // but reset should handle None gracefully)
+        assert!(state.sign_flow.is_none());
+        handle(&Command::Reset, &test_context(), &mut state).await;
+        assert!(state.sign_flow.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_pksign_unsupported_algo_returns_general_error() {
+        let mut state = SessionState::new();
+        state.signing_keygrip = Some("ABCD1234".to_owned());
+        state.hash_algorithm = Some(255); // unknown algorithm
+        state.hash_value = Some(vec![0u8; 32]);
+        let response = handle(&Command::Pksign, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_GENERAL,
+                message: "Unsupported hash algorithm".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_pksign_with_valid_params_but_unknown_key_returns_no_seckey() {
+        let mut state = SessionState::new();
+        state.signing_keygrip = Some("DEADBEEF".to_owned());
+        state.hash_algorithm = Some(8); // sha256
+        state.hash_value = Some(vec![0u8; 32]);
+        // test_context points to localhost:0 so find_by_keygrip will fail
+        let response = handle(&Command::Pksign, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: GPG_ERR_NO_SECKEY,
+                message: "No secret key".to_owned(),
+            }
+        );
     }
 }
