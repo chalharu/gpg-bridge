@@ -138,6 +138,84 @@ pub(crate) async fn send_post_json_with_retry(
     }
 }
 
+/// Send a PATCH request with JSON body, retrying on 5xx/429.
+///
+/// Returns the HTTP status code on success (2xx) or 409 Conflict.
+pub(crate) async fn send_patch_json_with_retry(
+    client: &Client,
+    url: &str,
+    bearer: Option<&HeaderValue>,
+    body: &serde_json::Value,
+) -> anyhow::Result<u16> {
+    let mut attempt = 0;
+
+    loop {
+        let mut request = client.patch(url).json(body);
+
+        if let Some(value) = bearer {
+            request = request.header(AUTHORIZATION, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to send PATCH to {url}: {error}"))?;
+
+        let status = response.status();
+
+        if status.is_success() || status == StatusCode::CONFLICT {
+            return Ok(status.as_u16());
+        }
+
+        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
+            attempt += 1;
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        return Err(map_status_error(status, url));
+    }
+}
+
+/// Send a DELETE request, retrying on 5xx/429.
+///
+/// Returns the HTTP status code on success (2xx), 409 Conflict, or 404 Not Found.
+pub(crate) async fn send_delete_with_retry(
+    client: &Client,
+    url: &str,
+    bearer: Option<&HeaderValue>,
+) -> anyhow::Result<u16> {
+    let mut attempt = 0;
+
+    loop {
+        let mut request = client.delete(url);
+
+        if let Some(value) = bearer {
+            request = request.header(AUTHORIZATION, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to send DELETE to {url}: {error}"))?;
+
+        let status = response.status();
+
+        if status.is_success() || status == StatusCode::CONFLICT || status == StatusCode::NOT_FOUND
+        {
+            return Ok(status.as_u16());
+        }
+
+        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
+            attempt += 1;
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        return Err(map_status_error(status, url));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +389,140 @@ mod tests {
         let headers = HeaderMap::new();
         let delay = retry_delay_for(StatusCode::TOO_MANY_REQUESTS, &headers, 0).unwrap();
         assert_eq!(delay, Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn send_patch_json_with_retry_returns_status_on_204() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _n = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+        let bearer = build_bearer_header("tok").unwrap();
+        let body = serde_json::json!({"key": "val"});
+        let status =
+            send_patch_json_with_retry(&client, &format!("http://{addr}"), Some(&bearer), &body)
+                .await
+                .unwrap();
+        assert_eq!(status, 204);
+    }
+
+    #[tokio::test]
+    async fn send_patch_json_with_retry_returns_409_on_conflict() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _n = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 409 Conflict\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+        let body = serde_json::json!({});
+        let status = send_patch_json_with_retry(&client, &format!("http://{addr}"), None, &body)
+            .await
+            .unwrap();
+        assert_eq!(status, 409);
+    }
+
+    #[tokio::test]
+    async fn send_delete_with_retry_returns_status_on_204() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let n = stream.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            request
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+        let bearer = build_bearer_header("del-tok").unwrap();
+        let status = send_delete_with_retry(&client, &format!("http://{addr}"), Some(&bearer))
+            .await
+            .unwrap();
+        assert_eq!(status, 204);
+
+        let request = server.await.unwrap();
+        assert!(request.starts_with("DELETE"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer del-tok")
+        );
+    }
+
+    #[tokio::test]
+    async fn send_delete_with_retry_returns_404() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _n = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+        let status = send_delete_with_retry(&client, &format!("http://{addr}"), None)
+            .await
+            .unwrap();
+        assert_eq!(status, 404);
+    }
+
+    #[tokio::test]
+    async fn send_delete_with_retry_returns_409() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _n = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 409 Conflict\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+        let status = send_delete_with_retry(&client, &format!("http://{addr}"), None)
+            .await
+            .unwrap();
+        assert_eq!(status, 409);
     }
 }
