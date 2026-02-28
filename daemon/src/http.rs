@@ -24,8 +24,6 @@ pub(crate) fn build_bearer_header(token: &str) -> anyhow::Result<HeaderValue> {
     Ok(HeaderValue::from_str(&format!("Bearer {token}"))?)
 }
 
-// HTTP utility functions used by tests and the upcoming Assuan protocol handler.
-#[allow(dead_code)]
 pub(crate) fn retry_delay_for(
     status: StatusCode,
     headers: &HeaderMap,
@@ -51,7 +49,6 @@ pub(crate) fn retry_delay_for(
     None
 }
 
-#[allow(dead_code)]
 pub(crate) fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
     match status {
         StatusCode::UNAUTHORIZED => anyhow::anyhow!("authentication failed for {url} (401)"),
@@ -75,6 +72,44 @@ pub(crate) async fn send_get_with_retry(
 
     loop {
         let mut request = client.get(url);
+
+        if let Some(value) = bearer {
+            request = request.header(AUTHORIZATION, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to send request to {url}: {error}"))?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            return response.text().await.map_err(|error| {
+                anyhow::anyhow!("failed to read response body from {url}: {error}")
+            });
+        }
+
+        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
+            attempt += 1;
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        return Err(map_status_error(status, url));
+    }
+}
+
+pub(crate) async fn send_post_json_with_retry(
+    client: &Client,
+    url: &str,
+    bearer: Option<&HeaderValue>,
+    body: &serde_json::Value,
+) -> anyhow::Result<String> {
+    let mut attempt = 0;
+
+    loop {
+        let mut request = client.post(url).json(body);
 
         if let Some(value) = bearer {
             request = request.header(AUTHORIZATION, value);
@@ -158,6 +193,44 @@ mod tests {
         assert_eq!(response, "ok");
         assert!(request_lower.contains("authorization: bearer secret-token"));
         assert!(request_lower.contains("user-agent: daemon-test/1.0"));
+    }
+
+    #[tokio::test]
+    async fn send_post_json_with_retry_sends_bearer_and_json_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            let mut buffer = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone")
+                .await
+                .unwrap();
+
+            request
+        });
+
+        let client = build_http_client(Duration::from_secs(2), "daemon-test/1.0").unwrap();
+        let bearer = build_bearer_header("post-token").unwrap();
+        let body = serde_json::json!({"client_jwts": ["jwt-abc"]});
+        let response =
+            send_post_json_with_retry(&client, &format!("http://{addr}"), Some(&bearer), &body)
+                .await
+                .unwrap();
+
+        let request = server.await.unwrap();
+        let request_lower = request.to_ascii_lowercase();
+
+        assert_eq!(response, "done");
+        assert!(request_lower.contains("authorization: bearer post-token"));
+        assert!(request_lower.contains("content-type: application/json"));
+        assert!(request.contains(r#""client_jwts"#));
+        assert!(request.contains(r#""jwt-abc""#));
     }
 
     #[test]
