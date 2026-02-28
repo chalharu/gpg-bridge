@@ -222,6 +222,57 @@ void main() {
       expect(sig, isNull);
     });
   });
+
+  group('checksum validation', () {
+    test('RSA throws on corrupted checksum', () {
+      final pair = _generateRsaKeyPair(2048);
+      final pub = pair.publicKey as RSAPublicKey;
+      final priv = pair.privateKey as RSAPrivateKey;
+      final jwk = _rsaPublicToJwk(pub);
+      final material = _buildRsaSecretMaterial(priv);
+      // Corrupt last byte (checksum).
+      material[material.length - 1] ^= 0xFF;
+      expect(
+        () => service.sign(
+          hashBytes: Uint8List(32),
+          hashAlgorithm: 'sha256',
+          secretMaterial: material,
+          publicKeyJwk: jwk,
+        ),
+        throwsA(
+          isA<GpgSigningException>().having(
+            (e) => e.message,
+            'message',
+            contains('checksum'),
+          ),
+        ),
+      );
+    });
+
+    test('ECDSA throws on corrupted checksum', () {
+      final pair = _generateEcKeyPair('secp256r1');
+      final ecPub = pair.publicKey as ECPublicKey;
+      final ecPriv = pair.privateKey as ECPrivateKey;
+      final jwk = _ecPublicToJwk(ecPub, 'P-256', 32);
+      final material = _buildEcdsaSecretMaterial(ecPriv);
+      material[material.length - 1] ^= 0xFF;
+      expect(
+        () => service.sign(
+          hashBytes: Uint8List(32),
+          hashAlgorithm: 'sha256',
+          secretMaterial: material,
+          publicKeyJwk: jwk,
+        ),
+        throwsA(
+          isA<GpgSigningException>().having(
+            (e) => e.message,
+            'message',
+            contains('checksum'),
+          ),
+        ),
+      );
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -279,16 +330,33 @@ Uint8List _buildRsaSecretMaterial(RSAPrivateKey priv) {
   _writeMpi(builder, priv.p!);
   _writeMpi(builder, priv.q!);
   _writeMpi(builder, priv.p!.modInverse(priv.q!));
-  builder.add([0x00, 0x00]);
-  return builder.toBytes();
+  final mpiBytes = builder.toBytes();
+  // Compute checksum: sum of all MPI bytes (offset 1..end) mod 65536.
+  var checksum = 0;
+  for (var i = 1; i < mpiBytes.length; i++) {
+    checksum = (checksum + mpiBytes[i]) & 0xFFFF;
+  }
+  final result = BytesBuilder();
+  result.add(mpiBytes);
+  result.addByte((checksum >> 8) & 0xFF);
+  result.addByte(checksum & 0xFF);
+  return result.toBytes();
 }
 
 Uint8List _buildEcdsaSecretMaterial(ECPrivateKey priv) {
   final builder = BytesBuilder();
   builder.addByte(0x00);
   _writeMpi(builder, priv.d!);
-  builder.add([0x00, 0x00]);
-  return builder.toBytes();
+  final mpiBytes = builder.toBytes();
+  var checksum = 0;
+  for (var i = 1; i < mpiBytes.length; i++) {
+    checksum = (checksum + mpiBytes[i]) & 0xFFFF;
+  }
+  final result = BytesBuilder();
+  result.add(mpiBytes);
+  result.addByte((checksum >> 8) & 0xFF);
+  result.addByte(checksum & 0xFF);
+  return result.toBytes();
 }
 
 void _writeMpi(BytesBuilder builder, BigInt value) {
