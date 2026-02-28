@@ -340,6 +340,24 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
 
     /// Delete a request by ID. Returns `true` if a row was deleted.
     async fn delete_request(&self, request_id: &str) -> anyhow::Result<bool>;
+
+    // ---- background-job cleanup operations ----
+
+    /// Delete expired requests. Returns request_ids of incomplete
+    /// (created/pending) requests that were deleted so SSE expired events
+    /// can be sent. Completed expired requests are also deleted.
+    async fn delete_expired_requests(&self, now: &str) -> anyhow::Result<Vec<String>>;
+
+    /// Delete clients that have no pairings and were created before `cutoff`.
+    async fn delete_unpaired_clients(&self, cutoff: &str) -> anyhow::Result<u64>;
+
+    /// Delete clients whose `device_jwt_issued_at` is before `cutoff`.
+    async fn delete_expired_device_jwt_clients(&self, cutoff: &str) -> anyhow::Result<u64>;
+
+    /// Remove client_pairings whose `client_jwt_issued_at` is before
+    /// `cutoff`, then delete any clients that have no remaining pairings.
+    /// Returns the total number of pairings removed.
+    async fn delete_expired_client_jwt_pairings(&self, cutoff: &str) -> anyhow::Result<u64>;
 }
 
 async fn build_postgres_repository(

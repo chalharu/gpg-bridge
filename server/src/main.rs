@@ -8,6 +8,7 @@ use gpg_bridge_server::{
         rate_limit::{RateLimitConfig, SseConnectionTracker, config::SseConnectionConfig},
         signing::notifier::SignEventNotifier,
     },
+    jobs::{CleanupConfig, spawn_cleanup_scheduler},
     observability::init_tracing,
     repository::build_repository,
 };
@@ -48,8 +49,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (fcm_validator, fcm_sender) = build_fcm_clients(&config)?;
 
+    let sign_event_notifier = SignEventNotifier::new();
     let state = AppState {
-        repository,
+        repository: repository.clone(),
         base_url: config.base_url.clone(),
         signing_key_secret: config.signing_key_secret.clone(),
         device_jwt_validity_seconds: config.device_jwt_validity_seconds,
@@ -64,10 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_per_key: config.rate_limit_sse_max_per_key,
         }),
         pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: SignEventNotifier::new(),
+        sign_event_notifier: sign_event_notifier.clone(),
     };
     let rate_limit_config = RateLimitConfig::from_app_config(&config);
     let app = build_router(state, rate_limit_config);
+
+    let cleanup_config = CleanupConfig::from_app_config(&config);
+    let _cleanup_handle = spawn_cleanup_scheduler(repository, sign_event_notifier, cleanup_config);
+
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let addr = listener.local_addr()?;
 

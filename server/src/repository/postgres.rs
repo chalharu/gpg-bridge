@@ -662,6 +662,76 @@ impl SignatureRepository for PostgresRepository {
             .context("failed to delete request")?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn delete_expired_requests(&self, now: &str) -> anyhow::Result<Vec<String>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let incomplete = sqlx::query_scalar::<_, String>(
+            "SELECT request_id FROM requests WHERE expired < $1 AND status IN ('created', 'pending')",
+        )
+        .bind(now)
+        .fetch_all(&mut *tx)
+        .await
+        .context("failed to select incomplete expired requests")?;
+
+        sqlx::query("DELETE FROM requests WHERE expired < $1")
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .context("failed to delete expired requests")?;
+
+        tx.commit().await.context("failed to commit transaction")?;
+        Ok(incomplete)
+    }
+
+    async fn delete_unpaired_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM clients WHERE created_at < $1 AND NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id)",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await
+        .context("failed to delete unpaired clients")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_expired_device_jwt_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM clients WHERE device_jwt_issued_at < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete expired device_jwt clients")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_expired_client_jwt_pairings(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let del = sqlx::query("DELETE FROM client_pairings WHERE client_jwt_issued_at < $1")
+            .bind(cutoff)
+            .execute(&mut *tx)
+            .await
+            .context("failed to delete expired client_jwt pairings")?;
+        let removed = del.rows_affected();
+
+        sqlx::query(
+            "DELETE FROM clients WHERE NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id) AND NOT EXISTS (SELECT 1 FROM pairings WHERE pairings.client_id = clients.client_id)",
+        )
+        .execute(&mut *tx)
+        .await
+        .context("failed to delete orphaned clients")?;
+
+        tx.commit().await.context("failed to commit transaction")?;
+        Ok(removed)
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -860,6 +930,8 @@ mod tests {
             unconsumed_pairing_limit: 100,
             fcm_service_account_key_path: None,
             fcm_project_id: None,
+            cleanup_interval_seconds: 60,
+            unpaired_client_max_age_hours: 24,
         };
 
         let repository = build_repository(&config).await.unwrap();

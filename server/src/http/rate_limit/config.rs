@@ -94,6 +94,8 @@ mod tests {
             unconsumed_pairing_limit: 100,
             fcm_service_account_key_path: None,
             fcm_project_id: None,
+            cleanup_interval_seconds: 60,
+            unpaired_client_max_age_hours: 24,
             rate_limit_strict_quota: 5,
             rate_limit_strict_window_seconds: 30,
             rate_limit_standard_quota: 100,
