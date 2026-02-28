@@ -81,6 +81,21 @@ class _SignRequestPageState extends ConsumerState<SignRequestPage> {
     }
   }
 
+  Future<void> _handleApprove(DecryptedSignRequest request) async {
+    setState(() => _isSubmitting = true);
+    try {
+      await ref.read(signRequestStateProvider.notifier).approve(request);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('署名に失敗しました: $e')));
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
   Future<void> _handleDeny(DecryptedSignRequest request) async {
     setState(() => _isSubmitting = true);
     try {
@@ -150,6 +165,7 @@ class _SignRequestPageState extends ConsumerState<SignRequestPage> {
           const Spacer(),
           ActionButtons(
             isSubmitting: _isSubmitting,
+            onApprove: () => _handleApprove(request),
             onDeny: () => _handleDeny(request),
             onIgnore: _handleIgnore,
           ),

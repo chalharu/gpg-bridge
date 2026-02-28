@@ -163,6 +163,30 @@ void main() {
       // Verify it's a JWE (5 base64url parts).
       expect(mockApi.lastSignature!.split('.'), hasLength(5));
     });
+
+    test('approve encodes signature as JSON payload', () async {
+      mockKeyMgmt.defaultKid = 'kid-1';
+      await backend.write(
+        key: 'e2e_private_kid-1',
+        value: jsonEncode(_testPrivateJwk),
+      );
+
+      final request = _buildDecryptedRequest(requestId: 'req-json');
+      final privJwk = EcPrivateJwk.fromJson(_testPrivateJwk);
+      final service = createService();
+
+      final sigBytes = Uint8List.fromList([0xAA, 0xBB, 0xCC]);
+      await service.approve(request: request, signatureBytes: sigBytes);
+
+      // Decrypt the JWE and verify the JSON structure.
+      final decrypted = jweService.decrypt(
+        jweCompact: mockApi.lastSignature!,
+        privateKey: privJwk,
+      );
+      final payload =
+          jsonDecode(utf8.decode(decrypted)) as Map<String, dynamic>;
+      expect(payload['signature'], base64Encode(sigBytes));
+    });
   });
 }
 
@@ -255,4 +279,7 @@ class _MockKeyManagementService implements KeyManagementService {
 
   @override
   Future<void> deleteGpgPrivateKeyMaterial(String keygrip) async {}
+
+  @override
+  Future<Uint8List?> readGpgPrivateKey(String keygrip) async => null;
 }

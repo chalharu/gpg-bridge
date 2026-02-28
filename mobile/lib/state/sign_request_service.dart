@@ -71,8 +71,9 @@ class DefaultSignRequestService implements SignRequestService {
     required Uint8List signatureBytes,
   }) async {
     try {
+      final payload = jsonEncode({'signature': base64Encode(signatureBytes)});
       final encrypted = _jweService.encrypt(
-        plaintext: signatureBytes,
+        plaintext: utf8.encode(payload),
         recipientPublicKey: request.daemonEncPublicKey,
       );
       await _apiService.postSignResult(

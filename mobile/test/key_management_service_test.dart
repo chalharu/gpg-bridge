@@ -301,6 +301,26 @@ void main() {
       expect(remaining, isNull);
     });
   });
+
+  group('readGpgPrivateKey', () {
+    test('returns decoded bytes when key exists', () async {
+      final material = Uint8List.fromList([10, 20, 30, 40]);
+      await storageBackend.write(
+        key: '${SecureStorageKeys.gpgPrivateKeyPrefix}grip-r',
+        value: base64Encode(material),
+      );
+
+      final result = await service.readGpgPrivateKey('grip-r');
+
+      expect(result, equals(material));
+    });
+
+    test('returns null when key does not exist', () async {
+      final result = await service.readGpgPrivateKey('grip-missing');
+
+      expect(result, isNull);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

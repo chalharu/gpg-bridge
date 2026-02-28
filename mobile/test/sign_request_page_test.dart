@@ -95,7 +95,7 @@ void main() {
       expect(find.text('無視'), findsOneWidget);
     });
 
-    testWidgets('approve button is disabled', (tester) async {
+    testWidgets('approve button is enabled', (tester) async {
       final request = _buildRequest();
 
       await tester.pumpWidget(
@@ -110,11 +110,48 @@ void main() {
       );
       await tester.pump();
 
-      // The FilledButton containing '承認' should be disabled (onPressed null).
+      // The FilledButton containing '承認' should be enabled.
       final approveButton = tester.widget<FilledButton>(
         find.ancestor(of: find.text('承認'), matching: find.byType(FilledButton)),
       );
-      expect(approveButton.onPressed, isNull);
+      expect(approveButton.onPressed, isNotNull);
+    });
+
+    testWidgets('approve button calls approve and pops', (tester) async {
+      final request = _buildRequest();
+      var approveCalled = false;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            signRequestStateProvider.overrideWith(
+              () => _TrackingSignRequestState([
+                request,
+              ], onApprove: () => approveCalled = true),
+            ),
+          ],
+          child: MaterialApp(
+            home: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const SignRequestPage(requestId: 'req-1'),
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('承認'));
+      await tester.pumpAndSettle();
+
+      expect(approveCalled, isTrue);
     });
 
     testWidgets('deny button calls deny and pops', (tester) async {
@@ -236,13 +273,20 @@ class _PreloadedSignRequestState extends SignRequestState {
 }
 
 class _TrackingSignRequestState extends SignRequestState {
-  _TrackingSignRequestState(this._requests, {this.onDeny});
+  _TrackingSignRequestState(this._requests, {this.onDeny, this.onApprove});
 
   final List<DecryptedSignRequest> _requests;
   final void Function()? onDeny;
+  final void Function()? onApprove;
 
   @override
   Future<List<DecryptedSignRequest>> build() async => _requests;
+
+  @override
+  Future<void> approve(DecryptedSignRequest request) async {
+    onApprove?.call();
+    dismiss(request.requestId);
+  }
 
   @override
   Future<void> deny(DecryptedSignRequest request) async {
