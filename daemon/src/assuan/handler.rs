@@ -26,32 +26,32 @@ const GPG_ERR_NOT_SUPPORTED: u32 = 69;
 const GPG_ERR_SYNTAX: u32 = 147;
 
 /// No secret key (used by HAVEKEY / KEYINFO / READKEY when key not found).
-const GPG_ERR_NO_SECKEY: u32 = 17;
+pub(super) const GPG_ERR_NO_SECKEY: u32 = 17;
 
 /// No data available.
 const GPG_ERR_NO_DATA: u32 = 58;
 
-/// Timeout (used as PKSIGN placeholder until KAN-39 adds SSE waiting).
-const GPG_ERR_TIMEOUT: u32 = 62;
+/// Timeout (used when SSE wait expires).
+pub(super) const GPG_ERR_TIMEOUT: u32 = 62;
 
 /// Invalid length (e.g., SETHASH with wrong hash byte count).
 const GPG_ERR_INV_LENGTH: u32 = 71;
 
 /// Operation cancelled.
-const GPG_ERR_CANCELED: u32 = 99;
+pub(super) const GPG_ERR_CANCELED: u32 = 99;
 
 /// Missing value (e.g., SETHASH not called before PKSIGN).
-const GPG_ERR_MISSING_VALUE: u32 = 178;
+pub(super) const GPG_ERR_MISSING_VALUE: u32 = 178;
 
 /// General error for unclassified failures.
-const GPG_ERR_GENERAL: u32 = 1;
+pub(super) const GPG_ERR_GENERAL: u32 = 1;
 
 /// Immutable session configuration shared across all commands in a connection.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionContext {
     socket_path: String,
-    gpg_key_cache: Arc<GpgKeyCache>,
-    token_store_path: PathBuf,
+    pub(super) gpg_key_cache: Arc<GpgKeyCache>,
+    pub(super) token_store_path: PathBuf,
     pub(super) http_client: reqwest::Client,
     pub(super) server_url: String,
 }
@@ -78,10 +78,10 @@ impl SessionContext {
 #[derive(Debug, Default)]
 pub(super) struct SessionState {
     options: HashMap<String, Option<String>>,
-    signing_keygrip: Option<String>,
+    pub(super) signing_keygrip: Option<String>,
     key_description: Option<String>,
-    hash_algorithm: Option<u32>,
-    hash_value: Option<Vec<u8>>,
+    pub(super) hash_algorithm: Option<u32>,
+    pub(super) hash_value: Option<Vec<u8>>,
     pub(super) sign_flow: Option<sign_flow::SignFlowState>,
 }
 
@@ -154,8 +154,8 @@ pub(super) async fn handle(
             algorithm,
             hash_hex,
         } => handle_sethash(*algorithm, hash_hex, state),
-        Command::Pksign => handle_pksign(context, state).await,
-        Command::Cancel => handle_cancel(context, state).await,
+        Command::Pksign => super::sign_handler::handle_pksign(context, state).await,
+        Command::Cancel => super::sign_handler::handle_cancel(context, state).await,
         Command::Unknown { .. } => Response::Err {
             code: GPG_ERR_ASS_UNKNOWN_CMD,
             message: "unknown IPC command".to_owned(),
@@ -317,92 +317,6 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
-}
-
-async fn handle_pksign(context: &SessionContext, state: &mut SessionState) -> Response {
-    let keygrip = match &state.signing_keygrip {
-        Some(kg) => kg.clone(),
-        None => return err_response(GPG_ERR_NO_SECKEY, "No secret key"),
-    };
-    let algorithm = match state.hash_algorithm {
-        Some(a) => a,
-        None => return err_response(GPG_ERR_MISSING_VALUE, "Missing hash value"),
-    };
-    let hash_value = match &state.hash_value {
-        Some(h) => h.clone(),
-        None => return err_response(GPG_ERR_MISSING_VALUE, "Missing hash value"),
-    };
-    let algo_name = match sign_flow::algo_number_to_name(algorithm) {
-        Some(n) => n,
-        None => return err_response(GPG_ERR_GENERAL, "Unsupported hash algorithm"),
-    };
-    let key_id = match resolve_key_id(&keygrip, context).await {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
-    match execute_sign_flow(context, state, &hash_value, algo_name, &key_id).await {
-        Ok(()) => {
-            // TODO(KAN-39): Wait for SSE signature result and return D <signature> + OK
-            err_response(GPG_ERR_TIMEOUT, "Timeout waiting for signature approval")
-        }
-        Err(err) => {
-            tracing::warn!(?err, "sign flow failed");
-            err_response(GPG_ERR_GENERAL, "Sign request failed")
-        }
-    }
-}
-
-async fn handle_cancel(context: &SessionContext, state: &mut SessionState) -> Response {
-    if let Some(flow_state) = state.sign_flow.take()
-        && let Err(err) = sign_flow::cancel(&context.http_client, &flow_state).await
-    {
-        tracing::warn!(?err, "sign flow cancel request failed");
-    }
-    err_response(GPG_ERR_CANCELED, "Operation cancelled")
-}
-
-async fn resolve_key_id(keygrip: &str, context: &SessionContext) -> Result<String, Response> {
-    match context
-        .gpg_key_cache
-        .find_by_keygrip(keygrip, &context.token_store_path)
-        .await
-    {
-        Ok(Some(entry)) => Ok(entry.key_id),
-        _ => Err(err_response(GPG_ERR_NO_SECKEY, "No secret key")),
-    }
-}
-
-async fn execute_sign_flow(
-    context: &SessionContext,
-    state: &mut SessionState,
-    hash_value: &[u8],
-    algo_name: &str,
-    key_id: &str,
-) -> anyhow::Result<()> {
-    let (flow_state, e2e_keys) = sign_flow::run_phase1(
-        &context.http_client,
-        &context.server_url,
-        &context.token_store_path,
-    )
-    .await?;
-    sign_flow::run_phase2(
-        &context.http_client,
-        &flow_state,
-        &e2e_keys,
-        hash_value,
-        algo_name,
-        key_id,
-    )
-    .await?;
-    state.sign_flow = Some(flow_state);
-    Ok(())
-}
-
-fn err_response(code: u32, message: &str) -> Response {
-    Response::Err {
-        code,
-        message: message.to_owned(),
-    }
 }
 
 #[cfg(test)]

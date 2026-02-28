@@ -21,13 +21,12 @@ use crate::token_store;
 
 /// Per-request signing flow state, stored in session for SSE waiting (KAN-39).
 pub(crate) struct SignFlowState {
-    auth_private_jwk: Jwk,
-    auth_kid: String,
-    #[allow(dead_code)]
-    enc_private_jwk: Jwk,
+    pub(crate) auth_private_jwk: Jwk,
+    pub(crate) auth_kid: String,
+    pub(crate) enc_private_jwk: Jwk,
     pub(crate) request_jwt: String,
-    request_jwt_exp: i64,
-    server_url: String,
+    pub(crate) request_jwt_exp: i64,
+    pub(crate) server_url: String,
 }
 
 impl std::fmt::Debug for SignFlowState {
