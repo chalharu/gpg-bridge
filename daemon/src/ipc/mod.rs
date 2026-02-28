@@ -162,6 +162,8 @@ mod tests {
             socket_path_str,
             cache,
             std::path::PathBuf::from("/tmp/test-tokens"),
+            reqwest::Client::new(),
+            "http://localhost:0".to_owned(),
         ))
     }
 
