@@ -258,6 +258,18 @@ impl SignatureRepository for SigningMockRepo {
     async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
         Ok(self.delete_request_result.lock().unwrap().unwrap_or(true))
     }
+    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!()
+    }
+    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -970,6 +982,18 @@ impl SignatureRepository for NoActiveKeyMockRepo {
     async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!()
+    }
+    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,6 +1662,18 @@ impl SignatureRepository for ResultMockRepo {
             .unwrap_or(true))
     }
     async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!()
+    }
+    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
         unimplemented!()
     }
 }

@@ -413,6 +413,18 @@ mod tests {
         async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+            unimplemented!()
+        }
+        async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -632,6 +644,18 @@ mod tests {
         async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+            unimplemented!()
+        }
+        async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -660,6 +684,8 @@ mod tests {
             unconsumed_pairing_limit: 100,
             fcm_service_account_key_path: None,
             fcm_project_id: None,
+            cleanup_interval_seconds: 60,
+            unpaired_client_max_age_hours: 24,
         };
 
         let repository = build_repository(&config).await.unwrap();

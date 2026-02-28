@@ -344,6 +344,18 @@ impl SignatureRepository for PairingMockRepo {
     async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!()
+    }
+    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
