@@ -30,6 +30,12 @@ abstract final class SecureStorageKeys {
 
   /// Prefix for E2E private key storage. Full key: "e2e_private_{kid}".
   static const String e2ePrivateKeyPrefix = 'e2e_private_';
+
+  /// Prefix for pairing record storage. Full key: "pairing_{pairing_id}".
+  static const String pairingPrefix = 'pairing_';
+
+  /// Index key storing a JSON list of pairing_id strings.
+  static const String pairingIds = 'pairing_ids';
 }
 
 abstract interface class SecureStorageBackend {
