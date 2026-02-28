@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub unconsumed_pairing_limit: i64,
     pub fcm_service_account_key_path: Option<String>,
     pub fcm_project_id: Option<String>,
+    pub cleanup_interval_seconds: u64,
+    pub unpaired_client_max_age_hours: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +137,10 @@ impl AppConfig {
             parse_env(lookup, "SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
         let fcm_service_account_key_path = lookup("SERVER_FCM_SERVICE_ACCOUNT_KEY_PATH");
         let fcm_project_id = lookup("SERVER_FCM_PROJECT_ID");
+        let cleanup_interval_seconds: u64 =
+            parse_env(lookup, "SERVER_CLEANUP_INTERVAL_SECONDS", "60")?;
+        let unpaired_client_max_age_hours: u64 =
+            parse_env(lookup, "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "24")?;
 
         let config = Self {
             server_host,
@@ -160,6 +166,8 @@ impl AppConfig {
             unconsumed_pairing_limit,
             fcm_service_account_key_path,
             fcm_project_id,
+            cleanup_interval_seconds,
+            unpaired_client_max_age_hours,
         };
 
         validate_db_pool(&config)?;
@@ -168,6 +176,9 @@ impl AppConfig {
         validate_device_jwt_validity(&config)?;
         validate_pairing_config(&config)?;
         validate_request_jwt_validity(&config)?;
+        validate_cleanup_interval(&config)?;
+        validate_duration_upper_bounds(&config)?;
+        validate_unpaired_client_max_age(&config)?;
 
         Ok(config)
     }
@@ -234,6 +245,66 @@ fn validate_request_jwt_validity(config: &AppConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_cleanup_interval(config: &AppConfig) -> anyhow::Result<()> {
+    if config.cleanup_interval_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_CLEANUP_INTERVAL_SECONDS must be greater than 0"
+        ));
+    }
+    Ok(())
+}
+
+/// Maximum allowed value for duration configuration fields (~100 years).
+const MAX_DURATION_SECONDS: u64 = 3_153_600_000;
+
+fn validate_duration_upper_bounds(config: &AppConfig) -> anyhow::Result<()> {
+    if config.cleanup_interval_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_CLEANUP_INTERVAL_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.cleanup_interval_seconds,
+        ));
+    }
+    if config.device_jwt_validity_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_DEVICE_JWT_VALIDITY_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.device_jwt_validity_seconds,
+        ));
+    }
+    if config.client_jwt_validity_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_CLIENT_JWT_VALIDITY_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.client_jwt_validity_seconds,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_unpaired_client_max_age(config: &AppConfig) -> anyhow::Result<()> {
+    if config.unpaired_client_max_age_hours == 0 {
+        return Err(anyhow!(
+            "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS must be greater than 0"
+        ));
+    }
+    // Convert to seconds and check upper bound.
+    let seconds = config
+        .unpaired_client_max_age_hours
+        .checked_mul(3600)
+        .ok_or_else(|| {
+            anyhow!(
+                "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS ({}) overflows when converted to seconds",
+                config.unpaired_client_max_age_hours,
+            )
+        })?;
+    if seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS ({}) exceeds maximum allowed value ({} hours)",
+            config.unpaired_client_max_age_hours,
+            MAX_DURATION_SECONDS / 3600,
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +337,8 @@ mod tests {
         assert_eq!(config.client_jwt_validity_seconds, 31_536_000);
         assert_eq!(config.request_jwt_validity_seconds, 300);
         assert_eq!(config.unconsumed_pairing_limit, 100);
+        assert_eq!(config.cleanup_interval_seconds, 60);
+        assert_eq!(config.unpaired_client_max_age_hours, 24);
     }
 
     #[test]
@@ -402,6 +475,55 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_cleanup_interval() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_CLEANUP_INTERVAL_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_CLEANUP_INTERVAL_SECONDS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_duration_exceeding_upper_bound() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_DEVICE_JWT_VALIDITY_SECONDS" => Some("9999999999999".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn config_rejects_zero_unpaired_client_max_age() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS")
         );
     }
 }
