@@ -35,7 +35,7 @@ fn create_named_pipe_server(
 pub(super) async fn run_windows_accept_loop(
     pipe_name: &str,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    socket_path: String,
+    context: std::sync::Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<()> {
     use tracing::{info, warn};
 
@@ -67,9 +67,9 @@ pub(super) async fn run_windows_accept_loop(
                 info!(pipe_name = %pipe_name, "ipc named pipe connection accepted");
 
                 let stream = listener;
-                let connection_socket_path = socket_path.clone();
+                let ctx = std::sync::Arc::clone(&context);
                 tokio::spawn(async move {
-                    if let Err(error) = handle_windows_connection(stream, connection_socket_path).await {
+                    if let Err(error) = handle_windows_connection(stream, ctx).await {
                         warn!(?error, "ipc named pipe connection handler failed");
                     }
                 });
@@ -83,9 +83,8 @@ pub(super) async fn run_windows_accept_loop(
 #[cfg(windows)]
 async fn handle_windows_connection(
     stream: tokio::net::windows::named_pipe::NamedPipeServer,
-    socket_path: String,
+    context: std::sync::Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<()> {
-    let context = crate::assuan::SessionContext::new(&socket_path);
     crate::assuan::run_session(stream, &context).await
 }
 

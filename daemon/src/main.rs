@@ -1,4 +1,6 @@
 use std::future::Future;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -6,17 +8,18 @@ use tracing::{info, warn};
 mod assuan;
 mod config;
 mod gpg;
+mod gpg_key_cache;
 mod http;
 mod ipc;
-// Pairing flow, token storage, and token refresh modules are ready for
+// Pairing flow and token refresh modules are ready for
 // integration once CLI subcommand support is added.
 // TODO(KAN-38): Remove #[allow(dead_code)] when these modules are wired into CLI subcommands.
 #[allow(dead_code)]
 mod pairing;
+mod sexp;
 mod sse;
 #[allow(dead_code)]
 mod token_refresh;
-#[allow(dead_code)]
 mod token_store;
 
 use config::{
@@ -72,11 +75,24 @@ async fn main() -> anyhow::Result<()> {
         info!("requested existing gpg-agent stop via gpgconf");
     }
 
-    let _bearer_header = if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
+    let bearer_header = if let Some(token) = lookup("DAEMON_ACCESS_TOKEN") {
         Some(build_bearer_header(&token)?)
     } else {
         None
     };
+
+    let token_store_path = token_store::resolve_token_path(&lookup)
+        .unwrap_or_else(|| PathBuf::from("/tmp/gpg-bridge/client-token"));
+    let gpg_key_cache = gpg_key_cache::GpgKeyCache::new(
+        http_client.clone(),
+        config.server_url.clone(),
+        bearer_header.clone(),
+    );
+    let session_context = Arc::new(assuan::SessionContext::new(
+        &config.socket_path,
+        gpg_key_cache,
+        token_store_path,
+    ));
 
     info!(
         log_level = %config.log_level,
@@ -94,11 +110,12 @@ async fn main() -> anyhow::Result<()> {
         &config.socket_path,
         config.compat_socket_path.as_deref(),
         config.allow_replace_existing_socket,
+        session_context,
     )
     .await?;
 
     #[cfg(windows)]
-    let ipc_server = ipc::IpcServer::start(&config.socket_path).await?;
+    let ipc_server = ipc::IpcServer::start(&config.socket_path, session_context).await?;
 
     let (sse_shutdown_tx, sse_task) = if let Some(sse_url) = lookup("DAEMON_SSE_URL") {
         let sse_client = SseClient::new(http_client.clone(), SseClientConfig::new(sse_url))?;

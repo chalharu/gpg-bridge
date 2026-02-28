@@ -1,5 +1,6 @@
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -159,7 +160,7 @@ fn set_unix_socket_permissions(path: &Path) -> anyhow::Result<()> {
 pub(super) async fn run_unix_accept_loop(
     listener: tokio::net::UnixListener,
     mut shutdown_rx: watch::Receiver<bool>,
-    socket_path: String,
+    context: Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<()> {
     loop {
         tokio::select! {
@@ -179,9 +180,9 @@ pub(super) async fn run_unix_accept_loop(
                     }
                 };
                 info!("ipc unix socket connection accepted");
-                let connection_socket_path = socket_path.clone();
+                let ctx = Arc::clone(&context);
                 tokio::spawn(async move {
-                    if let Err(error) = handle_unix_connection(stream, connection_socket_path).await {
+                    if let Err(error) = handle_unix_connection(stream, ctx).await {
                         warn!(?error, "ipc unix socket connection handler failed");
                     }
                 });
@@ -192,14 +193,13 @@ pub(super) async fn run_unix_accept_loop(
 
 async fn handle_unix_connection(
     stream: tokio::net::UnixStream,
-    socket_path: String,
+    context: Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<()> {
     #[cfg(test)]
     {
         UNIX_CONNECTION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    let context = crate::assuan::SessionContext::new(&socket_path);
     crate::assuan::run_session(stream, &context).await
 }
 

@@ -2,14 +2,44 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Command {
     Nop,
-    Option { name: String, value: Option<String> },
+    Option {
+        name: String,
+        value: Option<String>,
+    },
     Reset,
-    GetInfo { subcommand: String },
+    GetInfo {
+        subcommand: String,
+    },
     End,
     Bye,
     PkDecrypt,
     Auth,
-    Unknown { name: String },
+    Havekey {
+        keygrips: Vec<String>,
+    },
+    Keyinfo {
+        keygrip: Option<String>,
+        list: bool,
+        data: bool,
+        ssh_list: bool,
+    },
+    Readkey {
+        keygrip: String,
+        no_data: bool,
+    },
+    Sigkey {
+        keygrip: String,
+    },
+    SetKeyDesc {
+        description: String,
+    },
+    SetHash {
+        algorithm: u32,
+        hash_hex: String,
+    },
+    Unknown {
+        name: String,
+    },
 }
 
 impl Command {
@@ -40,6 +70,12 @@ impl Command {
             "BYE" => Self::Bye,
             "PKDECRYPT" => Self::PkDecrypt,
             "AUTH" => Self::Auth,
+            "HAVEKEY" => parse_havekey(args),
+            "KEYINFO" => parse_keyinfo(args),
+            "READKEY" => parse_readkey(args),
+            "SIGKEY" => parse_sigkey(args),
+            "SETKEYDESC" => parse_setkeydesc(args),
+            "SETHASH" => parse_sethash(args),
             _ => Self::Unknown {
                 name: cmd.to_owned(),
             },
@@ -64,6 +100,128 @@ fn parse_option(args: Option<&str>) -> Command {
             name: args.trim().to_owned(),
             value: None,
         },
+    }
+}
+
+fn parse_havekey(args: Option<&str>) -> Command {
+    let keygrips: Vec<String> = args
+        .unwrap_or("")
+        .split_whitespace()
+        .map(|s| s.to_owned())
+        .collect();
+    if keygrips.is_empty() {
+        return Command::Unknown {
+            name: "HAVEKEY".to_owned(),
+        };
+    }
+    Command::Havekey { keygrips }
+}
+
+fn parse_keyinfo(args: Option<&str>) -> Command {
+    let parts: Vec<&str> = args.unwrap_or("").split_whitespace().collect();
+    let mut list = false;
+    let mut data = false;
+    let mut ssh_list = false;
+    let mut keygrip = None;
+
+    for part in &parts {
+        match *part {
+            "--list" => list = true,
+            "--data" => data = true,
+            "--ssh-list" => ssh_list = true,
+            s if s.starts_with("--") => {}
+            s => keygrip = Some(s.to_owned()),
+        }
+    }
+    Command::Keyinfo {
+        keygrip,
+        list,
+        data,
+        ssh_list,
+    }
+}
+
+fn parse_readkey(args: Option<&str>) -> Command {
+    let parts: Vec<&str> = args.unwrap_or("").split_whitespace().collect();
+    let mut no_data = false;
+    let mut keygrip = None;
+
+    for part in &parts {
+        match *part {
+            "--no-data" => no_data = true,
+            s if s.starts_with("--") => {}
+            s => keygrip = Some(s.to_owned()),
+        }
+    }
+    match keygrip {
+        Some(kg) => Command::Readkey {
+            keygrip: kg,
+            no_data,
+        },
+        None => Command::Unknown {
+            name: "READKEY".to_owned(),
+        },
+    }
+}
+
+fn parse_sigkey(args: Option<&str>) -> Command {
+    match args.and_then(|a| a.split_whitespace().next()) {
+        Some(kg) => Command::Sigkey {
+            keygrip: kg.to_owned(),
+        },
+        None => Command::Unknown {
+            name: "SIGKEY".to_owned(),
+        },
+    }
+}
+
+fn parse_setkeydesc(args: Option<&str>) -> Command {
+    match args {
+        Some(text) if !text.trim().is_empty() => Command::SetKeyDesc {
+            description: text.trim().to_owned(),
+        },
+        _ => Command::Unknown {
+            name: "SETKEYDESC".to_owned(),
+        },
+    }
+}
+
+fn parse_sethash(args: Option<&str>) -> Command {
+    let parts: Vec<&str> = args.unwrap_or("").split_whitespace().collect();
+    if parts.len() != 2 {
+        return Command::Unknown {
+            name: "SETHASH".to_owned(),
+        };
+    }
+
+    let (algo, hash_hex) = if let Some(name) = parts[0].strip_prefix("--hash=") {
+        let algo = match name.to_ascii_lowercase().as_str() {
+            "md5" => 1,
+            "sha1" => 2,
+            "rmd160" => 3,
+            "sha256" => 8,
+            "sha384" => 9,
+            "sha512" => 10,
+            "sha224" => 11,
+            _ => {
+                return Command::Unknown {
+                    name: "SETHASH".to_owned(),
+                };
+            }
+        };
+        (algo, parts[1])
+    } else {
+        let Ok(algo) = parts[0].parse::<u32>() else {
+            return Command::Unknown {
+                name: "SETHASH".to_owned(),
+            };
+        };
+        (algo, parts[1])
+    };
+
+    Command::SetHash {
+        algorithm: algo,
+        hash_hex: hash_hex.to_owned(),
     }
 }
 
@@ -253,6 +411,200 @@ mod tests {
             Command::parse("getinfo version"),
             Command::GetInfo {
                 subcommand: "version".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_havekey_single() {
+        assert_eq!(
+            Command::parse("HAVEKEY ABCD1234"),
+            Command::Havekey {
+                keygrips: vec!["ABCD1234".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_havekey_multiple() {
+        assert_eq!(
+            Command::parse("HAVEKEY AA BB CC"),
+            Command::Havekey {
+                keygrips: vec!["AA".to_owned(), "BB".to_owned(), "CC".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_havekey_no_args_is_unknown() {
+        assert_eq!(
+            Command::parse("HAVEKEY"),
+            Command::Unknown {
+                name: "HAVEKEY".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_keyinfo_with_keygrip() {
+        assert_eq!(
+            Command::parse("KEYINFO ABCD"),
+            Command::Keyinfo {
+                keygrip: Some("ABCD".to_owned()),
+                list: false,
+                data: false,
+                ssh_list: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_keyinfo_list_mode() {
+        assert_eq!(
+            Command::parse("KEYINFO --list"),
+            Command::Keyinfo {
+                keygrip: None,
+                list: true,
+                data: false,
+                ssh_list: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_keyinfo_with_flags() {
+        assert_eq!(
+            Command::parse("KEYINFO --data --ssh-list ABCD"),
+            Command::Keyinfo {
+                keygrip: Some("ABCD".to_owned()),
+                list: false,
+                data: true,
+                ssh_list: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_readkey_basic() {
+        assert_eq!(
+            Command::parse("READKEY ABCD"),
+            Command::Readkey {
+                keygrip: "ABCD".to_owned(),
+                no_data: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_readkey_no_data_flag() {
+        assert_eq!(
+            Command::parse("READKEY --no-data ABCD"),
+            Command::Readkey {
+                keygrip: "ABCD".to_owned(),
+                no_data: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_readkey_no_args_is_unknown() {
+        assert_eq!(
+            Command::parse("READKEY"),
+            Command::Unknown {
+                name: "READKEY".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sigkey_basic() {
+        assert_eq!(
+            Command::parse("SIGKEY ABCD"),
+            Command::Sigkey {
+                keygrip: "ABCD".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sigkey_no_args_is_unknown() {
+        assert_eq!(
+            Command::parse("SIGKEY"),
+            Command::Unknown {
+                name: "SIGKEY".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_setkeydesc_basic() {
+        assert_eq!(
+            Command::parse("SETKEYDESC Please+enter+the+passphrase"),
+            Command::SetKeyDesc {
+                description: "Please+enter+the+passphrase".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_setkeydesc_no_text_is_unknown() {
+        assert_eq!(
+            Command::parse("SETKEYDESC"),
+            Command::Unknown {
+                name: "SETKEYDESC".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sethash_named_algo() {
+        assert_eq!(
+            Command::parse("SETHASH --hash=sha256 AABB"),
+            Command::SetHash {
+                algorithm: 8,
+                hash_hex: "AABB".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sethash_numeric_algo() {
+        assert_eq!(
+            Command::parse("SETHASH 10 AABB"),
+            Command::SetHash {
+                algorithm: 10,
+                hash_hex: "AABB".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sethash_sha1() {
+        assert_eq!(
+            Command::parse("SETHASH --hash=sha1 FF"),
+            Command::SetHash {
+                algorithm: 2,
+                hash_hex: "FF".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sethash_no_args_is_unknown() {
+        assert_eq!(
+            Command::parse("SETHASH"),
+            Command::Unknown {
+                name: "SETHASH".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sethash_unknown_named_algo_is_unknown() {
+        assert_eq!(
+            Command::parse("SETHASH --hash=blake2 AABB"),
+            Command::Unknown {
+                name: "SETHASH".to_owned(),
             }
         );
     }

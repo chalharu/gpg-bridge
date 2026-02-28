@@ -60,7 +60,7 @@ async fn process_line<W: AsyncWrite + Unpin>(
     let command = Command::parse(trimmed);
     debug!(?command, "received command");
     let is_bye = matches!(command, Command::Bye);
-    let response = handle(&command, context, state);
+    let response = handle(&command, context, state).await;
     write_response(writer, &response).await?;
     Ok(is_bye)
 }
@@ -140,7 +140,7 @@ async fn write_response<W: AsyncWrite + Unpin>(
     writer: &mut W,
     response: &Response,
 ) -> anyhow::Result<()> {
-    writer.write_all(response.format().as_bytes()).await?;
+    writer.write_all(&response.format()).await?;
     writer.flush().await?;
     Ok(())
 }
@@ -156,7 +156,16 @@ mod tests {
         let socket_path = socket_path.to_owned();
 
         let session = tokio::spawn(async move {
-            let context = SessionContext::new(&socket_path);
+            let cache = crate::gpg_key_cache::GpgKeyCache::new(
+                reqwest::Client::new(),
+                "http://localhost:0".to_owned(),
+                None,
+            );
+            let context = SessionContext::new(
+                &socket_path,
+                cache,
+                std::path::PathBuf::from("/tmp/test-tokens"),
+            );
             run_session(server, &context).await
         });
 

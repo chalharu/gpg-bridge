@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::command::Command;
 use super::response::Response;
+use crate::gpg_key_cache::GpgKeyCache;
 
 /// Error code for unknown IPC command (e.g., unknown GETINFO subcommand).
 ///
@@ -21,16 +24,33 @@ const GPG_ERR_NOT_SUPPORTED: u32 = 69;
 /// Raw libgpg-error code `GPG_ERR_SYNTAX` (147) with source = 0.
 const GPG_ERR_SYNTAX: u32 = 147;
 
+/// No secret key (used by HAVEKEY / KEYINFO / READKEY when key not found).
+const GPG_ERR_NO_SECKEY: u32 = 17;
+
+/// No data available.
+const GPG_ERR_NO_DATA: u32 = 58;
+
+/// Invalid length (e.g., SETHASH with wrong hash byte count).
+const GPG_ERR_INV_LENGTH: u32 = 71;
+
 /// Immutable session configuration shared across all commands in a connection.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionContext {
     socket_path: String,
+    gpg_key_cache: Arc<GpgKeyCache>,
+    token_store_path: PathBuf,
 }
 
 impl SessionContext {
-    pub(crate) fn new(socket_path: &str) -> Self {
+    pub(crate) fn new(
+        socket_path: &str,
+        gpg_key_cache: Arc<GpgKeyCache>,
+        token_store_path: PathBuf,
+    ) -> Self {
         Self {
             socket_path: socket_path.to_owned(),
+            gpg_key_cache,
+            token_store_path,
         }
     }
 }
@@ -39,6 +59,10 @@ impl SessionContext {
 #[derive(Debug, Default)]
 pub(super) struct SessionState {
     options: HashMap<String, Option<String>>,
+    signing_keygrip: Option<String>,
+    key_description: Option<String>,
+    hash_algorithm: Option<u32>,
+    hash_value: Option<Vec<u8>>,
 }
 
 impl SessionState {
@@ -52,11 +76,15 @@ impl SessionState {
 
     fn reset(&mut self) {
         self.options.clear();
+        self.signing_keygrip = None;
+        self.key_description = None;
+        self.hash_algorithm = None;
+        self.hash_value = None;
     }
 }
 
 /// Dispatch a parsed command to its handler and return the appropriate response.
-pub(super) fn handle(
+pub(super) async fn handle(
     command: &Command,
     context: &SessionContext,
     state: &mut SessionState,
@@ -83,10 +111,28 @@ pub(super) fn handle(
             code: GPG_ERR_NOT_SUPPORTED,
             message: "Not supported".to_owned(),
         },
-        // NOTE: The spec table (§7.1) says "ERR Not supported" for unknown
-        // commands as a simplification. We follow the real gpg-agent convention
-        // of returning GPG_ERR_ASS_UNKNOWN_CMD (275) for unknown commands, which
-        // matches the Assuan protocol standard and is what gpg clients expect.
+        Command::Havekey { keygrips } => handle_havekey(keygrips, context).await,
+        // NOTE: --data and --ssh-list flags are parsed but not yet acted upon;
+        // the current requirements do not specify behaviour for them.
+        Command::Keyinfo {
+            keygrip,
+            list,
+            data: _,
+            ssh_list: _,
+        } => handle_keyinfo(keygrip.as_deref(), *list, context).await,
+        Command::Readkey { keygrip, no_data } => handle_readkey(keygrip, *no_data, context).await,
+        Command::Sigkey { keygrip } => {
+            state.signing_keygrip = Some(keygrip.clone());
+            Response::Ok(None)
+        }
+        Command::SetKeyDesc { description } => {
+            state.key_description = Some(description.clone());
+            Response::Ok(None)
+        }
+        Command::SetHash {
+            algorithm,
+            hash_hex,
+        } => handle_sethash(*algorithm, hash_hex, state),
         Command::Unknown { .. } => Response::Err {
             code: GPG_ERR_ASS_UNKNOWN_CMD,
             message: "unknown IPC command".to_owned(),
@@ -106,103 +152,266 @@ fn handle_getinfo(subcommand: &str, context: &SessionContext) -> Response {
     }
 }
 
+async fn handle_havekey(keygrips: &[String], context: &SessionContext) -> Response {
+    match context
+        .gpg_key_cache
+        .has_any_keygrip(keygrips, &context.token_store_path)
+        .await
+    {
+        Ok(true) => Response::Ok(None),
+        Ok(false) => Response::Err {
+            code: GPG_ERR_NO_SECKEY,
+            message: "No secret key".to_owned(),
+        },
+        Err(err) => {
+            tracing::warn!(?err, "failed to check keygrip cache");
+            Response::Err {
+                code: GPG_ERR_NO_SECKEY,
+                message: "No secret key".to_owned(),
+            }
+        }
+    }
+}
+
+async fn handle_keyinfo(keygrip: Option<&str>, list: bool, context: &SessionContext) -> Response {
+    if list {
+        return handle_keyinfo_list(context).await;
+    }
+    let Some(keygrip) = keygrip else {
+        return Response::Err {
+            code: GPG_ERR_SYNTAX,
+            message: "keygrip required".to_owned(),
+        };
+    };
+    match context
+        .gpg_key_cache
+        .find_by_keygrip(keygrip, &context.token_store_path)
+        .await
+    {
+        Ok(Some(entry)) => Response::StatusThenOk(vec![format_keyinfo_line(&entry.keygrip)]),
+        Ok(None) => Response::Err {
+            code: GPG_ERR_NO_SECKEY,
+            message: "No secret key".to_owned(),
+        },
+        Err(err) => {
+            tracing::warn!(?err, "failed to look up keygrip");
+            Response::Err {
+                code: GPG_ERR_NO_DATA,
+                message: "No data".to_owned(),
+            }
+        }
+    }
+}
+
+async fn handle_keyinfo_list(context: &SessionContext) -> Response {
+    match context
+        .gpg_key_cache
+        .get_entries(&context.token_store_path)
+        .await
+    {
+        Ok(entries) if entries.is_empty() => Response::Ok(None),
+        Ok(entries) => {
+            let lines = entries
+                .iter()
+                .map(|e| format_keyinfo_line(&e.keygrip))
+                .collect();
+            Response::StatusThenOk(lines)
+        }
+        Err(err) => {
+            tracing::warn!(?err, "failed to list cached keys");
+            Response::Err {
+                code: GPG_ERR_NO_DATA,
+                message: "No data".to_owned(),
+            }
+        }
+    }
+}
+
+fn format_keyinfo_line(keygrip: &str) -> String {
+    format!("KEYINFO {keygrip} D - - 1 P - 0 0 -")
+}
+
+async fn handle_readkey(keygrip: &str, no_data: bool, context: &SessionContext) -> Response {
+    match context
+        .gpg_key_cache
+        .find_by_keygrip(keygrip, &context.token_store_path)
+        .await
+    {
+        Ok(Some(entry)) => {
+            if no_data {
+                // --no-data: confirm key exists without converting to S-expression.
+                return Response::Ok(None);
+            }
+            match crate::sexp::jwk_to_sexp(&entry.public_key) {
+                Ok(sexp) => Response::DataBinaryThenOk(sexp),
+                Err(err) => {
+                    tracing::warn!(?err, "failed to convert key to S-expression");
+                    Response::Err {
+                        code: GPG_ERR_NO_DATA,
+                        message: "failed to convert key".to_owned(),
+                    }
+                }
+            }
+        }
+        Ok(None) => Response::Err {
+            code: GPG_ERR_NO_SECKEY,
+            message: "No secret key".to_owned(),
+        },
+        Err(err) => {
+            tracing::warn!(?err, "failed to read key from cache");
+            Response::Err {
+                code: GPG_ERR_NO_DATA,
+                message: "No data".to_owned(),
+            }
+        }
+    }
+}
+
+fn handle_sethash(algorithm: u32, hash_hex: &str, state: &mut SessionState) -> Response {
+    let Some(bytes) = hex_to_bytes(hash_hex) else {
+        return Response::Err {
+            code: GPG_ERR_SYNTAX,
+            message: "invalid hex string".to_owned(),
+        };
+    };
+    const VALID_LENGTHS: &[usize] = &[16, 20, 24, 28, 32, 48, 64];
+    if !VALID_LENGTHS.contains(&bytes.len()) {
+        return Response::Err {
+            code: GPG_ERR_INV_LENGTH,
+            message: "invalid hash length".to_owned(),
+        };
+    }
+    state.hash_algorithm = Some(algorithm);
+    state.hash_value = Some(bytes);
+    Response::Ok(None)
+}
+
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_context() -> SessionContext {
-        SessionContext::new("/tmp/test.sock")
+        let cache = GpgKeyCache::new(
+            reqwest::Client::new(),
+            "http://localhost:0".to_owned(),
+            None,
+        );
+        SessionContext::new("/tmp/test.sock", cache, PathBuf::from("/tmp/test-tokens"))
     }
 
-    #[test]
-    fn handle_nop_returns_ok() {
+    #[tokio::test]
+    async fn handle_nop_returns_ok() {
         let mut state = SessionState::new();
-        let response = handle(&Command::Nop, &test_context(), &mut state);
+        let response = handle(&Command::Nop, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_option_returns_ok() {
+    #[tokio::test]
+    async fn handle_option_returns_ok() {
         let mut state = SessionState::new();
         let cmd = Command::Option {
             name: "ttyname".to_owned(),
             value: Some("/dev/pts/1".to_owned()),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_option_without_value_returns_ok() {
+    #[tokio::test]
+    async fn handle_option_without_value_returns_ok() {
         let mut state = SessionState::new();
         let cmd = Command::Option {
             name: "lc-messages".to_owned(),
             value: None,
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_reset_returns_ok() {
+    #[tokio::test]
+    async fn handle_reset_returns_ok() {
         let mut state = SessionState::new();
         state.set_option("key".to_owned(), Some("value".to_owned()));
-        let response = handle(&Command::Reset, &test_context(), &mut state);
+        let response = handle(&Command::Reset, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_reset_clears_options() {
+    #[tokio::test]
+    async fn handle_reset_clears_options() {
         let mut state = SessionState::new();
         state.set_option("key".to_owned(), Some("value".to_owned()));
-        handle(&Command::Reset, &test_context(), &mut state);
+        handle(&Command::Reset, &test_context(), &mut state).await;
         // After reset, setting and resetting again should not panic
         assert!(state.options.is_empty());
     }
 
-    #[test]
-    fn handle_getinfo_version() {
+    #[tokio::test]
+    async fn handle_reset_clears_signing_state() {
+        let mut state = SessionState::new();
+        state.signing_keygrip = Some("ABCD".to_owned());
+        state.key_description = Some("desc".to_owned());
+        state.hash_algorithm = Some(8);
+        state.hash_value = Some(vec![0u8; 32]);
+        handle(&Command::Reset, &test_context(), &mut state).await;
+        assert!(state.signing_keygrip.is_none());
+        assert!(state.key_description.is_none());
+        assert!(state.hash_algorithm.is_none());
+        assert!(state.hash_value.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_getinfo_version() {
         let mut state = SessionState::new();
         let cmd = Command::GetInfo {
             subcommand: "version".to_owned(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::DataThenOk(env!("CARGO_PKG_VERSION").to_owned())
         );
     }
 
-    #[test]
-    fn handle_getinfo_pid() {
+    #[tokio::test]
+    async fn handle_getinfo_pid() {
         let mut state = SessionState::new();
         let cmd = Command::GetInfo {
             subcommand: "pid".to_owned(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::DataThenOk(std::process::id().to_string())
         );
     }
 
-    #[test]
-    fn handle_getinfo_socket_name() {
+    #[tokio::test]
+    async fn handle_getinfo_socket_name() {
         let mut state = SessionState::new();
         let cmd = Command::GetInfo {
             subcommand: "socket_name".to_owned(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(response, Response::DataThenOk("/tmp/test.sock".to_owned()));
     }
 
-    #[test]
-    fn handle_getinfo_unknown_subcommand() {
+    #[tokio::test]
+    async fn handle_getinfo_unknown_subcommand() {
         let mut state = SessionState::new();
         let cmd = Command::GetInfo {
             subcommand: "foobar".to_owned(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -212,13 +421,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_getinfo_empty_subcommand() {
+    #[tokio::test]
+    async fn handle_getinfo_empty_subcommand() {
         let mut state = SessionState::new();
         let cmd = Command::GetInfo {
             subcommand: String::new(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -228,24 +437,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_end_returns_ok() {
+    #[tokio::test]
+    async fn handle_end_returns_ok() {
         let mut state = SessionState::new();
-        let response = handle(&Command::End, &test_context(), &mut state);
+        let response = handle(&Command::End, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_bye_returns_ok() {
+    #[tokio::test]
+    async fn handle_bye_returns_ok() {
         let mut state = SessionState::new();
-        let response = handle(&Command::Bye, &test_context(), &mut state);
+        let response = handle(&Command::Bye, &test_context(), &mut state).await;
         assert_eq!(response, Response::Ok(None));
     }
 
-    #[test]
-    fn handle_pkdecrypt_returns_not_supported() {
+    #[tokio::test]
+    async fn handle_pkdecrypt_returns_not_supported() {
         let mut state = SessionState::new();
-        let response = handle(&Command::PkDecrypt, &test_context(), &mut state);
+        let response = handle(&Command::PkDecrypt, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -255,10 +464,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_auth_returns_not_supported() {
+    #[tokio::test]
+    async fn handle_auth_returns_not_supported() {
         let mut state = SessionState::new();
-        let response = handle(&Command::Auth, &test_context(), &mut state);
+        let response = handle(&Command::Auth, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -268,13 +477,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_unknown_returns_unknown_command_error() {
+    #[tokio::test]
+    async fn handle_unknown_returns_unknown_command_error() {
         let mut state = SessionState::new();
         let cmd = Command::Unknown {
             name: "FOOBAR".to_owned(),
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -284,14 +493,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_option_empty_name_returns_syntax_error() {
+    #[tokio::test]
+    async fn handle_option_empty_name_returns_syntax_error() {
         let mut state = SessionState::new();
         let cmd = Command::Option {
             name: String::new(),
             value: None,
         };
-        let response = handle(&cmd, &test_context(), &mut state);
+        let response = handle(&cmd, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -301,8 +510,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_option_overwrites_previous_value() {
+    #[tokio::test]
+    async fn handle_option_overwrites_previous_value() {
         let mut state = SessionState::new();
         let cmd1 = Command::Option {
             name: "key".to_owned(),
@@ -312,8 +521,116 @@ mod tests {
             name: "key".to_owned(),
             value: Some("new".to_owned()),
         };
-        handle(&cmd1, &test_context(), &mut state);
-        handle(&cmd2, &test_context(), &mut state);
+        handle(&cmd1, &test_context(), &mut state).await;
+        handle(&cmd2, &test_context(), &mut state).await;
         assert_eq!(state.options.get("key"), Some(&Some("new".to_owned())));
+    }
+
+    #[tokio::test]
+    async fn handle_sigkey_stores_keygrip() {
+        let mut state = SessionState::new();
+        let cmd = Command::Sigkey {
+            keygrip: "ABCD1234".to_owned(),
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(response, Response::Ok(None));
+        assert_eq!(state.signing_keygrip, Some("ABCD1234".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn handle_setkeydesc_stores_description() {
+        let mut state = SessionState::new();
+        let cmd = Command::SetKeyDesc {
+            description: "test desc".to_owned(),
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(response, Response::Ok(None));
+        assert_eq!(state.key_description, Some("test desc".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn handle_sethash_valid_sha256() {
+        let mut state = SessionState::new();
+        let hash = "aa".repeat(32); // 32 bytes
+        let cmd = Command::SetHash {
+            algorithm: 8,
+            hash_hex: hash,
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(response, Response::Ok(None));
+        assert_eq!(state.hash_algorithm, Some(8));
+        assert_eq!(state.hash_value.as_ref().map(|v| v.len()), Some(32));
+    }
+
+    #[tokio::test]
+    async fn handle_sethash_invalid_length() {
+        let mut state = SessionState::new();
+        let hash = "aa".repeat(5); // 5 bytes, not a valid hash length
+        let cmd = Command::SetHash {
+            algorithm: 8,
+            hash_hex: hash,
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 71,
+                message: "invalid hash length".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sethash_invalid_hex() {
+        let mut state = SessionState::new();
+        let cmd = Command::SetHash {
+            algorithm: 8,
+            hash_hex: "GGGG".to_owned(),
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 147,
+                message: "invalid hex string".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sethash_odd_hex_length() {
+        let mut state = SessionState::new();
+        let cmd = Command::SetHash {
+            algorithm: 8,
+            hash_hex: "ABC".to_owned(),
+        };
+        let response = handle(&cmd, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 147,
+                message: "invalid hex string".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn hex_to_bytes_valid() {
+        assert_eq!(hex_to_bytes("aaBB01"), Some(vec![0xaa, 0xbb, 0x01]));
+    }
+
+    #[test]
+    fn hex_to_bytes_empty() {
+        assert_eq!(hex_to_bytes(""), Some(vec![]));
+    }
+
+    #[test]
+    fn hex_to_bytes_odd_length() {
+        assert_eq!(hex_to_bytes("abc"), None);
+    }
+
+    #[test]
+    fn hex_to_bytes_invalid_chars() {
+        assert_eq!(hex_to_bytes("GGGG"), None);
     }
 }
