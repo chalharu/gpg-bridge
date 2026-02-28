@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::body::{self, Body};
 use axum::http::{Request, StatusCode, header};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -22,7 +22,10 @@ use crate::repository::{
 
 use super::handler::{build_e2e_kids_map, build_pairing_ids_map, compute_expiry};
 use super::types::E2eKeyItem;
-use super::{get_sign_request, patch_sign_request, post_sign_request, post_sign_result};
+use super::{
+    delete_sign_request, get_sign_events, get_sign_request, patch_sign_request, post_sign_request,
+    post_sign_result,
+};
 
 // ---------------------------------------------------------------------------
 // Mock repository
@@ -42,6 +45,7 @@ struct SigningMockRepo {
     request: Mutex<Option<RequestRow>>,
     full_request: Mutex<Option<FullRequestRow>>,
     update_phase2_result: Mutex<Option<bool>>,
+    delete_request_result: Mutex<Option<bool>>,
 }
 
 impl SigningMockRepo {
@@ -59,6 +63,7 @@ impl SigningMockRepo {
             request: Mutex::new(None),
             full_request: Mutex::new(None),
             update_phase2_result: Mutex::new(None),
+            delete_request_result: Mutex::new(None),
         }
     }
 }
@@ -247,6 +252,9 @@ impl SignatureRepository for SigningMockRepo {
     async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+        Ok(self.delete_request_result.lock().unwrap().unwrap_or(true))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +349,7 @@ fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
 fn make_state(repo: SigningMockRepo) -> AppState {
     use crate::http::pairing::notifier::PairingNotifier;
     use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+    use crate::http::signing::notifier::SignEventNotifier;
 
     AppState {
         repository: Arc::new(repo),
@@ -358,6 +367,7 @@ fn make_state(repo: SigningMockRepo) -> AppState {
             max_per_key: 1,
         }),
         pairing_notifier: PairingNotifier::new(),
+        sign_event_notifier: SignEventNotifier::new(),
     }
 }
 
@@ -474,6 +484,7 @@ async fn happy_path_persists_request_and_audit_log() {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
         }
     };
     let app = build_app(state);
@@ -600,6 +611,7 @@ async fn no_active_signing_key_returns_500() {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
         }
     };
     let app = build_app(state);
@@ -949,6 +961,9 @@ impl SignatureRepository for NoActiveKeyMockRepo {
     async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,6 +1183,7 @@ async fn patch_persists_audit_log() {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
         }
     };
     let app = build_patch_app(state);
@@ -1612,6 +1628,9 @@ impl SignatureRepository for ResultMockRepo {
             .unwrap()
             .unwrap_or(true))
     }
+    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1640,7 @@ impl SignatureRepository for ResultMockRepo {
 fn make_result_state(repo: ResultMockRepo) -> AppState {
     use crate::http::pairing::notifier::PairingNotifier;
     use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+    use crate::http::signing::notifier::SignEventNotifier;
 
     AppState {
         repository: Arc::new(repo),
@@ -1638,12 +1658,14 @@ fn make_result_state(repo: ResultMockRepo) -> AppState {
             max_per_key: 1,
         }),
         pairing_notifier: PairingNotifier::new(),
+        sign_event_notifier: SignEventNotifier::new(),
     }
 }
 
 fn make_result_state_arc(repo: Arc<ResultMockRepo>) -> AppState {
     use crate::http::pairing::notifier::PairingNotifier;
     use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+    use crate::http::signing::notifier::SignEventNotifier;
 
     AppState {
         repository: repo,
@@ -1661,6 +1683,7 @@ fn make_result_state_arc(repo: Arc<ResultMockRepo>) -> AppState {
             max_per_key: 1,
         }),
         pairing_notifier: PairingNotifier::new(),
+        sign_event_notifier: SignEventNotifier::new(),
     }
 }
 
@@ -2046,4 +2069,474 @@ async fn post_sign_result_approved_writes_audit_log() {
 
     let logs = repo.audit_logs.lock().unwrap();
     assert!(logs.iter().any(|l| l.event_type == "sign_approved"));
+}
+
+// ===========================================================================
+// DELETE /sign-request tests
+// ===========================================================================
+
+fn build_delete_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-request", delete(delete_sign_request))
+        .with_state(state)
+}
+
+fn delete_request_with_auth(token: &str) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-request")
+        .method("DELETE")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn setup_delete_happy_path(
+    status: &str,
+) -> (
+    josekit::jwk::Jwk,
+    String,
+    josekit::jwk::Jwk,
+    String,
+    SigningMockRepo,
+) {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    // Required by DaemonAuthJws extractor
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: status.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    // Required by delete handler (get_full_request_by_id)
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: status.into(),
+        expired: "2027-01-01T00:00:00Z".into(),
+        signature: None,
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: r#"{"client-1":"pair-1"}"#.into(),
+        e2e_kids: r#"{"client-1":"enc-kid-1"}"#.into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+
+    *repo.delete_request_result.lock().unwrap() = Some(true);
+
+    (server_priv, server_kid, daemon_priv, daemon_kid, repo)
+}
+
+#[tokio::test]
+async fn delete_created_request_returns_204() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("created");
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn delete_pending_request_returns_204() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("pending");
+
+    // Add encrypted_payloads so FCM cancel path is exercised
+    repo.full_request
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .encrypted_payloads = Some(r#"[{"client_id":"client-1","encrypted_data":"data"}]"#.into());
+
+    // Add client for FCM lookup
+    repo.clients
+        .lock()
+        .unwrap()
+        .push(make_client_row_with_enc_key("client-1", "enc-kid-1"));
+
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn delete_approved_request_returns_409() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("approved");
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn delete_denied_request_returns_409() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("denied");
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn delete_unavailable_request_returns_409() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("unavailable");
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn delete_not_found_returns_404() {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    // DaemonAuthJws extractor needs a request row
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    // But full_request is None → 404
+    *repo.full_request.lock().unwrap() = None;
+
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_missing_auth_returns_401() {
+    let (_, _, _, _, repo) = setup_delete_happy_path("created");
+    let state = make_state(repo);
+    let app = build_delete_app(state);
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/sign-request")
+        .body(Body::empty())
+        .unwrap();
+    let status = response_status(app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_writes_audit_log() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) =
+        setup_delete_happy_path("created");
+    let repo_arc: Arc<SigningMockRepo> = Arc::new(repo);
+    let state = {
+        use crate::http::pairing::notifier::PairingNotifier;
+        use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+        AppState {
+            repository: repo_arc.clone(),
+            base_url: "https://api.example.com".to_owned(),
+            signing_key_secret: TEST_SECRET.to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
+            unconsumed_pairing_limit: 100,
+            fcm_validator: Arc::new(NoopFcmValidator),
+            fcm_sender: Arc::new(NoopFcmSender),
+            sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
+        }
+    };
+    let app = build_delete_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, delete_request_with_auth(&token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let logs = repo_arc.audit_logs.lock().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].event_type, "sign_cancelled");
+    assert_eq!(logs[0].request_id, "req-1");
+}
+
+// ===========================================================================
+// GET /sign-events (SSE) tests
+// ===========================================================================
+
+fn build_sign_events_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-events", get(get_sign_events))
+        .with_state(state)
+}
+
+fn sign_events_request(token: &str) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-events")
+        .method("GET")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header("X-Forwarded-For", "10.0.0.1")
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn make_sign_events_aud() -> String {
+    "https://api.example.com/sign-events".to_owned()
+}
+
+fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, SigningMockRepo) {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: status.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: status.into(),
+        expired: "2099-01-01T00:00:00Z".into(),
+        signature: signature.map(|s| s.to_owned()),
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        &make_sign_events_aud(),
+    );
+
+    (token, repo)
+}
+
+#[tokio::test]
+async fn sign_events_approved_returns_immediate_sse() {
+    let (token, repo) = setup_sign_events("approved", Some("sig-data"));
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+
+    let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        ct.contains("text/event-stream"),
+        "expected SSE content-type, got: {ct}"
+    );
+
+    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&bytes);
+    assert!(
+        body_str.contains("event: signature"),
+        "expected signature event in: {body_str}"
+    );
+    assert!(
+        body_str.contains("sig-data"),
+        "expected signature data in: {body_str}"
+    );
+    assert!(
+        body_str.contains("approved"),
+        "expected approved status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_denied_returns_immediate_sse() {
+    let (token, repo) = setup_sign_events("denied", None);
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+
+    let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&bytes);
+    assert!(
+        body_str.contains("event: signature"),
+        "expected signature event in: {body_str}"
+    );
+    assert!(
+        body_str.contains("denied"),
+        "expected denied status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_unavailable_returns_immediate_sse() {
+    let (token, repo) = setup_sign_events("unavailable", None);
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+
+    let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&bytes);
+    assert!(
+        body_str.contains("unavailable"),
+        "expected unavailable status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_missing_auth_returns_401() {
+    let (_, repo) = setup_sign_events("created", None);
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+
+    let req = Request::builder()
+        .uri("/sign-events")
+        .method("GET")
+        .header("X-Forwarded-For", "10.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let status = response_status(app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sign_events_request_not_found_returns_404() {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    // DaemonAuth extractor needs a request row
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    // But full_request is None → 404
+    *repo.full_request.lock().unwrap() = None;
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        &make_sign_events_aud(),
+    );
+
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+    let status = response_status(app, sign_events_request(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sign_events_pending_returns_sse_stream() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let state = make_state(repo);
+    let app = build_sign_events_app(state);
+
+    let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        ct.contains("text/event-stream"),
+        "expected SSE content-type, got: {ct}"
+    );
 }

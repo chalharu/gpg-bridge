@@ -320,6 +320,9 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     /// CAS update: status pending → unavailable.
     /// Returns `true` if the row was updated.
     async fn update_request_unavailable(&self, request_id: &str) -> anyhow::Result<bool>;
+
+    /// Delete a request by ID. Returns `true` if a row was deleted.
+    async fn delete_request(&self, request_id: &str) -> anyhow::Result<bool>;
 }
 
 async fn build_postgres_repository(

@@ -9,6 +9,7 @@ use crate::http::AppState;
 use crate::http::auth::SignJwtAuth;
 use crate::repository::AuditLogRow;
 
+use super::notifier::SignEventData;
 use super::types::SignResultBody;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,13 @@ async fn handle_approved(
     // Send FCM cancel to other devices
     send_cancel_to_others(state, &auth.request_id, &auth.client_id).await;
 
-    // TODO: SSE push to daemon (KAN-30)
+    state.sign_event_notifier.notify(
+        &auth.request_id,
+        SignEventData {
+            signature: Some(signature.clone()),
+            status: "approved".to_owned(),
+        },
+    );
 
     write_audit_log(
         state,
@@ -109,7 +116,13 @@ async fn handle_denied(state: &AppState, auth: &SignJwtAuth) -> Result<StatusCod
     // Send FCM cancel to other devices
     send_cancel_to_others(state, &auth.request_id, &auth.client_id).await;
 
-    // TODO: SSE push to daemon (KAN-30)
+    state.sign_event_notifier.notify(
+        &auth.request_id,
+        SignEventData {
+            signature: None,
+            status: "denied".to_owned(),
+        },
+    );
 
     write_audit_log(
         state,
@@ -172,7 +185,13 @@ async fn handle_unavailable(state: &AppState, auth: &SignJwtAuth) -> Result<Stat
             .map_err(AppError::from)?;
 
         if status_updated {
-            // TODO: SSE push to daemon (KAN-30)
+            state.sign_event_notifier.notify(
+                &auth.request_id,
+                SignEventData {
+                    signature: None,
+                    status: "unavailable".to_owned(),
+                },
+            );
             // No FCM cancel needed: all clients already responded unavailable
             write_audit_log(state, &auth.request_id, "sign_unavailable", None).await;
             tracing::info!(request_id = %auth.request_id, "all devices unavailable");

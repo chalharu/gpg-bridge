@@ -632,6 +632,15 @@ impl SignatureRepository for SqliteRepository {
         .context("failed to update request unavailable")?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn delete_request(&self, request_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM requests WHERE request_id = $1")
+            .bind(request_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete request")?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 #[derive(sqlx::FromRow)]

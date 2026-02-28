@@ -338,6 +338,9 @@ impl SignatureRepository for PairingMockRepo {
     async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +421,7 @@ fn make_state(repo: PairingMockRepo) -> AppState {
             max_per_key: 1,
         }),
         pairing_notifier: PairingNotifier::new(),
+        sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
     }
 }
 
