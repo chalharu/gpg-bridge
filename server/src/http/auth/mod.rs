@@ -2,6 +2,7 @@ mod client_jwt;
 mod daemon_auth;
 mod device_assertion;
 mod error;
+mod sign_jwt;
 
 pub(crate) use client_jwt::verify_one_token;
 pub use client_jwt::{ClientInfo, ClientJwtAuth};
@@ -9,6 +10,7 @@ pub(crate) use client_jwt::{filter_valid_pairings, verify_all_tokens};
 pub use daemon_auth::DaemonAuthJws;
 pub use device_assertion::DeviceAssertionAuth;
 pub use error::AuthError;
+pub use sign_jwt::SignJwtAuth;
 
 use axum::http::{self, request::Parts};
 use josekit::jwk::Jwk;

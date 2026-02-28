@@ -376,7 +376,7 @@ impl SignatureRepository for SqliteRepository {
         request_id: &str,
     ) -> anyhow::Result<Option<FullRequestRow>> {
         let row = sqlx::query_as::<_, SqliteFullRequestRow>(
-            "SELECT request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, encrypted_payloads, unavailable_client_ids FROM requests WHERE request_id = $1",
+            "SELECT request_id, status, expired, signature, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, encrypted_payloads, unavailable_client_ids FROM requests WHERE request_id = $1",
         )
         .bind(request_id)
         .fetch_optional(&self.pool)
@@ -528,6 +528,110 @@ impl SignatureRepository for SqliteRepository {
             .context("failed to delete expired jtis")?;
         Ok(result.rows_affected())
     }
+
+    async fn get_pending_requests_for_client(
+        &self,
+        client_id: &str,
+    ) -> anyhow::Result<Vec<FullRequestRow>> {
+        let rows = sqlx::query_as::<_, SqliteFullRequestRow>(
+            "SELECT request_id, status, expired, signature, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, encrypted_payloads, unavailable_client_ids FROM requests WHERE status = 'pending' AND expired > datetime('now') AND EXISTS (SELECT 1 FROM json_each(requests.client_ids) WHERE json_each.value = $1) AND NOT EXISTS (SELECT 1 FROM json_each(requests.unavailable_client_ids) WHERE json_each.value = $1)",
+        )
+        .bind(client_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to get pending requests for client")?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn update_request_approved(
+        &self,
+        request_id: &str,
+        signature: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = 'approved', signature = $1 WHERE request_id = $2 AND status = 'pending'",
+        )
+        .bind(signature)
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update request approved")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn update_request_denied(&self, request_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = 'denied' WHERE request_id = $1 AND status = 'pending'",
+        )
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update request denied")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn add_unavailable_client_id(
+        &self,
+        request_id: &str,
+        client_id: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT unavailable_client_ids, client_ids, status FROM requests WHERE request_id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("failed to read request for unavailable update")?;
+
+        let (unavailable_json, client_ids, status) = match row {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        if status != "pending" {
+            return Ok(None);
+        }
+
+        let mut unavailable: Vec<String> = serde_json::from_str(&unavailable_json)
+            .context("invalid unavailable_client_ids JSON")?;
+        if unavailable.contains(&client_id.to_owned()) {
+            return Ok(None);
+        }
+
+        unavailable.push(client_id.to_owned());
+        let updated = serde_json::to_string(&unavailable)
+            .context("failed to serialize unavailable_client_ids")?;
+
+        sqlx::query(
+            "UPDATE requests SET unavailable_client_ids = $1 WHERE request_id = $2 AND status = 'pending'",
+        )
+        .bind(&updated)
+        .bind(request_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to update unavailable_client_ids")?;
+
+        tx.commit().await.context("failed to commit transaction")?;
+
+        Ok(Some((updated, client_ids)))
+    }
+
+    async fn update_request_unavailable(&self, request_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = 'unavailable' WHERE request_id = $1 AND status = 'pending'",
+        )
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update request unavailable")?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -636,6 +740,7 @@ struct SqliteFullRequestRow {
     request_id: String,
     status: String,
     expired: String,
+    signature: Option<String>,
     client_ids: String,
     daemon_public_key: String,
     daemon_enc_public_key: String,
@@ -651,6 +756,7 @@ impl From<SqliteFullRequestRow> for FullRequestRow {
             request_id: r.request_id,
             status: r.status,
             expired: r.expired,
+            signature: r.signature,
             client_ids: r.client_ids,
             daemon_public_key: r.daemon_public_key,
             daemon_enc_public_key: r.daemon_enc_public_key,

@@ -134,6 +134,8 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         .route("/pairing/refresh", post(pairing::refresh_client_jwt))
         .route("/sign-request", post(signing::post_sign_request))
         .route("/sign-request", patch(signing::patch_sign_request))
+        .route("/sign-request", get(signing::get_sign_request))
+        .route("/sign-result", post(signing::post_sign_result))
         .layer(axum::middleware::from_fn(accept_version_middleware));
 
     // SSE routes (no accept_version_middleware).
@@ -373,6 +375,28 @@ mod tests {
         async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn get_pending_requests_for_client(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
+            unimplemented!()
+        }
+        async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn add_unavailable_client_id(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<Option<(String, String)>> {
+            unimplemented!()
+        }
+        async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -557,6 +581,28 @@ mod tests {
             unimplemented!()
         }
         async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn get_pending_requests_for_client(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
+            unimplemented!()
+        }
+        async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn add_unavailable_client_id(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<Option<(String, String)>> {
+            unimplemented!()
+        }
+        async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
     }
