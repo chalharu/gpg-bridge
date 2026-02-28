@@ -28,6 +28,7 @@ use tracing::Level;
 use crate::error::AppError;
 use crate::repository::SignatureRepository;
 
+use self::fcm::FcmSender;
 use self::fcm::FcmValidator;
 use self::middleware::security_headers_middleware;
 use self::pairing::notifier::PairingNotifier;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub request_jwt_validity_seconds: u64,
     pub unconsumed_pairing_limit: i64,
     pub fcm_validator: Arc<dyn FcmValidator>,
+    pub fcm_sender: Arc<dyn FcmSender>,
     pub sse_tracker: SseConnectionTracker,
     pub pairing_notifier: PairingNotifier,
 }
@@ -131,6 +133,7 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         )
         .route("/pairing/refresh", post(pairing::refresh_client_jwt))
         .route("/sign-request", post(signing::post_sign_request))
+        .route("/sign-request", patch(signing::patch_sign_request))
         .layer(axum::middleware::from_fn(accept_version_middleware));
 
     // SSE routes (no accept_version_middleware).
@@ -361,6 +364,15 @@ mod tests {
         async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
             unimplemented!()
         }
+        async fn get_full_request_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
+            unimplemented!()
+        }
+        async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -538,6 +550,15 @@ mod tests {
         async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
             unimplemented!()
         }
+        async fn get_full_request_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
+            unimplemented!()
+        }
+        async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -579,6 +600,7 @@ mod tests {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            fcm_sender: Arc::new(fcm::NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,
@@ -602,6 +624,7 @@ mod tests {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            fcm_sender: Arc::new(fcm::NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,
@@ -646,6 +669,7 @@ mod tests {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(fcm::NoopFcmValidator),
+            fcm_sender: Arc::new(fcm::NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,

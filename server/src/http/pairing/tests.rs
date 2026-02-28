@@ -11,7 +11,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::http::AppState;
-use crate::http::fcm::NoopFcmValidator;
+use crate::http::fcm::{NoopFcmSender, NoopFcmValidator};
 use crate::jwt::{
     ClientInnerClaims, ClientOuterClaims, DeviceAssertionClaims, PairingClaims, PayloadType,
     encrypt_jwe_direct, encrypt_private_key, generate_signing_key_pair, jwk_to_json, sign_jws,
@@ -307,6 +307,15 @@ impl SignatureRepository for PairingMockRepo {
     async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
         unimplemented!()
     }
+    async fn get_full_request_by_id(
+        &self,
+        _: &str,
+    ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
+        unimplemented!()
+    }
+    async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +390,7 @@ fn make_state(repo: PairingMockRepo) -> AppState {
         request_jwt_validity_seconds: 300,
         unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
+        fcm_sender: Arc::new(NoopFcmSender),
         sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
             max_per_ip: 20,
             max_per_key: 1,
