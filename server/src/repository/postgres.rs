@@ -837,6 +837,8 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
+            fcm_service_account_key_path: None,
+            fcm_project_id: None,
         };
 
         let repository = build_repository(&config).await.unwrap();

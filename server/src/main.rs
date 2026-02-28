@@ -3,8 +3,7 @@ use gpg_bridge_server::{
     config::AppConfig,
     http::{
         AppState, build_router,
-        fcm::NoopFcmSender,
-        fcm::NoopFcmValidator,
+        fcm::{self, FcmSender, FcmValidator, NoopFcmSender, NoopFcmValidator},
         pairing::notifier::PairingNotifier,
         rate_limit::{RateLimitConfig, SseConnectionTracker, config::SseConnectionConfig},
         signing::notifier::SignEventNotifier,
@@ -12,7 +11,8 @@ use gpg_bridge_server::{
     observability::init_tracing,
     repository::build_repository,
 };
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
 #[command(name = "gpg-bridge-server")]
@@ -46,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     repository.run_migrations().await?;
     repository.health_check().await?;
 
+    let (fcm_validator, fcm_sender) = build_fcm_clients(&config)?;
+
     let state = AppState {
         repository,
         base_url: config.base_url.clone(),
@@ -55,8 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client_jwt_validity_seconds: config.client_jwt_validity_seconds,
         request_jwt_validity_seconds: config.request_jwt_validity_seconds,
         unconsumed_pairing_limit: config.unconsumed_pairing_limit,
-        fcm_validator: std::sync::Arc::new(NoopFcmValidator),
-        fcm_sender: std::sync::Arc::new(NoopFcmSender),
+        fcm_validator,
+        fcm_sender,
         sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
             max_per_ip: config.rate_limit_sse_max_per_ip,
             max_per_key: config.rate_limit_sse_max_per_key,
@@ -77,6 +79,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     Ok(())
+}
+
+type FcmClients = (Arc<dyn FcmValidator>, Arc<dyn FcmSender>);
+
+fn build_fcm_clients(config: &AppConfig) -> Result<FcmClients, Box<dyn std::error::Error>> {
+    match (&config.fcm_service_account_key_path, &config.fcm_project_id) {
+        (Some(key_path), Some(project_id)) => {
+            let client = fcm::build_fcm_client(key_path, project_id)?;
+            let arc_client = Arc::new(client);
+            info!("FCM enabled (project: {project_id})");
+            Ok((arc_client.clone(), arc_client))
+        }
+        (Some(_), None) => {
+            warn!(
+                "Partial FCM config: fcm_service_account_key_path is set but fcm_project_id is missing; falling back to Noop"
+            );
+            Ok((Arc::new(NoopFcmValidator), Arc::new(NoopFcmSender)))
+        }
+        (None, Some(_)) => {
+            warn!(
+                "Partial FCM config: fcm_project_id is set but fcm_service_account_key_path is missing; falling back to Noop"
+            );
+            Ok((Arc::new(NoopFcmValidator), Arc::new(NoopFcmSender)))
+        }
+        (None, None) => {
+            info!("FCM disabled (no credentials configured)");
+            Ok((Arc::new(NoopFcmValidator), Arc::new(NoopFcmSender)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +136,60 @@ mod tests {
 
         assert_eq!(cli.host, None);
         assert_eq!(cli.port, Some(3001));
+    }
+
+    fn test_config(fcm_key_path: Option<&str>, fcm_project_id: Option<&str>) -> AppConfig {
+        AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_FCM_SERVICE_ACCOUNT_KEY_PATH" => fcm_key_path.map(String::from),
+            "SERVER_FCM_PROJECT_ID" => fcm_project_id.map(String::from),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn build_fcm_clients_noop_when_no_config() {
+        let config = test_config(None, None);
+        let (validator, sender) = build_fcm_clients(&config).unwrap();
+        // Noop validator/sender should succeed without hitting any real API
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(rt.block_on(validator.validate_token("tok")).unwrap());
+        rt.block_on(sender.send_data_message("tok", &serde_json::json!({})))
+            .unwrap();
+    }
+
+    #[test]
+    fn build_fcm_clients_noop_when_only_key_path() {
+        let config = test_config(Some("/some/key.json"), None);
+        // Should fall back to Noop (partial config)
+        let (validator, _sender) = build_fcm_clients(&config).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(rt.block_on(validator.validate_token("tok")).unwrap());
+    }
+
+    #[test]
+    fn build_fcm_clients_noop_when_only_project_id() {
+        let config = test_config(None, Some("my-project"));
+        // Should fall back to Noop (partial config)
+        let (validator, _sender) = build_fcm_clients(&config).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(rt.block_on(validator.validate_token("tok")).unwrap());
+    }
+
+    #[test]
+    fn build_fcm_clients_real_when_full_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("sa.json");
+        let sa_json = serde_json::json!({
+            "client_email": "test@proj.iam.gserviceaccount.com",
+            "private_key": include_str!("../test_fixtures/fake_rsa_key.pem"),
+            "token_uri": "https://oauth2.googleapis.com/token"
+        });
+        std::fs::write(&key_path, sa_json.to_string()).unwrap();
+        let config = test_config(key_path.to_str(), Some("my-project"));
+        let result = build_fcm_clients(&config);
+        assert!(result.is_ok());
     }
 }

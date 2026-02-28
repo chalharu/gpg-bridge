@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub client_jwt_validity_seconds: u64,
     pub request_jwt_validity_seconds: u64,
     pub unconsumed_pairing_limit: i64,
+    pub fcm_service_account_key_path: Option<String>,
+    pub fcm_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +133,8 @@ impl AppConfig {
             parse_env(lookup, "SERVER_REQUEST_JWT_VALIDITY_SECONDS", "300")?;
         let unconsumed_pairing_limit: i64 =
             parse_env(lookup, "SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
+        let fcm_service_account_key_path = lookup("SERVER_FCM_SERVICE_ACCOUNT_KEY_PATH");
+        let fcm_project_id = lookup("SERVER_FCM_PROJECT_ID");
 
         let config = Self {
             server_host,
@@ -154,6 +158,8 @@ impl AppConfig {
             client_jwt_validity_seconds,
             request_jwt_validity_seconds,
             unconsumed_pairing_limit,
+            fcm_service_account_key_path,
+            fcm_project_id,
         };
 
         validate_db_pool(&config)?;
