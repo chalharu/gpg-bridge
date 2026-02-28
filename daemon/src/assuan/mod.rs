@@ -1,4 +1,5 @@
 mod command;
+pub(crate) mod error_code;
 mod handler;
 mod response;
 mod session;

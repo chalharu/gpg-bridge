@@ -2,6 +2,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tracing::debug;
 
 use super::command::Command;
+use super::error_code::GPG_ERR_ASS_LINE_TOO_LONG;
 use super::handler::{SessionContext, SessionState, handle};
 use super::response::Response;
 
@@ -11,9 +12,6 @@ const MAX_LINE_LENGTH: usize = 1000;
 /// Buffer capacity used for bounded line reads. One byte beyond the maximum
 /// allows detecting lines that exceed the protocol limit.
 const READ_BUF_CAPACITY: u64 = (MAX_LINE_LENGTH as u64) + 1;
-
-/// Error code for line-too-long condition (GPG_ERR_ASS_LINE_TOO_LONG).
-const GPG_ERR_ASS_LINE_TOO_LONG: u32 = 276;
 
 /// Greeting message sent when a client connects.
 const GREETING: &str = "Pleased to meet you";
@@ -256,6 +254,54 @@ mod tests {
     #[tokio::test]
     async fn session_auth_returns_not_supported() {
         let output = run_test_session("/tmp/test.sock", "AUTH\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_genkey_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "GENKEY\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_import_key_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "IMPORT_KEY\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_import_keyfiles_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "IMPORT_KEYFILES\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_export_key_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "EXPORT_KEY\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_delete_key_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "DELETE_KEY\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_get_passphrase_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "GET_PASSPHRASE\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_scd_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "SCD\nBYE\n").await;
+        assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
+    }
+
+    #[tokio::test]
+    async fn session_learn_returns_not_supported() {
+        let output = run_test_session("/tmp/test.sock", "LEARN\nBYE\n").await;
         assert_eq!(output, "OK Pleased to meet you\nERR 69 Not supported\nOK\n");
     }
 

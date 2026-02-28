@@ -14,6 +14,13 @@ pub(super) enum Command {
     Bye,
     PkDecrypt,
     Auth,
+    GenKey,
+    ImportKey,
+    ExportKey,
+    DeleteKey,
+    GetPassphrase,
+    Scd,
+    Learn,
     Havekey {
         keygrips: Vec<String>,
     },
@@ -72,6 +79,13 @@ impl Command {
             "BYE" => Self::Bye,
             "PKDECRYPT" => Self::PkDecrypt,
             "AUTH" => Self::Auth,
+            "GENKEY" => Self::GenKey,
+            "IMPORT_KEY" | "IMPORT_KEYFILES" => Self::ImportKey,
+            "EXPORT_KEY" => Self::ExportKey,
+            "DELETE_KEY" => Self::DeleteKey,
+            "GET_PASSPHRASE" => Self::GetPassphrase,
+            "SCD" => Self::Scd,
+            "LEARN" => Self::Learn,
             "HAVEKEY" => parse_havekey(args),
             "KEYINFO" => parse_keyinfo(args),
             "READKEY" => parse_readkey(args),
@@ -639,5 +653,93 @@ mod tests {
     fn parse_cancel_case_insensitive() {
         assert_eq!(Command::parse("cancel"), Command::Cancel);
         assert_eq!(Command::parse("Cancel"), Command::Cancel);
+    }
+
+    #[test]
+    fn parse_genkey() {
+        assert_eq!(Command::parse("GENKEY"), Command::GenKey);
+    }
+
+    #[test]
+    fn parse_genkey_case_insensitive() {
+        assert_eq!(Command::parse("genkey"), Command::GenKey);
+        assert_eq!(Command::parse("GenKey"), Command::GenKey);
+    }
+
+    #[test]
+    fn parse_import_key() {
+        assert_eq!(Command::parse("IMPORT_KEY"), Command::ImportKey);
+    }
+
+    #[test]
+    fn parse_import_keyfiles() {
+        assert_eq!(Command::parse("IMPORT_KEYFILES"), Command::ImportKey);
+    }
+
+    #[test]
+    fn parse_import_key_case_insensitive() {
+        assert_eq!(Command::parse("import_key"), Command::ImportKey);
+    }
+
+    #[test]
+    fn parse_export_key() {
+        assert_eq!(Command::parse("EXPORT_KEY"), Command::ExportKey);
+    }
+
+    #[test]
+    fn parse_export_key_case_insensitive() {
+        assert_eq!(Command::parse("export_key"), Command::ExportKey);
+    }
+
+    #[test]
+    fn parse_delete_key() {
+        assert_eq!(Command::parse("DELETE_KEY"), Command::DeleteKey);
+    }
+
+    #[test]
+    fn parse_delete_key_case_insensitive() {
+        assert_eq!(Command::parse("delete_key"), Command::DeleteKey);
+    }
+
+    #[test]
+    fn parse_get_passphrase() {
+        assert_eq!(Command::parse("GET_PASSPHRASE"), Command::GetPassphrase);
+    }
+
+    #[test]
+    fn parse_get_passphrase_case_insensitive() {
+        assert_eq!(Command::parse("get_passphrase"), Command::GetPassphrase);
+    }
+
+    #[test]
+    fn parse_scd() {
+        assert_eq!(Command::parse("SCD"), Command::Scd);
+    }
+
+    #[test]
+    fn parse_scd_case_insensitive() {
+        assert_eq!(Command::parse("scd"), Command::Scd);
+        assert_eq!(Command::parse("Scd"), Command::Scd);
+    }
+
+    #[test]
+    fn parse_learn() {
+        assert_eq!(Command::parse("LEARN"), Command::Learn);
+    }
+
+    #[test]
+    fn parse_learn_case_insensitive() {
+        assert_eq!(Command::parse("learn"), Command::Learn);
+        assert_eq!(Command::parse("Learn"), Command::Learn);
+    }
+
+    #[test]
+    fn parse_genkey_with_args_still_genkey() {
+        assert_eq!(Command::parse("GENKEY --something"), Command::GenKey);
+    }
+
+    #[test]
+    fn parse_scd_with_args_still_scd() {
+        assert_eq!(Command::parse("SCD GETATTR KEY-FPR"), Command::Scd);
     }
 }
