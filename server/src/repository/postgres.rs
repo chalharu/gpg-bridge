@@ -455,6 +455,27 @@ impl SignatureRepository for PostgresRepository {
         Ok(())
     }
 
+    async fn delete_expired_audit_logs(
+        &self,
+        approved_before: &str,
+        denied_before: &str,
+        conflict_before: &str,
+    ) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM audit_log WHERE \
+             (event_type IN ('sign_approved','sign_request_created','sign_request_dispatched') AND timestamp < $1) \
+             OR (event_type IN ('sign_denied','sign_device_unavailable','sign_unavailable','sign_expired','sign_cancelled') AND timestamp < $2) \
+             OR (event_type = 'sign_result_conflict' AND timestamp < $3)",
+        )
+        .bind(approved_before)
+        .bind(denied_before)
+        .bind(conflict_before)
+        .execute(&self.pool)
+        .await
+        .context("failed to delete expired audit logs")?;
+        Ok(result.rows_affected())
+    }
+
     async fn update_client_public_keys(
         &self,
         client_id: &str,

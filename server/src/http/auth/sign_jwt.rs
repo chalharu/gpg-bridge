@@ -223,6 +223,14 @@ mod tests {
         async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
             unimplemented!()
         }
+        async fn delete_expired_audit_logs(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
         async fn get_full_request_by_id(&self, _: &str) -> anyhow::Result<Option<FullRequestRow>> {
             unimplemented!()
         }

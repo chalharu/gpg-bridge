@@ -246,6 +246,23 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     /// Insert an immutable audit-log entry.
     async fn create_audit_log(&self, row: &AuditLogRow) -> anyhow::Result<()>;
 
+    /// Delete audit logs older than the given retention cutoffs.
+    ///
+    /// Each parameter is an RFC 3339 timestamp.  Rows are deleted when:
+    /// - `sign_approved`, `sign_request_created`, `sign_request_dispatched`
+    ///    have `timestamp < approved_before` (1-year retention)
+    /// - `sign_denied`, `sign_device_unavailable`, `sign_unavailable`,
+    ///    `sign_expired`, `sign_cancelled`
+    ///    have `timestamp < denied_before` (6-month retention)
+    /// - `sign_result_conflict`
+    ///    has `timestamp < conflict_before` (3-month retention)
+    async fn delete_expired_audit_logs(
+        &self,
+        approved_before: &str,
+        denied_before: &str,
+        conflict_before: &str,
+    ) -> anyhow::Result<u64>;
+
     // ---- jtis operations ----
 
     /// Update public_keys and default_kid for a client in one query.

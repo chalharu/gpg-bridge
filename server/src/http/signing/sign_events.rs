@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::WatchStream;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::http::AppState;
@@ -17,6 +18,7 @@ use crate::jwt::{
     DaemonAuthClaims, PayloadType, RequestClaims, decode_jws_unverified, extract_kid,
     jwk_from_json, verify_jws, verify_jws_with_key,
 };
+use crate::repository::AuditLogRow;
 
 use super::notifier::SignEventData;
 
@@ -220,6 +222,7 @@ impl StreamState {
         let remaining = (self.expiry - Utc::now()).to_std().unwrap_or_default();
         if remaining.is_zero() {
             self.done = true;
+            self.write_expired_audit_log().await;
             let data = SignEventData {
                 signature: None,
                 status: "expired".to_owned(),
@@ -252,6 +255,7 @@ impl StreamState {
             () = tokio::time::sleep(remaining) => {
                 // Request expired — send expired event and terminate.
                 self.done = true;
+                self.write_expired_audit_log().await;
                 let data = SignEventData {
                     signature: None,
                     status: "expired".to_owned(),
@@ -287,6 +291,26 @@ impl StreamState {
                 status: "cancelled".to_owned(),
             }),
             _ => None,
+        }
+    }
+
+    async fn write_expired_audit_log(&self) {
+        let row = AuditLogRow {
+            log_id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            event_type: "sign_expired".to_owned(),
+            request_id: self.request_id.clone(),
+            request_ip: None,
+            target_client_ids: None,
+            responding_client_id: None,
+            error_code: None,
+            error_message: None,
+        };
+        if let Err(e) = self.state.repository.create_audit_log(&row).await {
+            tracing::error!(
+                request_id = %self.request_id,
+                "audit log write failed for sign_expired: {e:?}"
+            );
         }
     }
 }
