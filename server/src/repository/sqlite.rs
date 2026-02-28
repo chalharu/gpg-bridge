@@ -455,6 +455,27 @@ impl SignatureRepository for SqliteRepository {
         Ok(())
     }
 
+    async fn delete_expired_audit_logs(
+        &self,
+        approved_before: &str,
+        denied_before: &str,
+        conflict_before: &str,
+    ) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM audit_log WHERE \
+             (event_type IN ('sign_approved','sign_request_created','sign_request_dispatched') AND timestamp < $1) \
+             OR (event_type IN ('sign_denied','sign_device_unavailable','sign_unavailable','sign_expired','sign_cancelled') AND timestamp < $2) \
+             OR (event_type = 'sign_result_conflict' AND timestamp < $3)",
+        )
+        .bind(approved_before)
+        .bind(denied_before)
+        .bind(conflict_before)
+        .execute(&self.pool)
+        .await
+        .context("failed to delete expired audit logs")?;
+        Ok(result.rows_affected())
+    }
+
     async fn update_client_public_keys(
         &self,
         client_id: &str,
@@ -1161,5 +1182,117 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    // ---- audit_log repository tests ----
+
+    async fn insert_audit_log(pool: &SqlitePool, log_id: &str, event_type: &str, timestamp: &str) {
+        sqlx::query(
+            "INSERT INTO audit_log (log_id, timestamp, event_type, request_id) \
+             VALUES ($1, $2, $3, 'req-1')",
+        )
+        .bind(log_id)
+        .bind(timestamp)
+        .bind(event_type)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn count_audit_logs(pool: &SqlitePool) -> i32 {
+        sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM audit_log")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_audit_log_inserts_row() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        let row = super::AuditLogRow {
+            log_id: "log-1".into(),
+            timestamp: "2026-06-01T00:00:00Z".into(),
+            event_type: "sign_approved".into(),
+            request_id: "req-1".into(),
+            request_ip: None,
+            target_client_ids: None,
+            responding_client_id: Some("client-1".into()),
+            error_code: None,
+            error_message: None,
+        };
+        repo.create_audit_log(&row).await.unwrap();
+        assert_eq!(count_audit_logs(&pool).await, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_expired_audit_logs_by_retention() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        // approved (1yr retention): old=2024, new=2026
+        insert_audit_log(&pool, "a1", "sign_approved", "2024-01-01T00:00:00Z").await;
+        insert_audit_log(&pool, "a2", "sign_approved", "2026-01-01T00:00:00Z").await;
+        // created (1yr retention)
+        insert_audit_log(&pool, "a3", "sign_request_created", "2024-01-01T00:00:00Z").await;
+        // denied (6mo retention): old=2025-01, new=2026
+        insert_audit_log(&pool, "a4", "sign_denied", "2025-01-01T00:00:00Z").await;
+        insert_audit_log(&pool, "a5", "sign_denied", "2026-01-01T00:00:00Z").await;
+        // expired (6mo retention)
+        insert_audit_log(&pool, "a6", "sign_expired", "2025-03-01T00:00:00Z").await;
+        // cancelled (6mo retention)
+        insert_audit_log(&pool, "a7", "sign_cancelled", "2025-02-01T00:00:00Z").await;
+        // conflict (3mo retention): old=2025-09, new=2026
+        insert_audit_log(&pool, "a8", "sign_result_conflict", "2025-09-01T00:00:00Z").await;
+        insert_audit_log(&pool, "a9", "sign_result_conflict", "2026-01-01T00:00:00Z").await;
+        // device_unavailable (6mo)
+        insert_audit_log(
+            &pool,
+            "a10",
+            "sign_device_unavailable",
+            "2025-01-01T00:00:00Z",
+        )
+        .await;
+        // unavailable (6mo)
+        insert_audit_log(&pool, "a11", "sign_unavailable", "2025-02-01T00:00:00Z").await;
+
+        assert_eq!(count_audit_logs(&pool).await, 11);
+
+        // Cutoffs: approved_before=2025-06-01, denied_before=2025-12-01, conflict_before=2025-12-01
+        let deleted = repo
+            .delete_expired_audit_logs(
+                "2025-06-01T00:00:00Z",
+                "2025-12-01T00:00:00Z",
+                "2025-12-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        // Deleted: a1 (approved old), a3 (created old), a4 (denied old),
+        //          a6 (expired old), a7 (cancelled old), a8 (conflict old),
+        //          a10 (device_unavailable old), a11 (unavailable old) = 8
+        assert_eq!(deleted, 8);
+        // Remaining: a2, a5, a9 = 3
+        assert_eq!(count_audit_logs(&pool).await, 3);
+    }
+
+    #[tokio::test]
+    async fn delete_expired_audit_logs_returns_zero_when_empty() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool };
+
+        let deleted = repo
+            .delete_expired_audit_logs(
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
     }
 }

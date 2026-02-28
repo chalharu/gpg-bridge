@@ -189,6 +189,9 @@ impl SignatureRepository for SigningMockRepo {
         self.audit_logs.lock().unwrap().push(row.clone());
         Ok(())
     }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+        Ok(0)
+    }
     async fn update_client_public_keys(
         &self,
         _: &str,
@@ -896,6 +899,9 @@ impl SignatureRepository for NoActiveKeyMockRepo {
     async fn create_audit_log(&self, r: &AuditLogRow) -> anyhow::Result<()> {
         self.base.create_audit_log(r).await
     }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+        Ok(0)
+    }
     async fn update_client_public_keys(
         &self,
         _: &str,
@@ -1582,6 +1588,9 @@ impl SignatureRepository for ResultMockRepo {
     async fn create_audit_log(&self, row: &AuditLogRow) -> anyhow::Result<()> {
         self.audit_logs.lock().unwrap().push(row.clone());
         Ok(())
+    }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+        Ok(0)
     }
     async fn get_full_request_by_id(&self, _: &str) -> anyhow::Result<Option<FullRequestRow>> {
         Ok(self.full_request_for_fcm.lock().unwrap().clone())
