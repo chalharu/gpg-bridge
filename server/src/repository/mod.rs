@@ -86,6 +86,7 @@ pub struct FullRequestRow {
     pub request_id: String,
     pub status: String,
     pub expired: String,
+    pub signature: Option<String>,
     pub client_ids: String,
     pub daemon_public_key: String,
     pub daemon_enc_public_key: String,
@@ -284,6 +285,41 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
 
     /// Delete JTIs whose `expired` timestamp is before `now`.
     async fn delete_expired_jtis(&self, now: &str) -> anyhow::Result<u64>;
+
+    // ---- sign-result operations ----
+
+    /// Get all pending requests where `client_id` is in `client_ids` but
+    /// NOT in `unavailable_client_ids`.
+    async fn get_pending_requests_for_client(
+        &self,
+        client_id: &str,
+    ) -> anyhow::Result<Vec<FullRequestRow>>;
+
+    /// CAS update: status pending → approved, set signature.
+    /// Returns `true` if the row was updated.
+    async fn update_request_approved(
+        &self,
+        request_id: &str,
+        signature: &str,
+    ) -> anyhow::Result<bool>;
+
+    /// CAS update: status pending → denied.
+    /// Returns `true` if the row was updated.
+    async fn update_request_denied(&self, request_id: &str) -> anyhow::Result<bool>;
+
+    /// Add `client_id` to the `unavailable_client_ids` JSON array (CAS).
+    /// Returns `Ok(Some((updated_unavailable_json, client_ids_json)))` if
+    /// successfully added, `Ok(None)` if `client_id` was already present
+    /// or the request status is not `'pending'`.
+    async fn add_unavailable_client_id(
+        &self,
+        request_id: &str,
+        client_id: &str,
+    ) -> anyhow::Result<Option<(String, String)>>;
+
+    /// CAS update: status pending → unavailable.
+    /// Returns `true` if the row was updated.
+    async fn update_request_unavailable(&self, request_id: &str) -> anyhow::Result<bool>;
 }
 
 async fn build_postgres_repository(

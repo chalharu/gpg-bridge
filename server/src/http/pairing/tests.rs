@@ -316,6 +316,28 @@ impl SignatureRepository for PairingMockRepo {
     async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn get_pending_requests_for_client(
+        &self,
+        _: &str,
+    ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
+        unimplemented!()
+    }
+    async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+    async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+    async fn add_unavailable_client_id(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        unimplemented!()
+    }
+    async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
 }
 
 // ---------------------------------------------------------------------------

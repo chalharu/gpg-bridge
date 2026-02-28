@@ -41,3 +41,23 @@ pub struct EncryptedPayloadItem {
     pub(super) client_id: String,
     pub(super) encrypted_data: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct GetSignRequestResponse {
+    pub(super) requests: Vec<GetSignRequestItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetSignRequestItem {
+    pub(super) request_id: String,
+    pub(super) sign_jwt: String,
+    pub(super) encrypted_payload: String,
+    pub(super) pairing_id: String,
+    pub(super) daemon_enc_public_key: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignResultBody {
+    pub(super) status: String,
+    pub(super) signature: Option<String>,
+}

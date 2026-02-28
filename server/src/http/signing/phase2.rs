@@ -132,26 +132,12 @@ async fn send_notifications(client_ids_json: &str, request_id: &str, state: &App
         "request_id": request_id,
     });
     for client_id in &client_ids {
-        let token = match lookup_device_token(client_id, state).await {
+        let token = match super::helpers::lookup_device_token(client_id, state).await {
             Some(t) => t,
             None => continue,
         };
         if let Err(e) = state.fcm_sender.send_data_message(&token, &data).await {
             tracing::warn!(client_id = %client_id, "FCM send failed: {e}");
-        }
-    }
-}
-
-async fn lookup_device_token(client_id: &str, state: &AppState) -> Option<String> {
-    match state.repository.get_client_by_id(client_id).await {
-        Ok(Some(c)) => Some(c.device_token),
-        Ok(None) => {
-            tracing::warn!(client_id = %client_id, "client not found for FCM");
-            None
-        }
-        Err(e) => {
-            tracing::error!(client_id = %client_id, "failed to fetch client: {e}");
-            None
         }
     }
 }
