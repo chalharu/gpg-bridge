@@ -58,6 +58,9 @@ class _MockKeyManagementService implements KeyManagementService {
 
   @override
   Future<void> deleteGpgPrivateKeyMaterial(String keygrip) async {}
+
+  @override
+  Future<Uint8List?> readGpgPrivateKey(String keygrip) async => null;
 }
 
 // ---------------------------------------------------------------------------

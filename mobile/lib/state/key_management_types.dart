@@ -53,4 +53,7 @@ abstract interface class KeyManagementService {
 
   /// Delete stored GPG private key material.
   Future<void> deleteGpgPrivateKeyMaterial(String keygrip);
+
+  /// Read GPG private key material for a given keygrip.
+  Future<Uint8List?> readGpgPrivateKey(String keygrip);
 }

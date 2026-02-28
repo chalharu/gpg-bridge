@@ -1,5 +1,6 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'sign_execution_service.dart';
 import 'sign_request_service.dart';
 
 export 'sign_request_types.dart';
@@ -31,11 +32,14 @@ class SignRequestState extends _$SignRequestState {
     );
   }
 
-  /// Handles a user approval.
-  ///
-  /// GPG signing is not yet implemented — see KAN-47.
+  /// Handles a user approval: signs the hash and submits result.
   Future<void> approve(DecryptedSignRequest request) async {
-    throw UnimplementedError('GPG signing not yet implemented - see KAN-47');
+    final executionService = ref.read(signExecutionServiceProvider);
+    final result = await executionService.executeApproval(request);
+    if (result == SignExecutionResult.approved ||
+        result == SignExecutionResult.unavailable) {
+      dismiss(request.requestId);
+    }
   }
 
   /// Handles a user denial: delegates to service and removes from list.

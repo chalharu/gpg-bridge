@@ -184,6 +184,19 @@ class DefaultKeyManagementService implements KeyManagementService {
     }
   }
 
+  @override
+  Future<Uint8List?> readGpgPrivateKey(String keygrip) async {
+    try {
+      final raw = await _storageService.readValue(
+        key: '${SecureStorageKeys.gpgPrivateKeyPrefix}$keygrip',
+      );
+      if (raw == null) return null;
+      return base64Decode(raw);
+    } catch (error) {
+      _rethrowOrWrap(error, 'read GPG private key');
+    }
+  }
+
   /// Generates an EC P-256 key pair using pointycastle.
   AsymmetricKeyPair<PublicKey, PrivateKey> _generateEcKeyPair() {
     final secureRandom = FortunaRandom();
