@@ -3,25 +3,25 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::{self, Body};
-use axum::http::{Request, StatusCode};
-use axum::routing::post;
+use axum::http::{Request, StatusCode, header};
+use axum::routing::{patch, post};
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::http::AppState;
-use crate::http::fcm::NoopFcmValidator;
+use crate::http::fcm::{NoopFcmSender, NoopFcmValidator};
 use crate::jwt::{
-    ClientInnerClaims, ClientOuterClaims, PayloadType, encrypt_jwe_direct, encrypt_private_key,
-    generate_signing_key_pair, jwk_to_json, sign_jws,
+    ClientInnerClaims, ClientOuterClaims, DaemonAuthClaims, PayloadType, RequestClaims,
+    encrypt_jwe_direct, encrypt_private_key, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
 use crate::repository::{
-    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, PairingRow, RequestRow,
-    SignatureRepository, SigningKeyRow,
+    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, FullRequestRow, PairingRow,
+    RequestRow, SignatureRepository, SigningKeyRow,
 };
 
 use super::handler::{build_e2e_kids_map, build_pairing_ids_map, compute_expiry};
-use super::post_sign_request;
 use super::types::E2eKeyItem;
+use super::{patch_sign_request, post_sign_request};
 
 // ---------------------------------------------------------------------------
 // Mock repository
@@ -38,6 +38,9 @@ struct SigningMockRepo {
     jti_accepted: bool,
     force_create_request_error: bool,
     force_audit_log_error: bool,
+    request: Mutex<Option<RequestRow>>,
+    full_request: Mutex<Option<FullRequestRow>>,
+    update_phase2_result: Mutex<Option<bool>>,
 }
 
 impl SigningMockRepo {
@@ -52,6 +55,9 @@ impl SigningMockRepo {
             jti_accepted: true,
             force_create_request_error: false,
             force_audit_log_error: false,
+            request: Mutex::new(None),
+            full_request: Mutex::new(None),
+            update_phase2_result: Mutex::new(None),
         }
     }
 }
@@ -154,7 +160,7 @@ impl SignatureRepository for SigningMockRepo {
         unimplemented!()
     }
     async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
-        Ok(None)
+        Ok(self.request.lock().unwrap().clone())
     }
     async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()> {
         if self.force_create_request_error {
@@ -204,6 +210,19 @@ impl SignatureRepository for SigningMockRepo {
     }
     async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
         Ok(0)
+    }
+    async fn get_full_request_by_id(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<FullRequestRow>> {
+        Ok(self.full_request.lock().unwrap().clone())
+    }
+    async fn update_request_phase2(
+        &self,
+        _request_id: &str,
+        _encrypted_payloads: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(self.update_phase2_result.lock().unwrap().unwrap_or(true))
     }
 }
 
@@ -310,6 +329,7 @@ fn make_state(repo: SigningMockRepo) -> AppState {
         request_jwt_validity_seconds: 300,
         unconsumed_pairing_limit: 100,
         fcm_validator: Arc::new(NoopFcmValidator),
+        fcm_sender: Arc::new(NoopFcmSender),
         sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
             max_per_ip: 20,
             max_per_key: 1,
@@ -425,6 +445,7 @@ async fn happy_path_persists_request_and_audit_log() {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(NoopFcmValidator),
+            fcm_sender: Arc::new(NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,
@@ -550,6 +571,7 @@ async fn no_active_signing_key_returns_500() {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(NoopFcmValidator),
+            fcm_sender: Arc::new(NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,
@@ -867,6 +889,21 @@ impl SignatureRepository for NoActiveKeyMockRepo {
     async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
         Ok(0)
     }
+    async fn get_full_request_by_id(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<FullRequestRow>> {
+        self.base.get_full_request_by_id(request_id).await
+    }
+    async fn update_request_phase2(
+        &self,
+        request_id: &str,
+        encrypted_payloads: &str,
+    ) -> anyhow::Result<bool> {
+        self.base
+            .update_request_phase2(request_id, encrypted_payloads)
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -932,4 +969,385 @@ fn pairing_ids_map_built_correctly() {
 fn compute_expiry_returns_rfc3339() {
     let exp = compute_expiry(300);
     chrono::DateTime::parse_from_rfc3339(&exp).expect("should be valid RFC 3339");
+}
+
+// ===========================================================================
+// Phase 2: PATCH /sign-request tests
+// ===========================================================================
+
+const VALID_COORD_P2: &str = VALID_COORD;
+
+fn build_patch_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-request", patch(patch_sign_request))
+        .with_state(state)
+}
+
+/// Create a valid daemon_auth_jws bearer token.
+fn make_daemon_token(
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    daemon_priv: &josekit::jwk::Jwk,
+    daemon_kid: &str,
+    request_id: &str,
+    aud: &str,
+) -> String {
+    let request_claims = RequestClaims {
+        sub: request_id.into(),
+        payload_type: PayloadType::Request,
+        exp: 1_900_000_000,
+    };
+    let request_jwt = sign_jws(&request_claims, server_priv, server_kid).unwrap();
+
+    let outer = DaemonAuthClaims {
+        request_jwt,
+        aud: aud.into(),
+        iat: 1_900_000_000 - 30,
+        exp: 1_900_000_000,
+        jti: uuid::Uuid::new_v4().to_string(),
+    };
+    sign_jws(&outer, daemon_priv, daemon_kid).unwrap()
+}
+
+fn patch_json(token: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
+        .uri("/sign-request")
+        .header("content-type", "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
+/// Build a Phase 2 mock repo with daemon auth support.
+fn setup_phase2_happy_path() -> (
+    josekit::jwk::Jwk,
+    String,
+    josekit::jwk::Jwk,
+    String,
+    SigningMockRepo,
+) {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    // Required by DaemonAuthJws extractor
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    // Required by patch_sign_request handler
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        expired: "2027-01-01T00:00:00Z".into(),
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_enc_public_key: json!({
+            "kty": "EC", "crv": "P-256",
+            "x": VALID_COORD_P2, "y": VALID_COORD_P2,
+            "alg": "ECDH-ES+A256KW"
+        })
+        .to_string(),
+        pairing_ids: r#"{"client-1":"pair-1"}"#.into(),
+        e2e_kids: r#"{"client-1":"enc-kid-1"}"#.into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+
+    *repo.update_phase2_result.lock().unwrap() = Some(true);
+
+    // Client row (for FCM notification lookup)
+    repo.clients
+        .lock()
+        .unwrap()
+        .push(make_client_row_with_enc_key("client-1", "enc-kid-1"));
+
+    (server_priv, server_kid, daemon_priv, daemon_kid, repo)
+}
+
+fn valid_patch_body() -> serde_json::Value {
+    json!({
+        "encrypted_payloads": [
+            {
+                "client_id": "client-1",
+                "encrypted_data": "base64-encoded-cipher-text"
+            }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn patch_happy_path_returns_204() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn patch_persists_audit_log() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    let repo_arc: Arc<SigningMockRepo> = Arc::new(repo);
+    let state = {
+        use crate::http::pairing::notifier::PairingNotifier;
+        use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+        AppState {
+            repository: repo_arc.clone(),
+            base_url: "https://api.example.com".to_owned(),
+            signing_key_secret: TEST_SECRET.to_owned(),
+            device_jwt_validity_seconds: 31_536_000,
+            pairing_jwt_validity_seconds: 300,
+            client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
+            unconsumed_pairing_limit: 100,
+            fcm_validator: Arc::new(NoopFcmValidator),
+            fcm_sender: Arc::new(NoopFcmSender),
+            sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
+                max_per_ip: 20,
+                max_per_key: 1,
+            }),
+            pairing_notifier: PairingNotifier::new(),
+        }
+    };
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let logs = repo_arc.audit_logs.lock().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].event_type, "sign_request_dispatched");
+    assert_eq!(logs[0].request_id, "req-1");
+}
+
+#[tokio::test]
+async fn patch_status_not_created_returns_409() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    // Change status to "pending" so it should be rejected
+    repo.full_request.lock().unwrap().as_mut().unwrap().status = "pending".into();
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn patch_client_id_mismatch_returns_400() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    // Body has wrong client_id
+    let body = json!({
+        "encrypted_payloads": [
+            {
+                "client_id": "wrong-client",
+                "encrypted_data": "data"
+            }
+        ]
+    });
+    let status = response_status(app, patch_json(&token, &body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_cas_failure_returns_409() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    // CAS update returns false (concurrent modification)
+    *repo.update_phase2_result.lock().unwrap() = Some(false);
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn patch_request_not_found_returns_404() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    // Clear full_request so load_request fails
+    *repo.full_request.lock().unwrap() = None;
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn patch_missing_auth_returns_401() {
+    let (_, _, _, _, repo) = setup_phase2_happy_path();
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/sign-request")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&valid_patch_body()).unwrap()))
+        .unwrap();
+    let status = response_status(app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn patch_multiple_clients_happy_path() {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = SigningMockRepo::new(sk);
+
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-2".into(),
+        status: "created".into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-2".into(),
+        status: "created".into(),
+        expired: "2027-01-01T00:00:00Z".into(),
+        client_ids: r#"["c1","c2"]"#.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: r#"{"c1":"p1","c2":"p2"}"#.into(),
+        e2e_kids: r#"{"c1":"k1","c2":"k2"}"#.into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+
+    *repo.update_phase2_result.lock().unwrap() = Some(true);
+
+    for cid in &["c1", "c2"] {
+        repo.clients
+            .lock()
+            .unwrap()
+            .push(make_client_row_with_enc_key(cid, &format!("ek-{cid}")));
+    }
+
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-2",
+        "https://api.example.com/sign-request",
+    );
+    let body = json!({
+        "encrypted_payloads": [
+            { "client_id": "c1", "encrypted_data": "data1" },
+            { "client_id": "c2", "encrypted_data": "data2" }
+        ]
+    });
+    let status = response_status(app, patch_json(&token, &body)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn patch_audit_log_error_still_returns_204() {
+    // Audit log failure after a successful CAS update must NOT mask the
+    // success — the handler logs a warning and still returns 204.
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    let repo = SigningMockRepo {
+        force_audit_log_error: true,
+        ..repo
+    };
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    let status = response_status(app, patch_json(&token, &valid_patch_body())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn patch_duplicate_client_id_returns_400() {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo) = setup_phase2_happy_path();
+    let state = make_state(repo);
+    let app = build_patch_app(state);
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/sign-request",
+    );
+    // Send two payloads with the same client_id
+    let body = serde_json::json!({
+        "encrypted_payloads": [
+            { "client_id": "client-1", "encrypted_data": "data1" },
+            { "client_id": "client-1", "encrypted_data": "data2" },
+        ]
+    });
+    let status = response_status(app, patch_json(&token, &body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

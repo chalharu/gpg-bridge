@@ -344,6 +344,15 @@ mod tests {
         async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
             unimplemented!()
         }
+        async fn get_full_request_by_id(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
+            unimplemented!()
+        }
+        async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
@@ -401,6 +410,7 @@ mod tests {
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
+            fcm_sender: Arc::new(crate::http::fcm::NoopFcmSender),
             sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
                 max_per_ip: 20,
                 max_per_key: 1,

@@ -30,3 +30,14 @@ pub struct E2eKeyItem {
     pub(super) client_id: String,
     pub(super) public_key: serde_json::Value,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct PatchSignRequestBody {
+    pub(super) encrypted_payloads: Vec<EncryptedPayloadItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EncryptedPayloadItem {
+    pub(super) client_id: String,
+    pub(super) encrypted_data: String,
+}

@@ -80,6 +80,21 @@ pub struct CreateRequestRow {
     pub unavailable_client_ids: String,
 }
 
+/// A full request row (all columns).
+#[derive(Debug, Clone)]
+pub struct FullRequestRow {
+    pub request_id: String,
+    pub status: String,
+    pub expired: String,
+    pub client_ids: String,
+    pub daemon_public_key: String,
+    pub daemon_enc_public_key: String,
+    pub pairing_ids: String,
+    pub e2e_kids: String,
+    pub encrypted_payloads: Option<String>,
+    pub unavailable_client_ids: String,
+}
+
 /// Fields required to create an audit log entry.
 #[derive(Debug, Clone)]
 pub struct AuditLogRow {
@@ -198,6 +213,20 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     // ---- requests operations ----
 
     async fn get_request_by_id(&self, request_id: &str) -> anyhow::Result<Option<RequestRow>>;
+
+    /// Get all columns for a request.
+    async fn get_full_request_by_id(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<FullRequestRow>>;
+
+    /// CAS update: set status = "pending" and encrypted_payloads only if
+    /// status is currently "created".  Returns `true` if updated.
+    async fn update_request_phase2(
+        &self,
+        request_id: &str,
+        encrypted_payloads: &str,
+    ) -> anyhow::Result<bool>;
 
     /// Create a new sign request row.
     async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()>;

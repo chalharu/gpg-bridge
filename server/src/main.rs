@@ -3,6 +3,7 @@ use gpg_bridge_server::{
     config::AppConfig,
     http::{
         AppState, build_router,
+        fcm::NoopFcmSender,
         fcm::NoopFcmValidator,
         pairing::notifier::PairingNotifier,
         rate_limit::{RateLimitConfig, SseConnectionTracker, config::SseConnectionConfig},
@@ -54,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request_jwt_validity_seconds: config.request_jwt_validity_seconds,
         unconsumed_pairing_limit: config.unconsumed_pairing_limit,
         fcm_validator: std::sync::Arc::new(NoopFcmValidator),
+        fcm_sender: std::sync::Arc::new(NoopFcmSender),
         sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
             max_per_ip: config.rate_limit_sse_max_per_ip,
             max_per_key: config.rate_limit_sse_max_per_key,

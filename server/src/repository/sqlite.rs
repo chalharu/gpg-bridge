@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use super::{
-    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, MIGRATOR, PairingRow, RequestRow,
-    SignatureRepository, SigningKeyRow,
+    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, FullRequestRow, MIGRATOR,
+    PairingRow, RequestRow, SignatureRepository, SigningKeyRow,
 };
 
 #[derive(Debug, Clone)]
@@ -371,6 +371,36 @@ impl SignatureRepository for SqliteRepository {
         Ok(row.map(Into::into))
     }
 
+    async fn get_full_request_by_id(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<FullRequestRow>> {
+        let row = sqlx::query_as::<_, SqliteFullRequestRow>(
+            "SELECT request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, encrypted_payloads, unavailable_client_ids FROM requests WHERE request_id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get full request by id")?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn update_request_phase2(
+        &self,
+        request_id: &str,
+        encrypted_payloads: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = 'pending', encrypted_payloads = $1 WHERE request_id = $2 AND status = 'created'",
+        )
+        .bind(encrypted_payloads)
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update request phase2")?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO requests (request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, unavailable_client_ids) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
@@ -597,6 +627,37 @@ impl From<SqliteRequestRow> for RequestRow {
             request_id: r.request_id,
             status: r.status,
             daemon_public_key: r.daemon_public_key,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SqliteFullRequestRow {
+    request_id: String,
+    status: String,
+    expired: String,
+    client_ids: String,
+    daemon_public_key: String,
+    daemon_enc_public_key: String,
+    pairing_ids: String,
+    e2e_kids: String,
+    encrypted_payloads: Option<String>,
+    unavailable_client_ids: String,
+}
+
+impl From<SqliteFullRequestRow> for FullRequestRow {
+    fn from(r: SqliteFullRequestRow) -> Self {
+        Self {
+            request_id: r.request_id,
+            status: r.status,
+            expired: r.expired,
+            client_ids: r.client_ids,
+            daemon_public_key: r.daemon_public_key,
+            daemon_enc_public_key: r.daemon_enc_public_key,
+            pairing_ids: r.pairing_ids,
+            e2e_kids: r.e2e_kids,
+            encrypted_payloads: r.encrypted_payloads,
+            unavailable_client_ids: r.unavailable_client_ids,
         }
     }
 }
