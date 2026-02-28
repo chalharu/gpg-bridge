@@ -92,6 +92,8 @@ mod tests {
             client_jwt_validity_seconds: 31_536_000,
             request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
+            fcm_service_account_key_path: None,
+            fcm_project_id: None,
             rate_limit_strict_quota: 5,
             rate_limit_strict_window_seconds: 30,
             rate_limit_standard_quota: 100,
