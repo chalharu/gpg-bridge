@@ -10,6 +10,7 @@ import '../pages/pairing_page.dart';
 import '../pages/qr_scan_page.dart';
 import '../pages/register_page.dart';
 import '../pages/settings_page.dart';
+import '../pages/sign_request/sign_request_page.dart';
 import '../state/auth_state.dart';
 
 part 'app_router.g.dart';
@@ -26,6 +27,13 @@ GoRouter appRouter(Ref ref) {
       GoRoute(
         path: '/pairing/scan',
         builder: (context, state) => const QrScanPage(),
+      ),
+      GoRoute(
+        path: SignRequestPage.routePath,
+        builder: (context, state) {
+          final requestId = state.pathParameters['requestId']!;
+          return SignRequestPage(requestId: requestId);
+        },
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
