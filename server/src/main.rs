@@ -51,6 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         device_jwt_validity_seconds: config.device_jwt_validity_seconds,
         pairing_jwt_validity_seconds: config.pairing_jwt_validity_seconds,
         client_jwt_validity_seconds: config.client_jwt_validity_seconds,
+        request_jwt_validity_seconds: config.request_jwt_validity_seconds,
         unconsumed_pairing_limit: config.unconsumed_pairing_limit,
         fcm_validator: std::sync::Arc::new(NoopFcmValidator),
         sse_tracker: SseConnectionTracker::new(SseConnectionConfig {

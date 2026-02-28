@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use super::{
-    ClientPairingRow, ClientRow, MIGRATOR, PairingRow, RequestRow, SignatureRepository,
-    SigningKeyRow,
+    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, MIGRATOR, PairingRow, RequestRow,
+    SignatureRepository, SigningKeyRow,
 };
 
 #[derive(Debug, Clone)]
@@ -371,6 +371,60 @@ impl SignatureRepository for SqliteRepository {
         Ok(row.map(Into::into))
     }
 
+    async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO requests (request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, unavailable_client_ids) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(&row.request_id)
+        .bind(&row.status)
+        .bind(&row.expired)
+        .bind(&row.client_ids)
+        .bind(&row.daemon_public_key)
+        .bind(&row.daemon_enc_public_key)
+        .bind(&row.pairing_ids)
+        .bind(&row.e2e_kids)
+        .bind(&row.unavailable_client_ids)
+        .execute(&self.pool)
+        .await
+        .context("failed to create request")?;
+        Ok(())
+    }
+
+    async fn count_pending_requests_for_pairing(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+    ) -> anyhow::Result<i64> {
+        let count = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM requests WHERE status IN ('created', 'pending') AND EXISTS (SELECT 1 FROM json_each(requests.client_ids) WHERE json_each.value = $1) AND json_extract(requests.pairing_ids, '$.\"' || $1 || '\"') = $2",
+        )
+        .bind(client_id)
+        .bind(pairing_id)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count pending requests for pairing")?;
+        Ok(i64::from(count))
+    }
+
+    async fn create_audit_log(&self, row: &AuditLogRow) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO audit_log (log_id, timestamp, event_type, request_id, request_ip, target_client_ids, responding_client_id, error_code, error_message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(&row.log_id)
+        .bind(&row.timestamp)
+        .bind(&row.event_type)
+        .bind(&row.request_id)
+        .bind(&row.request_ip)
+        .bind(&row.target_client_ids)
+        .bind(&row.responding_client_id)
+        .bind(&row.error_code)
+        .bind(&row.error_message)
+        .execute(&self.pool)
+        .await
+        .context("failed to create audit log")?;
+        Ok(())
+    }
+
     async fn update_client_public_keys(
         &self,
         client_id: &str,
@@ -576,6 +630,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
         }
     }

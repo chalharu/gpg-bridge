@@ -58,7 +58,7 @@ impl FromRequest<AppState> for ClientJwtAuth {
 }
 
 /// Verify and decrypt all tokens. Any crypto failure rejects ALL (all-or-nothing).
-async fn verify_all_tokens(
+pub(crate) async fn verify_all_tokens(
     tokens: &[String],
     state: &AppState,
 ) -> Result<Vec<(String, String)>, AppError> {
@@ -118,7 +118,7 @@ pub(crate) fn decrypt_inner_jwe(
 ///
 /// Groups by client_id to avoid redundant DB queries when multiple tokens
 /// share the same client.
-async fn filter_valid_pairings(
+pub(crate) async fn filter_valid_pairings(
     pairs: Vec<(String, String)>,
     state: &AppState,
 ) -> Result<Vec<ClientInfo>, AppError> {
@@ -328,6 +328,22 @@ mod tests {
         ) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn create_request(
+            &self,
+            _: &crate::repository::CreateRequestRow,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn count_pending_requests_for_pairing(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
+            unimplemented!()
+        }
     }
 
     // ---- Helpers ----
@@ -382,6 +398,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
             sse_tracker: SseConnectionTracker::new(SseConnectionConfig {

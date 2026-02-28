@@ -52,6 +52,7 @@ mod tests {
             device_jwt_validity_seconds: 31_536_000,
             pairing_jwt_validity_seconds: 300,
             client_jwt_validity_seconds: 31_536_000,
+            request_jwt_validity_seconds: 300,
             unconsumed_pairing_limit: 100,
             rate_limit_strict_quota: 10,
             rate_limit_strict_window_seconds: 60,

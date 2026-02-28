@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub device_jwt_validity_seconds: u64,
     pub pairing_jwt_validity_seconds: u64,
     pub client_jwt_validity_seconds: u64,
+    pub request_jwt_validity_seconds: u64,
     pub unconsumed_pairing_limit: i64,
 }
 
@@ -126,6 +127,8 @@ impl AppConfig {
             parse_env(lookup, "SERVER_PAIRING_JWT_VALIDITY_SECONDS", "300")?;
         let client_jwt_validity_seconds: u64 =
             parse_env(lookup, "SERVER_CLIENT_JWT_VALIDITY_SECONDS", "31536000")?;
+        let request_jwt_validity_seconds: u64 =
+            parse_env(lookup, "SERVER_REQUEST_JWT_VALIDITY_SECONDS", "300")?;
         let unconsumed_pairing_limit: i64 =
             parse_env(lookup, "SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
 
@@ -149,6 +152,7 @@ impl AppConfig {
             device_jwt_validity_seconds,
             pairing_jwt_validity_seconds,
             client_jwt_validity_seconds,
+            request_jwt_validity_seconds,
             unconsumed_pairing_limit,
         };
 
@@ -157,6 +161,7 @@ impl AppConfig {
         validate_rate_limit(&config)?;
         validate_device_jwt_validity(&config)?;
         validate_pairing_config(&config)?;
+        validate_request_jwt_validity(&config)?;
 
         Ok(config)
     }
@@ -214,6 +219,15 @@ fn validate_pairing_config(config: &AppConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_request_jwt_validity(config: &AppConfig) -> anyhow::Result<()> {
+    if config.request_jwt_validity_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_REQUEST_JWT_VALIDITY_SECONDS must be greater than 0"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +258,7 @@ mod tests {
         assert_eq!(config.device_jwt_validity_seconds, 31_536_000);
         assert_eq!(config.pairing_jwt_validity_seconds, 300);
         assert_eq!(config.client_jwt_validity_seconds, 31_536_000);
+        assert_eq!(config.request_jwt_validity_seconds, 300);
         assert_eq!(config.unconsumed_pairing_limit, 100);
     }
 

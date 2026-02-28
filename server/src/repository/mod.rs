@@ -66,6 +66,34 @@ pub struct RequestRow {
     pub daemon_public_key: String,
 }
 
+/// Fields required to create a new request row.
+#[derive(Debug, Clone)]
+pub struct CreateRequestRow {
+    pub request_id: String,
+    pub status: String,
+    pub expired: String,
+    pub client_ids: String,
+    pub daemon_public_key: String,
+    pub daemon_enc_public_key: String,
+    pub pairing_ids: String,
+    pub e2e_kids: String,
+    pub unavailable_client_ids: String,
+}
+
+/// Fields required to create an audit log entry.
+#[derive(Debug, Clone)]
+pub struct AuditLogRow {
+    pub log_id: String,
+    pub timestamp: String,
+    pub event_type: String,
+    pub request_id: String,
+    pub request_ip: Option<String>,
+    pub target_client_ids: Option<String>,
+    pub responding_client_id: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
 #[async_trait]
 pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     async fn run_migrations(&self) -> anyhow::Result<()>;
@@ -170,6 +198,23 @@ pub trait SignatureRepository: Send + Sync + std::fmt::Debug {
     // ---- requests operations ----
 
     async fn get_request_by_id(&self, request_id: &str) -> anyhow::Result<Option<RequestRow>>;
+
+    /// Create a new sign request row.
+    async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()>;
+
+    /// Count in-flight requests (status IN ('created','pending')) where
+    /// `client_ids` contains the given client_id AND `pairing_ids` maps
+    /// that client_id to the given pairing_id.
+    async fn count_pending_requests_for_pairing(
+        &self,
+        client_id: &str,
+        pairing_id: &str,
+    ) -> anyhow::Result<i64>;
+
+    // ---- audit_log operations ----
+
+    /// Insert an immutable audit-log entry.
+    async fn create_audit_log(&self, row: &AuditLogRow) -> anyhow::Result<()>;
 
     // ---- jtis operations ----
 
