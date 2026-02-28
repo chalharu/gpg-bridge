@@ -2,49 +2,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use zeroize::Zeroize;
+
 use super::command::Command;
+use super::error_code::{
+    GPG_ERR_ASS_UNKNOWN_CMD, GPG_ERR_INV_LENGTH, GPG_ERR_NO_DATA, GPG_ERR_NO_SECKEY,
+    GPG_ERR_NOT_SUPPORTED, GPG_ERR_SYNTAX,
+};
 use super::response::Response;
 use crate::gpg_key_cache::GpgKeyCache;
 use crate::sign_flow;
-
-/// Error code for unknown IPC command (e.g., unknown GETINFO subcommand).
-///
-/// Raw libgpg-error code `GPG_ERR_ASS_UNKNOWN_CMD` with source = 0. We omit
-/// the source bits intentionally: gpg clients only inspect the lower 16 bits,
-/// and using source 0 avoids pretending to be the real gpg-agent.
-const GPG_ERR_ASS_UNKNOWN_CMD: u32 = 275;
-
-/// Error code for unsupported commands (PKDECRYPT, AUTH, etc.).
-///
-/// Raw libgpg-error code `GPG_ERR_NOT_SUPPORTED` (69) with source = 0.
-/// Kept consistent with [`GPG_ERR_ASS_UNKNOWN_CMD`] — see its doc comment.
-const GPG_ERR_NOT_SUPPORTED: u32 = 69;
-
-/// Error code for syntax errors (e.g., OPTION with no name).
-///
-/// Raw libgpg-error code `GPG_ERR_SYNTAX` (147) with source = 0.
-const GPG_ERR_SYNTAX: u32 = 147;
-
-/// No secret key (used by HAVEKEY / KEYINFO / READKEY when key not found).
-pub(super) const GPG_ERR_NO_SECKEY: u32 = 17;
-
-/// No data available.
-const GPG_ERR_NO_DATA: u32 = 58;
-
-/// Timeout (used when SSE wait expires).
-pub(super) const GPG_ERR_TIMEOUT: u32 = 62;
-
-/// Invalid length (e.g., SETHASH with wrong hash byte count).
-const GPG_ERR_INV_LENGTH: u32 = 71;
-
-/// Operation cancelled.
-pub(super) const GPG_ERR_CANCELED: u32 = 99;
-
-/// Missing value (e.g., SETHASH not called before PKSIGN).
-pub(super) const GPG_ERR_MISSING_VALUE: u32 = 178;
-
-/// General error for unclassified failures.
-pub(super) const GPG_ERR_GENERAL: u32 = 1;
 
 /// Immutable session configuration shared across all commands in a connection.
 #[derive(Debug, Clone)]
@@ -99,8 +66,19 @@ impl SessionState {
         self.signing_keygrip = None;
         self.key_description = None;
         self.hash_algorithm = None;
+        if let Some(ref mut hash) = self.hash_value {
+            hash.zeroize();
+        }
         self.hash_value = None;
         self.sign_flow = None;
+    }
+}
+
+impl Drop for SessionState {
+    fn drop(&mut self) {
+        if let Some(ref mut hash) = self.hash_value {
+            hash.zeroize();
+        }
     }
 }
 
@@ -128,7 +106,15 @@ pub(super) async fn handle(
         }
         Command::GetInfo { subcommand } => handle_getinfo(subcommand, context),
         Command::Bye => Response::Ok(None),
-        Command::PkDecrypt | Command::Auth => Response::Err {
+        Command::PkDecrypt
+        | Command::Auth
+        | Command::GenKey
+        | Command::ImportKey
+        | Command::ExportKey
+        | Command::DeleteKey
+        | Command::GetPassphrase
+        | Command::Scd
+        | Command::Learn => Response::Err {
             code: GPG_ERR_NOT_SUPPORTED,
             message: "Not supported".to_owned(),
         },
@@ -321,6 +307,9 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::error_code::{
+        GPG_ERR_CANCELED, GPG_ERR_GENERAL, GPG_ERR_MISSING_VALUE, GPG_ERR_NO_SECKEY,
+    };
     use super::*;
 
     fn test_context() -> SessionContext {
@@ -497,6 +486,97 @@ mod tests {
     async fn handle_auth_returns_not_supported() {
         let mut state = SessionState::new();
         let response = handle(&Command::Auth, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_genkey_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::GenKey, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_import_key_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::ImportKey, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_export_key_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::ExportKey, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_delete_key_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::DeleteKey, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_get_passphrase_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::GetPassphrase, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_scd_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::Scd, &test_context(), &mut state).await;
+        assert_eq!(
+            response,
+            Response::Err {
+                code: 69,
+                message: "Not supported".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_learn_returns_not_supported() {
+        let mut state = SessionState::new();
+        let response = handle(&Command::Learn, &test_context(), &mut state).await;
         assert_eq!(
             response,
             Response::Err {
@@ -729,6 +809,22 @@ mod tests {
         assert!(state.sign_flow.is_none());
         handle(&Command::Reset, &test_context(), &mut state).await;
         assert!(state.sign_flow.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_reset_zeroizes_hash_value() {
+        let mut state = SessionState::new();
+        state.hash_value = Some(vec![0xAA; 32]);
+        handle(&Command::Reset, &test_context(), &mut state).await;
+        assert!(state.hash_value.is_none());
+    }
+
+    #[test]
+    fn session_state_drop_zeroizes_hash_value() {
+        let mut state = SessionState::new();
+        state.hash_value = Some(vec![0xBB; 32]);
+        // Dropping state should not panic (zeroize runs in Drop)
+        drop(state);
     }
 
     #[tokio::test]

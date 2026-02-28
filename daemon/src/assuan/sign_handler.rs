@@ -1,9 +1,9 @@
 //! Signing-related Assuan command handlers (PKSIGN, CANCEL).
 
-use super::handler::{
+use super::error_code::{
     GPG_ERR_CANCELED, GPG_ERR_GENERAL, GPG_ERR_MISSING_VALUE, GPG_ERR_NO_SECKEY, GPG_ERR_TIMEOUT,
-    SessionContext, SessionState,
 };
+use super::handler::{SessionContext, SessionState};
 use super::response::Response;
 use crate::sign_event_sse::{self, SignEventSseConfig, SignResult};
 use crate::sign_flow;

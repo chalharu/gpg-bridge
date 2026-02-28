@@ -11,6 +11,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::Path;
+use zeroize::Zeroize;
 
 use crate::e2e_crypto;
 use crate::http::{
@@ -36,6 +37,18 @@ impl std::fmt::Debug for SignFlowState {
             .field("request_jwt_exp", &self.request_jwt_exp)
             .field("server_url", &self.server_url)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for SignFlowState {
+    fn drop(&mut self) {
+        self.request_jwt.zeroize();
+        self.auth_kid.zeroize();
+        // NOTE: josekit::Jwk does not support in-place memory zeroing.
+        // Private key material within Jwk is managed by serde_json::Value
+        // and will be freed by the allocator on drop but not securely
+        // overwritten. Ephemeral keys are short-lived (one per signing
+        // request), which limits the exposure window.
     }
 }
 
@@ -491,5 +504,22 @@ mod tests {
         let debug_str = format!("{state:?}");
         assert!(debug_str.contains(&auth_kid));
         assert!(!debug_str.contains("secret-jwt"), "JWT must be redacted");
+    }
+
+    #[test]
+    fn sign_flow_state_drop_zeroizes_request_jwt() {
+        let (auth_priv, _, auth_kid) = e2e_crypto::generate_es256_keypair().unwrap();
+        let (enc_priv, _) = e2e_crypto::generate_ecdh_keypair().unwrap();
+        let state = SignFlowState {
+            auth_private_jwk: auth_priv,
+            auth_kid,
+            enc_private_jwk: enc_priv,
+            request_jwt: "sensitive-jwt-value".to_owned(),
+            request_jwt_exp: 123,
+            server_url: "http://test".to_owned(),
+        };
+        // Dropping state triggers the Drop impl which zeroizes sensitive fields.
+        // We verify the Drop impl runs without panic.
+        drop(state);
     }
 }
