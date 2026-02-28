@@ -662,6 +662,76 @@ impl SignatureRepository for SqliteRepository {
             .context("failed to delete request")?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn delete_expired_requests(&self, now: &str) -> anyhow::Result<Vec<String>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let incomplete = sqlx::query_scalar::<_, String>(
+            "SELECT request_id FROM requests WHERE expired < $1 AND status IN ('created', 'pending')",
+        )
+        .bind(now)
+        .fetch_all(&mut *tx)
+        .await
+        .context("failed to select incomplete expired requests")?;
+
+        sqlx::query("DELETE FROM requests WHERE expired < $1")
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .context("failed to delete expired requests")?;
+
+        tx.commit().await.context("failed to commit transaction")?;
+        Ok(incomplete)
+    }
+
+    async fn delete_unpaired_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM clients WHERE created_at < $1 AND NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id)",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await
+        .context("failed to delete unpaired clients")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_expired_device_jwt_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM clients WHERE device_jwt_issued_at < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete expired device_jwt clients")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_expired_client_jwt_pairings(&self, cutoff: &str) -> anyhow::Result<u64> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
+        let del = sqlx::query("DELETE FROM client_pairings WHERE client_jwt_issued_at < $1")
+            .bind(cutoff)
+            .execute(&mut *tx)
+            .await
+            .context("failed to delete expired client_jwt pairings")?;
+        let removed = del.rows_affected();
+
+        sqlx::query(
+            "DELETE FROM clients WHERE NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id) AND NOT EXISTS (SELECT 1 FROM pairings WHERE pairings.client_id = clients.client_id)",
+        )
+        .execute(&mut *tx)
+        .await
+        .context("failed to delete orphaned clients")?;
+
+        tx.commit().await.context("failed to commit transaction")?;
+        Ok(removed)
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -831,6 +901,8 @@ mod tests {
             unconsumed_pairing_limit: 100,
             fcm_service_account_key_path: None,
             fcm_project_id: None,
+            cleanup_interval_seconds: 60,
+            unpaired_client_max_age_hours: 24,
         }
     }
 
@@ -1208,6 +1280,35 @@ mod tests {
             .unwrap()
     }
 
+    // ---- delete_expired_requests tests ----
+
+    async fn insert_request_with_status(
+        pool: &SqlitePool,
+        request_id: &str,
+        status: &str,
+        expired: &str,
+    ) {
+        // The CHECK constraint requires specific column combinations per status.
+        let (enc, sig) = match status {
+            "created" => (None, None),
+            "pending" => (Some("{}"), None),
+            "approved" => (Some("{}"), Some("sig")),
+            "denied" | "unavailable" => (Some("{}"), None),
+            _ => (None, None),
+        };
+        sqlx::query(
+            "INSERT INTO requests (request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, unavailable_client_ids, encrypted_payloads, signature) VALUES ($1, $2, $3, '[]', '{\"kty\":\"EC\"}', '{\"kty\":\"EC\"}', '{}', '{}', '[]', $4, $5)",
+        )
+        .bind(request_id)
+        .bind(status)
+        .bind(expired)
+        .bind(enc)
+        .bind(sig)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn create_audit_log_inserts_row() {
         let pool = build_sqlite_test_pool().await;
@@ -1296,5 +1397,158 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_expired_requests_returns_incomplete_ids() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_request_with_status(&pool, "r-created", "created", "2025-01-01T00:00:00Z").await;
+        insert_request_with_status(&pool, "r-pending", "pending", "2025-01-01T00:00:00Z").await;
+        insert_request_with_status(&pool, "r-approved", "approved", "2025-01-01T00:00:00Z").await;
+        insert_request_with_status(&pool, "r-future", "created", "2027-01-01T00:00:00Z").await;
+
+        let mut ids = repo
+            .delete_expired_requests("2026-01-01T00:00:00Z")
+            .await
+            .unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["r-created", "r-pending"]);
+
+        // r-approved also deleted, r-future remains
+        assert!(
+            repo.get_request_by_id("r-approved")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(repo.get_request_by_id("r-future").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_expired_requests_empty_when_none() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool };
+
+        let ids = repo
+            .delete_expired_requests("2026-01-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(ids.is_empty());
+    }
+
+    // ---- delete_unpaired_clients tests ----
+
+    #[tokio::test]
+    async fn delete_unpaired_clients_removes_old_without_pairings() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        // Old client without pairings
+        insert_test_client(&pool, "orphan", "[]").await;
+
+        // Old client WITH pairings
+        insert_test_client(&pool, "paired", "[]").await;
+        repo.create_client_pairing("paired", "p-1", "2026-01-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_unpaired_clients("2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(repo.get_client_by_id("orphan").await.unwrap().is_none());
+        assert!(repo.get_client_by_id("paired").await.unwrap().is_some());
+    }
+
+    // ---- delete_expired_device_jwt_clients tests ----
+
+    #[tokio::test]
+    async fn delete_expired_device_jwt_clients_removes_old() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "old-jwt", "[]").await;
+        insert_test_client(&pool, "new-jwt", "[]").await;
+
+        // new-jwt gets a fresh device_jwt_issued_at
+        repo.update_device_jwt_issued_at("new-jwt", "2026-12-01T00:00:00Z", "2026-12-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_expired_device_jwt_clients("2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(repo.get_client_by_id("old-jwt").await.unwrap().is_none());
+        assert!(repo.get_client_by_id("new-jwt").await.unwrap().is_some());
+    }
+
+    // ---- delete_expired_client_jwt_pairings tests ----
+
+    #[tokio::test]
+    async fn delete_expired_client_jwt_pairings_removes_and_cascades() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "c1", "[]").await;
+        insert_test_client(&pool, "c2", "[]").await;
+
+        // c1 has one old pairing → will be removed → client deleted
+        repo.create_client_pairing("c1", "p-old", "2025-01-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        // c2 has one old + one fresh → only old removed, client stays
+        repo.create_client_pairing("c2", "p-old2", "2025-01-01T00:00:00Z")
+            .await
+            .unwrap();
+        repo.create_client_pairing("c2", "p-new", "2026-12-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let removed = repo
+            .delete_expired_client_jwt_pairings("2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(removed, 2); // p-old + p-old2
+
+        // c1 cascade-deleted
+        assert!(repo.get_client_by_id("c1").await.unwrap().is_none());
+
+        // c2 still has p-new
+        assert!(repo.get_client_by_id("c2").await.unwrap().is_some());
+        let pairings = repo.get_client_pairings("c2").await.unwrap();
+        assert_eq!(pairings.len(), 1);
+        assert_eq!(pairings[0].pairing_id, "p-new");
+    }
+
+    #[tokio::test]
+    async fn delete_expired_client_jwt_pairings_noop_when_nothing_expired() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "c1", "[]").await;
+        repo.create_client_pairing("c1", "p-1", "2027-01-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let removed = repo
+            .delete_expired_client_jwt_pairings("2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(removed, 0);
+        assert!(repo.get_client_by_id("c1").await.unwrap().is_some());
     }
 }
