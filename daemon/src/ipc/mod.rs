@@ -4,6 +4,7 @@ mod unix;
 mod windows;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[cfg(unix)]
 use std::path::Path;
@@ -29,6 +30,7 @@ impl IpcServer {
         endpoint: &str,
         compat_socket_path: Option<&Path>,
         allow_replace_existing_socket: bool,
+        context: Arc<crate::assuan::SessionContext>,
     ) -> anyhow::Result<Self> {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -37,6 +39,7 @@ impl IpcServer {
             compat_socket_path.map(Path::to_path_buf),
             allow_replace_existing_socket,
             shutdown_rx,
+            context,
         )?;
 
         Ok(Self {
@@ -48,10 +51,13 @@ impl IpcServer {
     }
 
     #[cfg(windows)]
-    pub async fn start(endpoint: &str) -> anyhow::Result<Self> {
+    pub async fn start(
+        endpoint: &str,
+        context: Arc<crate::assuan::SessionContext>,
+    ) -> anyhow::Result<Self> {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let task = spawn_server(endpoint, shutdown_rx)?;
+        let task = spawn_server(endpoint, shutdown_rx, context)?;
 
         Ok(Self {
             task: Some(task),
@@ -103,16 +109,16 @@ fn spawn_server(
     compat_socket_path: Option<PathBuf>,
     allow_replace_existing_socket: bool,
     shutdown_rx: watch::Receiver<bool>,
+    context: Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     let socket_path = PathBuf::from(endpoint);
-    let socket_path_str = endpoint.to_owned();
     let listener = unix::bind_unix_listener(&socket_path, allow_replace_existing_socket)?;
     if let Some(path) = compat_socket_path.as_deref() {
         unix::create_unix_socket_symlink(path, &socket_path, allow_replace_existing_socket)?;
     }
 
     Ok(tokio::spawn(async move {
-        let run_result = unix::run_unix_accept_loop(listener, shutdown_rx, socket_path_str).await;
+        let run_result = unix::run_unix_accept_loop(listener, shutdown_rx, context).await;
         if let Err(error) = unix::cleanup_unix_socket_path(&socket_path) {
             warn!(socket_path = %socket_path.display(), ?error, "failed to cleanup unix socket file");
         }
@@ -129,12 +135,12 @@ fn spawn_server(
 fn spawn_server(
     endpoint: &str,
     shutdown_rx: watch::Receiver<bool>,
+    context: Arc<crate::assuan::SessionContext>,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     let pipe_name = windows::normalize_pipe_name(endpoint);
-    let socket_path = endpoint.to_owned();
 
     Ok(tokio::spawn(async move {
-        windows::run_windows_accept_loop(&pipe_name, shutdown_rx, socket_path).await
+        windows::run_windows_accept_loop(&pipe_name, shutdown_rx, context).await
     }))
 }
 
@@ -144,6 +150,22 @@ mod tests {
 
     #[cfg(unix)]
     use tokio::net::UnixStream;
+
+    #[cfg(unix)]
+    fn test_context(socket_path_str: &str) -> Arc<crate::assuan::SessionContext> {
+        let cache = crate::gpg_key_cache::GpgKeyCache::new(
+            reqwest::Client::new(),
+            "http://localhost:0".to_owned(),
+            None,
+        );
+        Arc::new(crate::assuan::SessionContext::new(
+            socket_path_str,
+            cache,
+            std::path::PathBuf::from("/tmp/test-tokens"),
+            reqwest::Client::new(),
+            "http://localhost:0".to_owned(),
+        ))
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -157,7 +179,8 @@ mod tests {
         let stale_listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
         drop(stale_listener);
 
-        let server = IpcServer::start(&socket_path_str, None, true)
+        let context = test_context(&socket_path_str);
+        let server = IpcServer::start(&socket_path_str, None, true, context)
             .await
             .unwrap();
         assert!(socket_path.exists());
@@ -175,7 +198,8 @@ mod tests {
 
         let before_count = unix::UNIX_CONNECTION_COUNT.load(std::sync::atomic::Ordering::Relaxed);
 
-        let server = IpcServer::start(&socket_path_str, None, false)
+        let context = test_context(&socket_path_str);
+        let server = IpcServer::start(&socket_path_str, None, false, context)
             .await
             .unwrap();
         let stream = UnixStream::connect(&socket_path).await.unwrap();
@@ -206,7 +230,8 @@ mod tests {
         let socket_path = temp_dir.path().join("agent.sock");
         let socket_path_str = socket_path.to_string_lossy().to_string();
 
-        let server = IpcServer::start(&socket_path_str, None, false)
+        let context = test_context(&socket_path_str);
+        let server = IpcServer::start(&socket_path_str, None, false, context)
             .await
             .unwrap();
         assert!(socket_path.exists());
@@ -232,7 +257,8 @@ mod tests {
         let compat_path = temp_dir.path().join("S.gpg-agent");
         let socket_path_str = socket_path.to_string_lossy().to_string();
 
-        let server = IpcServer::start(&socket_path_str, Some(&compat_path), false)
+        let context = test_context(&socket_path_str);
+        let server = IpcServer::start(&socket_path_str, Some(&compat_path), false, context)
             .await
             .unwrap();
 
@@ -262,7 +288,13 @@ mod tests {
         let stale_listener = tokio::net::UnixListener::bind(&compat_path).unwrap();
         drop(stale_listener);
 
-        let result = IpcServer::start(&socket_path_str, Some(&compat_path), false).await;
+        let result = IpcServer::start(
+            &socket_path_str,
+            Some(&compat_path),
+            false,
+            test_context(&socket_path_str),
+        )
+        .await;
 
         assert!(result.is_err());
     }
@@ -278,7 +310,8 @@ mod tests {
         let stale_listener = tokio::net::UnixListener::bind(&compat_path).unwrap();
         drop(stale_listener);
 
-        let server = IpcServer::start(&socket_path_str, Some(&compat_path), true)
+        let context = test_context(&socket_path_str);
+        let server = IpcServer::start(&socket_path_str, Some(&compat_path), true, context)
             .await
             .unwrap();
 
