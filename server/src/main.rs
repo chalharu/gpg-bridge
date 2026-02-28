@@ -7,6 +7,7 @@ use gpg_bridge_server::{
         fcm::NoopFcmValidator,
         pairing::notifier::PairingNotifier,
         rate_limit::{RateLimitConfig, SseConnectionTracker, config::SseConnectionConfig},
+        signing::notifier::SignEventNotifier,
     },
     observability::init_tracing,
     repository::build_repository,
@@ -61,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_per_key: config.rate_limit_sse_max_per_key,
         }),
         pairing_notifier: PairingNotifier::new(),
+        sign_event_notifier: SignEventNotifier::new(),
     };
     let rate_limit_config = RateLimitConfig::from_app_config(&config);
     let app = build_router(state, rate_limit_config);

@@ -36,6 +36,7 @@ use self::rate_limit::RateLimitConfig;
 use self::rate_limit::SlidingWindowLimiter;
 use self::rate_limit::SseConnectionTracker;
 use self::rate_limit::rate_limit_middleware;
+use self::signing::notifier::SignEventNotifier;
 use accept::accept_version_middleware;
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,7 @@ pub struct AppState {
     pub fcm_sender: Arc<dyn FcmSender>,
     pub sse_tracker: SseConnectionTracker,
     pub pairing_notifier: PairingNotifier,
+    pub sign_event_notifier: SignEventNotifier,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,11 +137,14 @@ pub fn build_router(state: AppState, rate_limit_config: RateLimitConfig) -> Rout
         .route("/sign-request", post(signing::post_sign_request))
         .route("/sign-request", patch(signing::patch_sign_request))
         .route("/sign-request", get(signing::get_sign_request))
+        .route("/sign-request", delete(signing::delete_sign_request))
         .route("/sign-result", post(signing::post_sign_result))
         .layer(axum::middleware::from_fn(accept_version_middleware));
 
     // SSE routes (no accept_version_middleware).
-    let sse_routes = Router::new().route("/pairing-session", get(pairing::get_pairing_session));
+    let sse_routes = Router::new()
+        .route("/pairing-session", get(pairing::get_pairing_session))
+        .route("/sign-events", get(signing::get_sign_events));
 
     json_routes
         .merge(sse_routes)
@@ -397,6 +402,9 @@ mod tests {
         async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -605,6 +613,9 @@ mod tests {
         async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
             unimplemented!()
         }
+        async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -652,6 +663,7 @@ mod tests {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: SignEventNotifier::new(),
         };
         let Json(response) = health(axum::extract::State(state)).await.unwrap();
 
@@ -676,6 +688,7 @@ mod tests {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: SignEventNotifier::new(),
         };
 
         let error = health(axum::extract::State(state)).await.unwrap_err();
@@ -721,6 +734,7 @@ mod tests {
                 max_per_key: 1,
             }),
             pairing_notifier: PairingNotifier::new(),
+            sign_event_notifier: SignEventNotifier::new(),
         }
     }
 
