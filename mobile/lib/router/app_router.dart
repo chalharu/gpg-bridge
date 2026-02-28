@@ -7,6 +7,7 @@ import '../pages/home_page.dart';
 import '../pages/keys_page.dart';
 import '../pages/main_shell.dart';
 import '../pages/pairing_page.dart';
+import '../pages/qr_scan_page.dart';
 import '../pages/register_page.dart';
 import '../pages/settings_page.dart';
 import '../state/auth_state.dart';
@@ -21,6 +22,10 @@ GoRouter appRouter(Ref ref) {
       GoRoute(
         path: '/register',
         builder: (context, state) => const RegisterPage(),
+      ),
+      GoRoute(
+        path: '/pairing/scan',
+        builder: (context, state) => const QrScanPage(),
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
