@@ -198,4 +198,55 @@ mod tests {
         let _g3 = tracker.try_acquire(ip, "key-c".into()).unwrap();
         assert_eq!(tracker.ip_connection_count(ip), 2);
     }
+
+    /// Dropping one of two connections for the same key must leave count == 1,
+    /// not remove the entry entirely (kills `== 0` → `!= 0` mutation).
+    #[test]
+    fn decrement_key_counter_to_one_does_not_remove() {
+        let config = SseConnectionConfig {
+            max_per_ip: 10,
+            max_per_key: 3,
+        };
+        let tracker = SseConnectionTracker::new(config);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+
+        let g1 = tracker.try_acquire(ip, "key-x".into()).unwrap();
+        let _g2 = tracker.try_acquire(ip, "key-x".into()).unwrap();
+        assert_eq!(tracker.key_connection_count("key-x"), 2);
+
+        // Drop one — count goes from 2 to 1.
+        drop(g1);
+        assert_eq!(
+            tracker.key_connection_count("key-x"),
+            1,
+            "count should be 1, not 0 (entry must NOT be removed)"
+        );
+    }
+
+    /// After all connections are dropped, the key must be fully removed
+    /// (count returns 0 via unwrap_or).
+    #[test]
+    fn decrement_key_counter_to_zero_removes_entry() {
+        let config = SseConnectionConfig {
+            max_per_ip: 10,
+            max_per_key: 3,
+        };
+        let tracker = SseConnectionTracker::new(config);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+
+        let g1 = tracker.try_acquire(ip, "key-y".into()).unwrap();
+        let g2 = tracker.try_acquire(ip, "key-y".into()).unwrap();
+        drop(g1);
+        drop(g2);
+
+        assert_eq!(
+            tracker.key_connection_count("key-y"),
+            0,
+            "entry should be removed when count reaches 0"
+        );
+
+        // The key should now be re-acquirable from scratch.
+        let _g3 = tracker.try_acquire(ip, "key-y".into()).unwrap();
+        assert_eq!(tracker.key_connection_count("key-y"), 1);
+    }
 }

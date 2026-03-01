@@ -223,4 +223,34 @@ mod tests {
         let short = STANDARD.encode([0u8; 8]);
         assert!(decrypt_private_key(&short, "secret").is_err());
     }
+
+    #[test]
+    fn build_signing_key_row_expires_at_is_in_the_future() {
+        let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+        let before = chrono::Utc::now();
+        let row = build_signing_key_row(&priv_jwk, &pub_jwk, &kid, "secret", 90).unwrap();
+        let after = chrono::Utc::now();
+
+        let expires_at = chrono::DateTime::parse_from_rfc3339(&row.expires_at).unwrap();
+        let created_at = chrono::DateTime::parse_from_rfc3339(&row.created_at).unwrap();
+
+        // expires_at must be after now (kills `+` → `-` or `*` mutations)
+        assert!(
+            expires_at > after,
+            "expires_at must be in the future, got {expires_at}"
+        );
+
+        // expires_at - created_at must be ~90 days (kills `+` → `-` mutation)
+        let diff = expires_at.signed_duration_since(created_at);
+        assert_eq!(diff.num_days(), 90);
+
+        // created_at must be around now (not in the future/past by a lot)
+        assert!(created_at >= before);
+        assert!(created_at <= after);
+    }
+
+    #[test]
+    fn aes128_key_len_returns_16() {
+        assert_eq!(Aes128KeyLen.len(), 16, "AES-128 key len must be 16 bytes");
+    }
 }
