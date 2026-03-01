@@ -10,6 +10,8 @@ use sqlx::{
 
 use crate::config::{AppConfig, DatabaseKind, detect_database_kind};
 
+#[macro_use]
+mod impl_repo;
 mod postgres;
 mod sqlite;
 
@@ -19,7 +21,7 @@ pub use sqlite::SqliteRepository;
 pub(crate) static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// A row in the `signing_keys` table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SigningKeyRow {
     pub kid: String,
     pub private_key: String,
@@ -30,7 +32,7 @@ pub struct SigningKeyRow {
 }
 
 /// A row in the `clients` table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ClientRow {
     pub client_id: String,
     pub created_at: String,
@@ -43,7 +45,7 @@ pub struct ClientRow {
 }
 
 /// A row in the `pairings` table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PairingRow {
     pub pairing_id: String,
     pub expired: String,
@@ -51,7 +53,7 @@ pub struct PairingRow {
 }
 
 /// A row in the `client_pairings` table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ClientPairingRow {
     pub client_id: String,
     pub pairing_id: String,
@@ -59,7 +61,7 @@ pub struct ClientPairingRow {
 }
 
 /// A row in the `requests` table (subset for auth).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RequestRow {
     pub request_id: String,
     pub status: String,
@@ -81,7 +83,7 @@ pub struct CreateRequestRow {
 }
 
 /// A full request row (all columns).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct FullRequestRow {
     pub request_id: String,
     pub status: String,
