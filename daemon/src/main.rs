@@ -198,4 +198,13 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn default_user_agent_contains_package_version() {
+        let ua = default_user_agent();
+        assert_eq!(
+            ua,
+            format!("gpg-bridge-daemon/{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
 }

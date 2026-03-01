@@ -243,4 +243,137 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn cleanup_unix_socket_path_succeeds_when_file_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.sock");
+        cleanup_unix_socket_path(&path).unwrap();
+    }
+
+    #[test]
+    fn cleanup_unix_socket_path_removes_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("to-remove.sock");
+        std::fs::write(&path, "data").unwrap();
+        cleanup_unix_socket_path(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn prepare_unix_socket_path_succeeds_when_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subdir").join("new.sock");
+        prepare_unix_socket_path(&path, false).unwrap();
+        // Parent directory should have been created
+        assert!(dir.path().join("subdir").exists());
+    }
+
+    #[test]
+    fn prepare_unix_socket_path_fails_for_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("regular.txt");
+        std::fs::write(&path, "data").unwrap();
+        let err = prepare_unix_socket_path(&path, false).unwrap_err();
+        assert!(err.to_string().contains("not a socket or symlink"));
+    }
+
+    #[tokio::test]
+    async fn prepare_unix_socket_path_replaces_existing_socket_when_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        drop(listener);
+
+        prepare_unix_socket_path(&path, true).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn prepare_unix_socket_path_rejects_socket_when_replacement_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        drop(listener);
+
+        let err = prepare_unix_socket_path(&path, false).unwrap_err();
+        assert!(err.to_string().contains("replacement is disabled"));
+    }
+
+    #[test]
+    fn prepare_unix_socket_path_cleans_up_existing_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old-link.sock");
+        std::os::unix::fs::symlink("/tmp/nonexistent", &path).unwrap();
+
+        prepare_unix_socket_path(&path, false).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn create_unix_socket_symlink_creates_symlink_at_new_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let link_path = dir.path().join("compat.sock");
+
+        create_unix_socket_symlink(&link_path, &socket_path, false).unwrap();
+
+        let metadata = std::fs::symlink_metadata(&link_path).unwrap();
+        assert!(metadata.file_type().is_symlink());
+        let target = std::fs::read_link(&link_path).unwrap();
+        assert_eq!(target, socket_path);
+    }
+
+    #[test]
+    fn create_unix_socket_symlink_replaces_existing_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let link_path = dir.path().join("compat.sock");
+
+        std::os::unix::fs::symlink("/tmp/old-target", &link_path).unwrap();
+
+        create_unix_socket_symlink(&link_path, &socket_path, false).unwrap();
+
+        let target = std::fs::read_link(&link_path).unwrap();
+        assert_eq!(target, socket_path);
+    }
+
+    #[tokio::test]
+    async fn create_unix_socket_symlink_rejects_socket_when_replacement_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let link_path = dir.path().join("compat.sock");
+
+        let listener = UnixListener::bind(&link_path).unwrap();
+        drop(listener);
+
+        let err = create_unix_socket_symlink(&link_path, &socket_path, false).unwrap_err();
+        assert!(err.to_string().contains("replacement is disabled"));
+    }
+
+    #[tokio::test]
+    async fn create_unix_socket_symlink_replaces_socket_when_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let link_path = dir.path().join("compat.sock");
+
+        let listener = UnixListener::bind(&link_path).unwrap();
+        drop(listener);
+
+        create_unix_socket_symlink(&link_path, &socket_path, true).unwrap();
+
+        let target = std::fs::read_link(&link_path).unwrap();
+        assert_eq!(target, socket_path);
+    }
+
+    #[test]
+    fn create_unix_socket_symlink_rejects_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let link_path = dir.path().join("regular.txt");
+        std::fs::write(&link_path, "data").unwrap();
+
+        let err = create_unix_socket_symlink(&link_path, &socket_path, false).unwrap_err();
+        assert!(err.to_string().contains("not a socket or symlink"));
+    }
 }
