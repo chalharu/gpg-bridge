@@ -1554,4 +1554,252 @@ mod tests {
         assert_eq!(removed, 0);
         assert!(repo.get_client_by_id("c1").await.unwrap().is_some());
     }
+
+    // ---- run_migrations tests ----
+
+    #[tokio::test]
+    async fn run_migrations_creates_tables() {
+        let pool = build_sqlite_test_pool().await;
+        let repo = SqliteRepository { pool: pool.clone() };
+        repo.run_migrations().await.unwrap();
+
+        // Verify that the clients table exists by querying it.
+        let count = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM clients")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify that the signing_keys table exists.
+        let count = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM signing_keys")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // ---- client_exists tests ----
+
+    #[tokio::test]
+    async fn client_exists_returns_true_for_existing_client() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        assert!(repo.client_exists("client-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn client_exists_returns_false_for_missing_client() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool };
+
+        assert!(!repo.client_exists("nonexistent").await.unwrap());
+    }
+
+    // ---- client_by_device_token tests ----
+
+    #[tokio::test]
+    async fn client_by_device_token_returns_matching_client() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        // insert_test_client uses device_token = 'tok'
+        let client = repo
+            .client_by_device_token("tok")
+            .await
+            .unwrap()
+            .expect("should find client by device_token");
+        assert_eq!(client.client_id, "client-1");
+    }
+
+    #[tokio::test]
+    async fn client_by_device_token_returns_none_for_unknown() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool };
+
+        assert!(
+            repo.client_by_device_token("unknown")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // ---- update_client_device_token tests ----
+
+    #[tokio::test]
+    async fn update_client_device_token_persists_change() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        repo.update_client_device_token("client-1", "new-tok", "2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let client = repo.get_client_by_id("client-1").await.unwrap().unwrap();
+        assert_eq!(client.device_token, "new-tok");
+        assert_eq!(client.updated_at, "2026-06-01T00:00:00Z");
+    }
+
+    // ---- update_client_default_kid tests ----
+
+    #[tokio::test]
+    async fn update_client_default_kid_persists_change() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        repo.update_client_default_kid("client-1", "kid-new", "2026-06-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        let client = repo.get_client_by_id("client-1").await.unwrap().unwrap();
+        assert_eq!(client.default_kid, "kid-new");
+        assert_eq!(client.updated_at, "2026-06-01T00:00:00Z");
+    }
+
+    // ---- delete_client tests ----
+
+    #[tokio::test]
+    async fn delete_client_removes_row() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        assert!(repo.get_client_by_id("client-1").await.unwrap().is_some());
+
+        repo.delete_client("client-1").await.unwrap();
+        assert!(repo.get_client_by_id("client-1").await.unwrap().is_none());
+    }
+
+    // ---- update_client_public_keys tests ----
+
+    #[tokio::test]
+    async fn update_client_public_keys_succeeds_with_matching_version() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        // insert_test_client sets updated_at = '2026-01-01T00:00:00Z'
+        let ok = repo
+            .update_client_public_keys(
+                "client-1",
+                "[{\"kid\":\"k2\"}]",
+                "k2",
+                "2026-06-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        assert!(ok);
+
+        let client = repo.get_client_by_id("client-1").await.unwrap().unwrap();
+        assert_eq!(client.public_keys, "[{\"kid\":\"k2\"}]");
+        assert_eq!(client.default_kid, "k2");
+        assert_eq!(client.updated_at, "2026-06-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn update_client_public_keys_fails_with_stale_version() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_test_client(&pool, "client-1", "[]").await;
+        let ok = repo
+            .update_client_public_keys(
+                "client-1",
+                "[{\"kid\":\"k2\"}]",
+                "k2",
+                "2026-06-01T00:00:00Z",
+                "1999-01-01T00:00:00Z", // stale expected_updated_at
+            )
+            .await
+            .unwrap();
+        assert!(!ok);
+
+        // Original data unchanged
+        let client = repo.get_client_by_id("client-1").await.unwrap().unwrap();
+        assert_eq!(client.public_keys, "[]");
+    }
+
+    // ---- is_kid_in_flight tests ----
+
+    async fn insert_request_with_e2e_kids(
+        pool: &SqlitePool,
+        request_id: &str,
+        status: &str,
+        e2e_kids: &str,
+    ) {
+        let enc = match status {
+            "pending" | "approved" | "denied" | "unavailable" => Some("{}"),
+            _ => None,
+        };
+        let sig = match status {
+            "approved" => Some("sig"),
+            _ => None,
+        };
+        sqlx::query(
+            "INSERT INTO requests (request_id, status, expired, client_ids, daemon_public_key, daemon_enc_public_key, pairing_ids, e2e_kids, unavailable_client_ids, encrypted_payloads, signature) VALUES ($1, $2, '2027-01-01T00:00:00Z', '[]', '{\"kty\":\"EC\"}', '{\"kty\":\"EC\"}', '{}', $3, '[]', $4, $5)",
+        )
+        .bind(request_id)
+        .bind(status)
+        .bind(e2e_kids)
+        .bind(enc)
+        .bind(sig)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn is_kid_in_flight_returns_true_when_request_has_matching_kid() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        insert_request_with_e2e_kids(&pool, "req-1", "created", r#"["kid-test","kid-other"]"#)
+            .await;
+        assert!(repo.is_kid_in_flight("kid-test").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_kid_in_flight_returns_false_when_no_matching_request() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        // No requests at all
+        assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
+
+        // Request exists but with a different kid
+        insert_request_with_e2e_kids(&pool, "req-1", "created", r#"["kid-other"]"#).await;
+        assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_kid_in_flight_ignores_non_active_statuses() {
+        let pool = build_sqlite_test_pool().await;
+        MIGRATOR.run(&pool).await.unwrap();
+        let repo = SqliteRepository { pool: pool.clone() };
+
+        // approved request should NOT count
+        insert_request_with_e2e_kids(&pool, "req-1", "approved", r#"["kid-test"]"#).await;
+        assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
+
+        // pending request SHOULD count
+        insert_request_with_e2e_kids(&pool, "req-2", "pending", r#"["kid-test"]"#).await;
+        assert!(repo.is_kid_in_flight("kid-test").await.unwrap());
+    }
 }
