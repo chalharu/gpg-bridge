@@ -27,6 +27,9 @@ pub struct AppConfig {
     pub fcm_project_id: Option<String>,
     pub cleanup_interval_seconds: u64,
     pub unpaired_client_max_age_hours: u64,
+    pub audit_log_approved_retention_seconds: u64,
+    pub audit_log_denied_retention_seconds: u64,
+    pub audit_log_conflict_retention_seconds: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +144,21 @@ impl AppConfig {
             parse_env(lookup, "SERVER_CLEANUP_INTERVAL_SECONDS", "60")?;
         let unpaired_client_max_age_hours: u64 =
             parse_env(lookup, "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "24")?;
+        let audit_log_approved_retention_seconds: u64 = parse_env(
+            lookup,
+            "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS",
+            "31536000",
+        )?;
+        let audit_log_denied_retention_seconds: u64 = parse_env(
+            lookup,
+            "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS",
+            "15768000",
+        )?;
+        let audit_log_conflict_retention_seconds: u64 = parse_env(
+            lookup,
+            "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS",
+            "7884000",
+        )?;
 
         let config = Self {
             server_host,
@@ -168,6 +186,9 @@ impl AppConfig {
             fcm_project_id,
             cleanup_interval_seconds,
             unpaired_client_max_age_hours,
+            audit_log_approved_retention_seconds,
+            audit_log_denied_retention_seconds,
+            audit_log_conflict_retention_seconds,
         };
 
         validate_db_pool(&config)?;
@@ -179,6 +200,7 @@ impl AppConfig {
         validate_cleanup_interval(&config)?;
         validate_duration_upper_bounds(&config)?;
         validate_unpaired_client_max_age(&config)?;
+        validate_audit_log_retention(&config)?;
 
         Ok(config)
     }
@@ -276,6 +298,24 @@ fn validate_duration_upper_bounds(config: &AppConfig) -> anyhow::Result<()> {
             config.client_jwt_validity_seconds,
         ));
     }
+    if config.audit_log_approved_retention_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.audit_log_approved_retention_seconds,
+        ));
+    }
+    if config.audit_log_denied_retention_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.audit_log_denied_retention_seconds,
+        ));
+    }
+    if config.audit_log_conflict_retention_seconds > MAX_DURATION_SECONDS {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS ({}) exceeds maximum allowed value ({MAX_DURATION_SECONDS})",
+            config.audit_log_conflict_retention_seconds,
+        ));
+    }
     Ok(())
 }
 
@@ -300,6 +340,25 @@ fn validate_unpaired_client_max_age(config: &AppConfig) -> anyhow::Result<()> {
             "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS ({}) exceeds maximum allowed value ({} hours)",
             config.unpaired_client_max_age_hours,
             MAX_DURATION_SECONDS / 3600,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_audit_log_retention(config: &AppConfig) -> anyhow::Result<()> {
+    if config.audit_log_approved_retention_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS must be greater than 0"
+        ));
+    }
+    if config.audit_log_denied_retention_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS must be greater than 0"
+        ));
+    }
+    if config.audit_log_conflict_retention_seconds == 0 {
+        return Err(anyhow!(
+            "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS must be greater than 0"
         ));
     }
     Ok(())
@@ -339,6 +398,9 @@ mod tests {
         assert_eq!(config.unconsumed_pairing_limit, 100);
         assert_eq!(config.cleanup_interval_seconds, 60);
         assert_eq!(config.unpaired_client_max_age_hours, 24);
+        assert_eq!(config.audit_log_approved_retention_seconds, 31_536_000);
+        assert_eq!(config.audit_log_denied_retention_seconds, 15_768_000);
+        assert_eq!(config.audit_log_conflict_retention_seconds, 7_884_000);
     }
 
     #[test]
@@ -524,6 +586,60 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_audit_log_approved_retention() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_audit_log_denied_retention() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS")
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_audit_log_conflict_retention() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS")
         );
     }
 }

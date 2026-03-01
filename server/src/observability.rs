@@ -64,6 +64,9 @@ mod tests {
             rate_limit_standard_window_seconds: 60,
             rate_limit_sse_max_per_ip: 20,
             rate_limit_sse_max_per_key: 1,
+            audit_log_approved_retention_seconds: 31_536_000,
+            audit_log_denied_retention_seconds: 15_768_000,
+            audit_log_conflict_retention_seconds: 7_884_000,
         };
 
         let result = init_tracing(&config);

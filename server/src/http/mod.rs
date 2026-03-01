@@ -686,6 +686,9 @@ mod tests {
             fcm_project_id: None,
             cleanup_interval_seconds: 60,
             unpaired_client_max_age_hours: 24,
+            audit_log_approved_retention_seconds: 31_536_000,
+            audit_log_denied_retention_seconds: 15_768_000,
+            audit_log_conflict_retention_seconds: 7_884_000,
         };
 
         let repository = build_repository(&config).await.unwrap();

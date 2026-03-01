@@ -18,6 +18,9 @@ pub struct CleanupConfig {
     pub unpaired_client_max_age: Duration,
     pub device_jwt_validity: Duration,
     pub client_jwt_validity: Duration,
+    pub audit_log_approved_retention: Duration,
+    pub audit_log_denied_retention: Duration,
+    pub audit_log_conflict_retention: Duration,
 }
 
 impl CleanupConfig {
@@ -29,6 +32,15 @@ impl CleanupConfig {
             ),
             device_jwt_validity: Duration::from_secs(config.device_jwt_validity_seconds),
             client_jwt_validity: Duration::from_secs(config.client_jwt_validity_seconds),
+            audit_log_approved_retention: Duration::from_secs(
+                config.audit_log_approved_retention_seconds,
+            ),
+            audit_log_denied_retention: Duration::from_secs(
+                config.audit_log_denied_retention_seconds,
+            ),
+            audit_log_conflict_retention: Duration::from_secs(
+                config.audit_log_conflict_retention_seconds,
+            ),
         }
     }
 }
@@ -75,6 +87,7 @@ async fn run_all_jobs(
     run_delete_unpaired_clients(repo, now, config).await;
     run_delete_expired_device_jwt_clients(repo, now, config).await;
     run_delete_expired_client_jwt_pairings(repo, now, config).await;
+    run_delete_expired_audit_logs(repo, now, config).await;
 }
 
 async fn run_delete_expired_pairings(repo: &Arc<dyn SignatureRepository>, now: &str) {
@@ -130,19 +143,28 @@ async fn run_delete_expired_signing_keys(repo: &Arc<dyn SignatureRepository>, no
     }
 }
 
+/// Compute a cutoff timestamp by subtracting `duration` from `now`.
+///
+/// Returns `None` (with a warning log) when the subtraction overflows.
+fn compute_cutoff(now: chrono::DateTime<Utc>, duration: Duration, label: &str) -> Option<String> {
+    let chrono_dur = chrono::Duration::from_std(duration).unwrap_or(chrono::Duration::MAX);
+    match now.checked_sub_signed(chrono_dur) {
+        Some(t) => Some(t.to_rfc3339()),
+        None => {
+            warn!("overflow computing {label} cutoff; skipping");
+            None
+        }
+    }
+}
+
 async fn run_delete_unpaired_clients(
     repo: &Arc<dyn SignatureRepository>,
     now: chrono::DateTime<Utc>,
     config: &CleanupConfig,
 ) {
-    let cutoff = match now.checked_sub_signed(
-        chrono::Duration::from_std(config.unpaired_client_max_age).unwrap_or(chrono::Duration::MAX),
-    ) {
-        Some(t) => t.to_rfc3339(),
-        None => {
-            warn!("overflow computing unpaired-client cutoff; skipping");
-            return;
-        }
+    let Some(cutoff) = compute_cutoff(now, config.unpaired_client_max_age, "unpaired-client")
+    else {
+        return;
     };
     match repo.delete_unpaired_clients(&cutoff).await {
         Ok(n) if n > 0 => info!(deleted = n, "unpaired clients cleaned up"),
@@ -156,14 +178,8 @@ async fn run_delete_expired_device_jwt_clients(
     now: chrono::DateTime<Utc>,
     config: &CleanupConfig,
 ) {
-    let cutoff = match now.checked_sub_signed(
-        chrono::Duration::from_std(config.device_jwt_validity).unwrap_or(chrono::Duration::MAX),
-    ) {
-        Some(t) => t.to_rfc3339(),
-        None => {
-            warn!("overflow computing device-JWT cutoff; skipping");
-            return;
-        }
+    let Some(cutoff) = compute_cutoff(now, config.device_jwt_validity, "device-JWT") else {
+        return;
     };
     match repo.delete_expired_device_jwt_clients(&cutoff).await {
         Ok(n) if n > 0 => {
@@ -181,14 +197,8 @@ async fn run_delete_expired_client_jwt_pairings(
     now: chrono::DateTime<Utc>,
     config: &CleanupConfig,
 ) {
-    let cutoff = match now.checked_sub_signed(
-        chrono::Duration::from_std(config.client_jwt_validity).unwrap_or(chrono::Duration::MAX),
-    ) {
-        Some(t) => t.to_rfc3339(),
-        None => {
-            warn!("overflow computing client-JWT cutoff; skipping");
-            return;
-        }
+    let Some(cutoff) = compute_cutoff(now, config.client_jwt_validity, "client-JWT") else {
+        return;
     };
     match repo.delete_expired_client_jwt_pairings(&cutoff).await {
         Ok(n) if n > 0 => {
@@ -196,6 +206,44 @@ async fn run_delete_expired_client_jwt_pairings(
         }
         Err(e) => {
             warn!(error = %e, "failed to delete expired client-JWT pairings");
+        }
+        _ => {}
+    }
+}
+
+async fn run_delete_expired_audit_logs(
+    repo: &Arc<dyn SignatureRepository>,
+    now: chrono::DateTime<Utc>,
+    config: &CleanupConfig,
+) {
+    let Some(approved_cutoff) = compute_cutoff(
+        now,
+        config.audit_log_approved_retention,
+        "audit-log approved",
+    ) else {
+        return;
+    };
+    let Some(denied_cutoff) =
+        compute_cutoff(now, config.audit_log_denied_retention, "audit-log denied")
+    else {
+        return;
+    };
+    let Some(conflict_cutoff) = compute_cutoff(
+        now,
+        config.audit_log_conflict_retention,
+        "audit-log conflict",
+    ) else {
+        return;
+    };
+    match repo
+        .delete_expired_audit_logs(&approved_cutoff, &denied_cutoff, &conflict_cutoff)
+        .await
+    {
+        Ok(n) if n > 0 => {
+            info!(deleted = n, "expired audit logs cleaned up");
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to delete expired audit logs");
         }
         _ => {}
     }

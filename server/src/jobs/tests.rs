@@ -14,6 +14,7 @@ struct JobMockRepo {
     unpaired_clients: Mutex<u64>,
     expired_device_jwt: Mutex<u64>,
     expired_client_jwt: Mutex<u64>,
+    expired_audit_logs: Mutex<u64>,
 }
 
 #[async_trait]
@@ -183,6 +184,9 @@ impl SignatureRepository for JobMockRepo {
     async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
         Ok(*self.expired_client_jwt.lock().unwrap())
     }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+        Ok(*self.expired_audit_logs.lock().unwrap())
+    }
 }
 
 fn test_config() -> CleanupConfig {
@@ -191,6 +195,9 @@ fn test_config() -> CleanupConfig {
         unpaired_client_max_age: Duration::from_secs(86400),
         device_jwt_validity: Duration::from_secs(31_536_000),
         client_jwt_validity: Duration::from_secs(31_536_000),
+        audit_log_approved_retention: Duration::from_secs(31_536_000),
+        audit_log_denied_retention: Duration::from_secs(15_768_000),
+        audit_log_conflict_retention: Duration::from_secs(7_884_000),
     }
 }
 
@@ -287,6 +294,7 @@ async fn run_all_jobs_logs_nonzero_deletions() {
         unpaired_clients: Mutex::new(1),
         expired_device_jwt: Mutex::new(4),
         expired_client_jwt: Mutex::new(7),
+        expired_audit_logs: Mutex::new(6),
     });
     let notifier = SignEventNotifier::new();
     let config = test_config();
@@ -464,6 +472,9 @@ impl SignatureRepository for FailingJobMockRepo {
         anyhow::bail!("db error")
     }
     async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        anyhow::bail!("db error")
+    }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
         anyhow::bail!("db error")
     }
 }
