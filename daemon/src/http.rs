@@ -526,60 +526,66 @@ mod tests {
         assert_eq!(status, 409);
     }
 
+    // Uses std::thread + std::net::TcpListener (blocking I/O) and a client
+    // without a timeout because tokio::time::pause() auto-advance causes
+    // reqwest/hyper TCP reconnection to fail with async listeners + timeouts.
     #[tokio::test]
     async fn send_get_with_retry_retries_on_500_then_succeeds() {
         tokio::time::pause();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = std_listener.local_addr().unwrap();
 
-        let server = tokio::spawn(async move {
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
             // First request: 500
-            let (mut s, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = s.read(&mut buf).await.unwrap();
-            s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .await.unwrap();
+            let (mut s, _) = std_listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).unwrap();
+            s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            s.flush().unwrap();
             drop(s);
 
             // Second request: 200
-            let (mut s, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = s.read(&mut buf).await.unwrap();
+            let (mut s, _) = std_listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).unwrap();
             s.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nretried",
             )
-            .await
             .unwrap();
+            s.flush().unwrap();
         });
 
-        let client = build_http_client(Duration::from_secs(30), "test").unwrap();
+        let client = Client::builder().user_agent("test").build().unwrap();
         let result = send_get_with_retry(&client, &format!("http://{addr}"), None)
             .await
             .unwrap();
         assert_eq!(result, "retried");
-        server.await.unwrap();
+        server.join().unwrap();
     }
 
+    // See comment on send_get_with_retry_retries_on_500_then_succeeds.
     #[tokio::test]
     async fn send_get_with_retry_gives_up_after_max_retries() {
         tokio::time::pause();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = std_listener.local_addr().unwrap();
 
-        let server = tokio::spawn(async move {
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
             for _ in 0..=MAX_HTTP_RETRIES {
-                let (mut s, _) = listener.accept().await.unwrap();
-                let mut buf = [0u8; 2048];
-                let _ = s.read(&mut buf).await.unwrap();
-                s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await.unwrap();
+                let (mut s, _) = std_listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).unwrap();
+                s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                s.flush().unwrap();
             }
         });
 
-        let client = build_http_client(Duration::from_secs(30), "test").unwrap();
+        let client = Client::builder().user_agent("test").build().unwrap();
         let result = send_get_with_retry(&client, &format!("http://{addr}"), None).await;
         let err = result.unwrap_err();
         assert!(err.to_string().contains("server error"));
-        server.await.unwrap();
+        server.join().unwrap();
     }
 }
