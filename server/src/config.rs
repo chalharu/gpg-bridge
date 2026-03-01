@@ -642,4 +642,48 @@ mod tests {
                 .contains("SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS")
         );
     }
+
+    #[test]
+    fn config_accepts_min_connections_equal_to_max() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_DB_MAX_CONNECTIONS" => Some("5".to_owned()),
+            "SERVER_DB_MIN_CONNECTIONS" => Some("5".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_ok(), "min == max should be accepted");
+        let config = result.unwrap();
+        assert_eq!(config.db_min_connections, 5);
+        assert_eq!(config.db_max_connections, 5);
+    }
+
+    #[test]
+    fn config_accepts_strict_quota_of_one() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_RATE_LIMIT_STRICT_QUOTA" => Some("1".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_ok(), "quota == 1 should be accepted");
+        let config = result.unwrap();
+        assert_eq!(config.rate_limit_strict_quota, 1);
+    }
+
+    #[test]
+    fn config_accepts_standard_quota_of_one() {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            "SERVER_RATE_LIMIT_STANDARD_QUOTA" => Some("1".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_ok(), "standard quota == 1 should be accepted");
+        let config = result.unwrap();
+        assert_eq!(config.rate_limit_standard_quota, 1);
+    }
 }

@@ -269,4 +269,135 @@ mod tests {
         assert_eq!(result.quota, 3);
         assert_eq!(result.window_seconds, 60);
     }
+
+    // -----------------------------------------------------------------------
+    // compute_reset_after unit tests (kills +/- and >/</== mutations)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compute_reset_after_with_none_returns_window() {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        assert_eq!(compute_reset_after(None, now, window), 60);
+    }
+
+    #[test]
+    fn compute_reset_after_oldest_still_in_window() {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        // oldest is 10s ago → expires_at = oldest + 60 = now + 50
+        // reset = (now + 50 - now).as_secs() + 1 = 51
+        let oldest = now - Duration::from_secs(10);
+        let result = compute_reset_after(Some(&oldest), now, window);
+        assert_eq!(result, 51);
+    }
+
+    #[test]
+    fn compute_reset_after_oldest_just_now() {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        // oldest == now → expires_at = now + 60
+        // reset = 60.as_secs() + 1 = 61
+        let result = compute_reset_after(Some(&now), now, window);
+        assert_eq!(result, 61);
+    }
+
+    #[test]
+    fn compute_reset_after_expired_returns_one() {
+        let now = Instant::now();
+        let window = Duration::from_secs(10);
+        // oldest is 20s ago → expires_at = oldest + 10 = now - 10
+        // expires_at <= now → returns 1
+        let oldest = now - Duration::from_secs(20);
+        let result = compute_reset_after(Some(&oldest), now, window);
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn compute_reset_after_plus_one_rounds_up() {
+        // Verify `+ 1` is applied: 59.9s remaining → 60s, not 59s
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        // oldest is 1500ms ago
+        let oldest = now - Duration::from_millis(1500);
+        let result = compute_reset_after(Some(&oldest), now, window);
+        // expires_at = oldest + 60s = now + 58.5s
+        // (58.5s).as_secs() = 58, +1 = 59
+        assert_eq!(result, 59);
+    }
+
+    // -----------------------------------------------------------------------
+    // evict_expired unit tests (kills the function deletion mutant)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evict_expired_removes_old_timestamps() {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut timestamps = VecDeque::new();
+        timestamps.push_back(now - Duration::from_secs(120));
+        timestamps.push_back(now - Duration::from_secs(90));
+        timestamps.push_back(now - Duration::from_secs(30));
+
+        evict_expired(&mut timestamps, now, window);
+
+        assert_eq!(
+            timestamps.len(),
+            1,
+            "only the recent timestamp should remain"
+        );
+        // The remaining timestamp should be the one from 30s ago
+        let remaining = *timestamps.front().unwrap();
+        assert!(remaining > now - Duration::from_secs(60));
+    }
+
+    #[test]
+    fn evict_expired_keeps_all_within_window() {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut timestamps = VecDeque::new();
+        timestamps.push_back(now - Duration::from_secs(30));
+        timestamps.push_back(now - Duration::from_secs(10));
+        timestamps.push_back(now);
+
+        evict_expired(&mut timestamps, now, window);
+
+        assert_eq!(timestamps.len(), 3, "all timestamps should remain");
+    }
+
+    #[test]
+    fn evict_expired_removes_all_when_all_old() {
+        let now = Instant::now();
+        let window = Duration::from_secs(10);
+        let mut timestamps = VecDeque::new();
+        timestamps.push_back(now - Duration::from_secs(100));
+        timestamps.push_back(now - Duration::from_secs(50));
+
+        evict_expired(&mut timestamps, now, window);
+
+        assert!(timestamps.is_empty(), "all timestamps should be evicted");
+    }
+
+    // -----------------------------------------------------------------------
+    // cleanup retains non-empty entries (kills `delete !` mutation)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cleanup_retains_active_entries() {
+        let limiter = SlidingWindowLimiter::new();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let tier = strict_tier();
+
+        // Record a request (recent, within any window)
+        limiter.check_and_record(ip, RateLimitTier::Strict, &tier);
+
+        // Cleanup with the same window — entry is still active
+        limiter.cleanup(Duration::from_secs(60));
+
+        let state = limiter.state.lock().unwrap();
+        assert!(
+            state.contains_key(&(ip, RateLimitTier::Strict)),
+            "active entry should be retained after cleanup"
+        );
+    }
 }
