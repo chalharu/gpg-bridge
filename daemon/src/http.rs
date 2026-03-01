@@ -525,4 +525,61 @@ mod tests {
             .unwrap();
         assert_eq!(status, 409);
     }
+
+    #[tokio::test]
+    async fn send_get_with_retry_retries_on_500_then_succeeds() {
+        tokio::time::pause();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            // First request: 500
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await.unwrap();
+            drop(s);
+
+            // Second request: 200
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nretried",
+            )
+            .await
+            .unwrap();
+        });
+
+        let client = build_http_client(Duration::from_secs(30), "test").unwrap();
+        let result = send_get_with_retry(&client, &format!("http://{addr}"), None)
+            .await
+            .unwrap();
+        assert_eq!(result, "retried");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_get_with_retry_gives_up_after_max_retries() {
+        tokio::time::pause();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            for _ in 0..=MAX_HTTP_RETRIES {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf).await.unwrap();
+                s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await.unwrap();
+            }
+        });
+
+        let client = build_http_client(Duration::from_secs(30), "test").unwrap();
+        let result = send_get_with_retry(&client, &format!("http://{addr}"), None).await;
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("server error"));
+        server.await.unwrap();
+    }
 }

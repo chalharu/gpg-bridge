@@ -474,4 +474,31 @@ mod tests {
         let lookup = |_key: &str| None;
         assert_eq!(fallback_socket_path(&lookup), "/tmp/gpg-bridge/S.gpg-agent");
     }
+
+    #[test]
+    fn resolve_config_path_returns_cli_path_when_set() {
+        let cli = parse_cli_from(["gpg-bridge-daemon", "--config-path", "/etc/daemon.toml"]);
+        let lookup = |_key: &str| None;
+        let result = resolve_config_path(&cli, &lookup);
+        assert_eq!(result, Some(PathBuf::from("/etc/daemon.toml")));
+    }
+
+    #[test]
+    fn resolve_config_path_returns_env_path_when_cli_unset() {
+        let cli = parse_cli_from(["gpg-bridge-daemon"]);
+        let lookup = |key: &str| match key {
+            "DAEMON_CONFIG_PATH" => Some("/etc/daemon-env.toml".to_owned()),
+            _ => None,
+        };
+        let result = resolve_config_path(&cli, &lookup);
+        assert_eq!(result, Some(PathBuf::from("/etc/daemon-env.toml")));
+    }
+
+    #[test]
+    fn resolve_config_path_returns_none_when_unset() {
+        let cli = parse_cli_from(["gpg-bridge-daemon"]);
+        let lookup = |_key: &str| None;
+        let result = resolve_config_path(&cli, &lookup);
+        assert!(result.is_none());
+    }
 }
