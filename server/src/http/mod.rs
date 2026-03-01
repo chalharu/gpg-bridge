@@ -174,8 +174,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::accept::ACCEPT_VERSION_V1;
+    use crate::test_support::MockRepository;
     use crate::{config::AppConfig, repository::build_repository};
-    use async_trait::async_trait;
 
     use super::rate_limit::config::{SseConnectionConfig, TierConfig};
 
@@ -193,468 +193,6 @@ mod tests {
                 max_per_ip: 20,
                 max_per_key: 1,
             },
-        }
-    }
-
-    #[derive(Debug)]
-    struct HealthyRepository;
-
-    #[async_trait]
-    impl SignatureRepository for HealthyRepository {
-        async fn run_migrations(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn health_check(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn backend_name(&self) -> &'static str {
-            "sqlite"
-        }
-
-        async fn store_signing_key(
-            &self,
-            _key: &crate::repository::SigningKeyRow,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_active_signing_key(
-            &self,
-        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
-            unimplemented!()
-        }
-        async fn get_signing_key_by_kid(
-            &self,
-            _kid: &str,
-        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
-            unimplemented!()
-        }
-        async fn retire_signing_key(&self, _kid: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_client_by_id(
-            &self,
-            _client_id: &str,
-        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
-            unimplemented!()
-        }
-        async fn create_client(&self, _: &crate::repository::ClientRow) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn client_by_device_token(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
-            unimplemented!()
-        }
-        async fn update_client_device_token(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn update_device_jwt_issued_at(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_client_pairings(
-            &self,
-            _client_id: &str,
-        ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
-            unimplemented!()
-        }
-        async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_client_pairing_and_cleanup(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<(bool, bool)> {
-            unimplemented!()
-        }
-        async fn update_client_jwt_issued_at(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_pairing_by_id(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
-            unimplemented!()
-        }
-        async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
-            unimplemented!()
-        }
-        async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_request_by_id(
-            &self,
-            _request_id: &str,
-        ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
-            unimplemented!()
-        }
-        async fn update_client_public_keys(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn update_client_gpg_keys(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn create_request(
-            &self,
-            _: &crate::repository::CreateRequestRow,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn count_pending_requests_for_pairing(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<i64> {
-            unimplemented!()
-        }
-        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_expired_audit_logs(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_full_request_by_id(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
-            unimplemented!()
-        }
-        async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn get_pending_requests_for_client(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
-            unimplemented!()
-        }
-        async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn add_unavailable_client_id(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<Option<(String, String)>> {
-            unimplemented!()
-        }
-        async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
-            unimplemented!()
-        }
-        async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingRepository;
-
-    #[async_trait]
-    impl SignatureRepository for FailingRepository {
-        async fn run_migrations(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn health_check(&self) -> anyhow::Result<()> {
-            Err(anyhow::anyhow!("connection refused"))
-        }
-
-        fn backend_name(&self) -> &'static str {
-            "sqlite"
-        }
-
-        async fn store_signing_key(
-            &self,
-            _key: &crate::repository::SigningKeyRow,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_active_signing_key(
-            &self,
-        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
-            unimplemented!()
-        }
-        async fn get_signing_key_by_kid(
-            &self,
-            _kid: &str,
-        ) -> anyhow::Result<Option<crate::repository::SigningKeyRow>> {
-            unimplemented!()
-        }
-        async fn retire_signing_key(&self, _kid: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_signing_keys(&self, _now: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_client_by_id(
-            &self,
-            _client_id: &str,
-        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
-            unimplemented!()
-        }
-        async fn create_client(&self, _: &crate::repository::ClientRow) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn client_by_device_token(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::ClientRow>> {
-            unimplemented!()
-        }
-        async fn update_client_device_token(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn update_device_jwt_issued_at(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_client_pairings(
-            &self,
-            _client_id: &str,
-        ) -> anyhow::Result<Vec<crate::repository::ClientPairingRow>> {
-            unimplemented!()
-        }
-        async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_client_pairing_and_cleanup(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<(bool, bool)> {
-            unimplemented!()
-        }
-        async fn update_client_jwt_issued_at(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn get_pairing_by_id(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
-            unimplemented!()
-        }
-        async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
-            unimplemented!()
-        }
-        async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_request_by_id(
-            &self,
-            _request_id: &str,
-        ) -> anyhow::Result<Option<crate::repository::RequestRow>> {
-            unimplemented!()
-        }
-        async fn update_client_public_keys(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn update_client_gpg_keys(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_jtis(&self, _now: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn create_request(
-            &self,
-            _: &crate::repository::CreateRequestRow,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn count_pending_requests_for_pairing(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<i64> {
-            unimplemented!()
-        }
-        async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-        async fn delete_expired_audit_logs(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_full_request_by_id(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
-            unimplemented!()
-        }
-        async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn get_pending_requests_for_client(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
-            unimplemented!()
-        }
-        async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn add_unavailable_client_id(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<Option<(String, String)>> {
-            unimplemented!()
-        }
-        async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
-            unimplemented!()
-        }
-        async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
-            unimplemented!()
-        }
-        async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
-            unimplemented!()
         }
     }
 
@@ -720,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn health_returns_problem_details_when_repository_unavailable() {
         let state = AppState {
-            repository: Arc::new(FailingRepository),
+            repository: Arc::new(failing_mock()),
             base_url: "http://localhost:3000".to_owned(),
             signing_key_secret: "test-secret-key!".to_owned(),
             device_jwt_validity_seconds: 31_536_000,
@@ -764,6 +302,21 @@ mod tests {
         assert!(body_text.contains("\"instance\""));
     }
 
+    fn healthy_mock() -> MockRepository {
+        MockRepository {
+            backend: "sqlite",
+            ..Default::default()
+        }
+    }
+
+    fn failing_mock() -> MockRepository {
+        MockRepository {
+            fail_health: true,
+            backend: "sqlite",
+            ..Default::default()
+        }
+    }
+
     fn test_state(repo: impl SignatureRepository + 'static) -> AppState {
         AppState {
             repository: Arc::new(repo),
@@ -787,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_rejects_unsupported_accept_with_406() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -831,7 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_v1_media_type_and_adds_security_headers() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -874,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_json_and_returns_versioned_content_type() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -897,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_mixed_case_media_type() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -920,7 +473,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_rejects_accept_media_type_with_zero_quality() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -939,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_application_wildcard() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -962,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_handles_cors_preflight_options() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -998,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_authorization_header() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -1032,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_cors_preflight_allows_patch_and_delete_methods() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         for request_method in [Method::PATCH, Method::DELETE] {
             let response = app
@@ -1069,7 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_accepts_uppercase_q_parameter_name() {
-        let app = build_router(test_state(HealthyRepository), test_rate_limit_config());
+        let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
 
         let response = app
             .oneshot(
@@ -1103,7 +656,7 @@ mod tests {
             },
         };
 
-        let app = build_router(test_state(HealthyRepository), rl_config);
+        let app = build_router(test_state(healthy_mock()), rl_config);
 
         // Exhaust the standard quota (2 requests).
         for _ in 0..2 {
