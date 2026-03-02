@@ -762,6 +762,17 @@ pub fn make_client_jwt(
     sign_jws(&outer, priv_jwk, kid).unwrap()
 }
 
+/// Build an in-memory [`SqliteRepository`] with migrations applied, wrapped
+/// in `Arc` for use in HTTP handler tests.
+pub async fn build_test_sqlite_repo() -> Arc<crate::repository::SqliteRepository> {
+    use crate::repository::MIGRATOR;
+    use crate::repository::sqlite::tests::build_sqlite_test_pool;
+
+    let pool = build_sqlite_test_pool().await;
+    MIGRATOR.run(&pool).await.unwrap();
+    Arc::new(crate::repository::SqliteRepository { pool })
+}
+
 /// Build an [`AppState`] from any [`SignatureRepository`] implementor, using
 /// standard test defaults.
 pub fn make_test_app_state(repo: impl SignatureRepository + 'static) -> AppState {

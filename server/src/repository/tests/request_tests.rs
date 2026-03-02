@@ -1,18 +1,21 @@
-use crate::repository::{CreateRequestRow, RequestRepository};
+use crate::repository::CreateRequestRow;
 
-#[tokio::test]
-async fn get_request_by_id_found() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+use super::fixture::TestFixture;
+use super::helpers;
+use super::repo_test;
 
-    super::insert_test_request(&pool, "req-1").await;
+async fn get_request_by_id_found(f: &dyn TestFixture) {
+    let repo = f.repo();
+
+    helpers::insert_test_request(repo, "req-1").await;
     let request = repo.get_request_by_id("req-1").await.unwrap().unwrap();
     assert_eq!(request.request_id, "req-1");
     assert_eq!(request.status, "created");
 }
+repo_test!(get_request_by_id_found);
 
-#[tokio::test]
-async fn get_request_by_id_not_found() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn get_request_by_id_not_found(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     assert!(
         repo.get_request_by_id("nonexistent")
@@ -21,16 +24,16 @@ async fn get_request_by_id_not_found() {
             .is_none()
     );
 }
+repo_test!(get_request_by_id_not_found);
 
-#[tokio::test]
-async fn delete_expired_requests_returns_incomplete_ids() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn delete_expired_requests_returns_incomplete_ids(f: &dyn TestFixture) {
+    let repo = f.repo();
 
-    super::insert_request_with_status(&pool, "r-created", "created", "2025-01-01T00:00:00Z").await;
-    super::insert_request_with_status(&pool, "r-pending", "pending", "2025-01-01T00:00:00Z").await;
-    super::insert_request_with_status(&pool, "r-approved", "approved", "2025-01-01T00:00:00Z")
+    helpers::insert_request_with_status(repo, "r-created", "created", "2025-01-01T00:00:00Z").await;
+    helpers::insert_request_with_status(repo, "r-pending", "pending", "2025-01-01T00:00:00Z").await;
+    helpers::insert_request_with_status(repo, "r-approved", "approved", "2025-01-01T00:00:00Z")
         .await;
-    super::insert_request_with_status(&pool, "r-future", "created", "2027-01-01T00:00:00Z").await;
+    helpers::insert_request_with_status(repo, "r-future", "created", "2027-01-01T00:00:00Z").await;
 
     let mut ids = repo
         .delete_expired_requests("2026-01-01T00:00:00Z")
@@ -48,10 +51,10 @@ async fn delete_expired_requests_returns_incomplete_ids() {
     );
     assert!(repo.get_request_by_id("r-future").await.unwrap().is_some());
 }
+repo_test!(delete_expired_requests_returns_incomplete_ids);
 
-#[tokio::test]
-async fn delete_expired_requests_empty_when_none() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn delete_expired_requests_empty_when_none(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let ids = repo
         .delete_expired_requests("2026-01-01T00:00:00Z")
@@ -59,44 +62,44 @@ async fn delete_expired_requests_empty_when_none() {
         .unwrap();
     assert!(ids.is_empty());
 }
+repo_test!(delete_expired_requests_empty_when_none);
 
-#[tokio::test]
-async fn is_kid_in_flight_returns_true_when_request_has_matching_kid() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn is_kid_in_flight_returns_true_when_request_has_matching_kid(f: &dyn TestFixture) {
+    let repo = f.repo();
 
-    super::insert_request_with_e2e_kids(&pool, "req-1", "created", r#"["kid-test","kid-other"]"#)
+    helpers::insert_request_with_e2e_kids(repo, "req-1", "created", r#"["kid-test","kid-other"]"#)
         .await;
     assert!(repo.is_kid_in_flight("kid-test").await.unwrap());
 }
+repo_test!(is_kid_in_flight_returns_true_when_request_has_matching_kid);
 
-#[tokio::test]
-async fn is_kid_in_flight_returns_false_when_no_matching_request() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn is_kid_in_flight_returns_false_when_no_matching_request(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     // No requests at all
     assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
 
     // Request exists but with a different kid
-    super::insert_request_with_e2e_kids(&pool, "req-1", "created", r#"["kid-other"]"#).await;
+    helpers::insert_request_with_e2e_kids(repo, "req-1", "created", r#"["kid-other"]"#).await;
     assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
 }
+repo_test!(is_kid_in_flight_returns_false_when_no_matching_request);
 
-#[tokio::test]
-async fn is_kid_in_flight_ignores_non_active_statuses() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn is_kid_in_flight_ignores_non_active_statuses(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     // approved request should NOT count
-    super::insert_request_with_e2e_kids(&pool, "req-1", "approved", r#"["kid-test"]"#).await;
+    helpers::insert_request_with_e2e_kids(repo, "req-1", "approved", r#"["kid-test"]"#).await;
     assert!(!repo.is_kid_in_flight("kid-test").await.unwrap());
 
     // pending request SHOULD count
-    super::insert_request_with_e2e_kids(&pool, "req-2", "pending", r#"["kid-test"]"#).await;
+    helpers::insert_request_with_e2e_kids(repo, "req-2", "pending", r#"["kid-test"]"#).await;
     assert!(repo.is_kid_in_flight("kid-test").await.unwrap());
 }
+repo_test!(is_kid_in_flight_ignores_non_active_statuses);
 
-#[tokio::test]
-async fn create_request_and_get_full() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn create_request_and_get_full(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let row = CreateRequestRow {
         request_id: "req-new".to_owned(),
@@ -122,10 +125,10 @@ async fn create_request_and_get_full() {
     assert!(full.signature.is_none());
     assert!(full.encrypted_payloads.is_none());
 }
+repo_test!(create_request_and_get_full);
 
-#[tokio::test]
-async fn update_request_phase2_cas() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn update_request_phase2_cas(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let row = CreateRequestRow {
         request_id: "req-1".to_owned(),
@@ -147,10 +150,10 @@ async fn update_request_phase2_cas() {
     let ok = repo.update_request_phase2("req-1", "{}").await.unwrap();
     assert!(!ok);
 }
+repo_test!(update_request_phase2_cas);
 
-#[tokio::test]
-async fn update_request_approved_and_denied_cas() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn update_request_approved_and_denied_cas(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     for id in &["req-a", "req-d"] {
         let row = CreateRequestRow {
@@ -179,10 +182,10 @@ async fn update_request_approved_and_denied_cas() {
     let full = repo.get_full_request_by_id("req-d").await.unwrap().unwrap();
     assert_eq!(full.status, "denied");
 }
+repo_test!(update_request_approved_and_denied_cas);
 
-#[tokio::test]
-async fn delete_request_removes_row() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn delete_request_removes_row(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let row = CreateRequestRow {
         request_id: "req-1".to_owned(),
@@ -204,10 +207,10 @@ async fn delete_request_removes_row() {
     let deleted = repo.delete_request("req-1").await.unwrap();
     assert!(!deleted);
 }
+repo_test!(delete_request_removes_row);
 
-#[tokio::test]
-async fn add_unavailable_client_id_cas_logic() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn add_unavailable_client_id_cas_logic(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let row = CreateRequestRow {
         request_id: "req-1".to_owned(),
@@ -250,3 +253,4 @@ async fn add_unavailable_client_id_cas_logic() {
     assert!(updated.contains("c1"));
     assert!(updated.contains("c2"));
 }
+repo_test!(add_unavailable_client_id_cas_logic);
