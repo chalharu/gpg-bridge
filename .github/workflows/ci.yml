@@ -2,35 +2,30 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'server/**'
-      - 'daemon/**'
-      - 'mobile/**'
-      - '.github/workflows/ci.yml'
+    branches: [main]
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'server/**'
-      - 'daemon/**'
-      - 'mobile/**'
-      - '.github/workflows/ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Change detection
+  # ---------------------------------------------------------------------------
   changes:
     name: Detect changed areas
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       flutter: ${{ steps.filter.outputs.flutter }}
+      docker: ${{ steps.filter.outputs.docker }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,9 +44,16 @@ jobs:
             flutter:
               - 'mobile/**'
               - '.github/workflows/ci.yml'
+            docker:
+              - 'Dockerfile.server'
+              - '.dockerignore'
+              - '.github/workflows/ci.yml'
 
-  rust-check:
-    name: Rust cargo check
+  # ---------------------------------------------------------------------------
+  # Rust quality gate
+  # ---------------------------------------------------------------------------
+  rust-quality-gate:
+    name: Rust quality gate
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -63,19 +65,38 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy,llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
           cache-on-failure: true
 
-      - name: Cargo check
-        run: cargo check --workspace --locked
+      - name: Format check
+        run: cargo fmt --all -- --check
 
-  flutter-analyze:
-    name: Flutter analyze
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Coverage (includes tests)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov-rust.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov-rust.info
+          flags: rust
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Flutter quality gate
+  # ---------------------------------------------------------------------------
+  flutter-quality-gate:
+    name: Flutter quality gate
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.flutter == 'true'
@@ -89,10 +110,74 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter pub get
+      - name: Install dependencies
         working-directory: mobile
         run: flutter pub get
 
-      - name: Flutter analyze
+      - name: Format check
+        working-directory: mobile
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
         working-directory: mobile
         run: flutter analyze
+
+      - name: Tests with coverage
+        working-directory: mobile
+        run: flutter test --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: mobile/coverage/lcov.info
+          flags: flutter
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Docker build & push
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker build & push
+    runs-on: ubuntu-latest
+    needs: [rust-quality-gate, changes]
+    if: >-
+      always()
+      && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.rust == 'true')
+      && needs.rust-quality-gate.result != 'failure'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/chalharu/gpg-bridge-server
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.server
+          platforms: linux/amd64
+          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
