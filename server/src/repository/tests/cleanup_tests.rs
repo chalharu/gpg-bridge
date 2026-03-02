@@ -1,14 +1,15 @@
-use crate::repository::{CleanupRepository, ClientPairingRepository, ClientRepository};
+use super::fixture::TestFixture;
+use super::helpers;
+use super::repo_test;
 
-#[tokio::test]
-async fn delete_unpaired_clients_removes_old_without_pairings() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn delete_unpaired_clients_removes_old_without_pairings(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     // Old client without pairings
-    super::insert_test_client(&pool, "orphan", "[]").await;
+    helpers::insert_test_client(repo, "orphan", "[]").await;
 
     // Old client WITH pairings
-    super::insert_test_client(&pool, "paired", "[]").await;
+    helpers::insert_test_client(repo, "paired", "[]").await;
     repo.create_client_pairing("paired", "p-1", "2026-01-01T00:00:00Z")
         .await
         .unwrap();
@@ -22,13 +23,13 @@ async fn delete_unpaired_clients_removes_old_without_pairings() {
     assert!(repo.get_client_by_id("orphan").await.unwrap().is_none());
     assert!(repo.get_client_by_id("paired").await.unwrap().is_some());
 }
+repo_test!(delete_unpaired_clients_removes_old_without_pairings);
 
-#[tokio::test]
-async fn delete_expired_device_jwt_clients_removes_old() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn delete_expired_device_jwt_clients_removes_old(f: &dyn TestFixture) {
+    let repo = f.repo();
 
-    super::insert_test_client(&pool, "old-jwt", "[]").await;
-    super::insert_test_client(&pool, "new-jwt", "[]").await;
+    helpers::insert_test_client(repo, "old-jwt", "[]").await;
+    helpers::insert_test_client(repo, "new-jwt", "[]").await;
 
     // new-jwt gets a fresh device_jwt_issued_at
     repo.update_device_jwt_issued_at("new-jwt", "2026-12-01T00:00:00Z", "2026-12-01T00:00:00Z")
@@ -44,13 +45,13 @@ async fn delete_expired_device_jwt_clients_removes_old() {
     assert!(repo.get_client_by_id("old-jwt").await.unwrap().is_none());
     assert!(repo.get_client_by_id("new-jwt").await.unwrap().is_some());
 }
+repo_test!(delete_expired_device_jwt_clients_removes_old);
 
-#[tokio::test]
-async fn delete_expired_client_jwt_pairings_removes_and_cascades() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn delete_expired_client_jwt_pairings_removes_and_cascades(f: &dyn TestFixture) {
+    let repo = f.repo();
 
-    super::insert_test_client(&pool, "c1", "[]").await;
-    super::insert_test_client(&pool, "c2", "[]").await;
+    helpers::insert_test_client(repo, "c1", "[]").await;
+    helpers::insert_test_client(repo, "c2", "[]").await;
 
     // c1 has one old pairing → will be removed → client deleted
     repo.create_client_pairing("c1", "p-old", "2025-01-01T00:00:00Z")
@@ -80,12 +81,12 @@ async fn delete_expired_client_jwt_pairings_removes_and_cascades() {
     assert_eq!(pairings.len(), 1);
     assert_eq!(pairings[0].pairing_id, "p-new");
 }
+repo_test!(delete_expired_client_jwt_pairings_removes_and_cascades);
 
-#[tokio::test]
-async fn delete_expired_client_jwt_pairings_noop_when_nothing_expired() {
-    let (repo, pool) = super::build_sqlite_test_repo().await;
+async fn delete_expired_client_jwt_pairings_noop_when_nothing_expired(f: &dyn TestFixture) {
+    let repo = f.repo();
 
-    super::insert_test_client(&pool, "c1", "[]").await;
+    helpers::insert_test_client(repo, "c1", "[]").await;
     repo.create_client_pairing("c1", "p-1", "2027-01-01T00:00:00Z")
         .await
         .unwrap();
@@ -97,3 +98,4 @@ async fn delete_expired_client_jwt_pairings_noop_when_nothing_expired() {
     assert_eq!(removed, 0);
     assert!(repo.get_client_by_id("c1").await.unwrap().is_some());
 }
+repo_test!(delete_expired_client_jwt_pairings_noop_when_nothing_expired);

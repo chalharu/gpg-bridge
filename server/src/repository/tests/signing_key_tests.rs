@@ -1,4 +1,7 @@
-use crate::repository::{SigningKeyRepository, SigningKeyRow};
+use crate::repository::SigningKeyRow;
+
+use super::fixture::TestFixture;
+use super::repo_test;
 
 fn make_signing_key_row(kid: &str, is_active: bool, expires_at: &str) -> SigningKeyRow {
     SigningKeyRow {
@@ -11,9 +14,8 @@ fn make_signing_key_row(kid: &str, is_active: bool, expires_at: &str) -> Signing
     }
 }
 
-#[tokio::test]
-async fn store_and_get_active_signing_key() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn store_and_get_active_signing_key(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let key = make_signing_key_row("kid-1", true, "2027-01-01T00:00:00Z");
     repo.store_signing_key(&key).await.unwrap();
@@ -22,10 +24,10 @@ async fn store_and_get_active_signing_key() {
     assert_eq!(active.kid, "kid-1");
     assert!(active.is_active);
 }
+repo_test!(store_and_get_active_signing_key);
 
-#[tokio::test]
-async fn get_signing_key_by_kid() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn get_signing_key_by_kid(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let key = make_signing_key_row("kid-2", false, "2027-01-01T00:00:00Z");
     repo.store_signing_key(&key).await.unwrap();
@@ -37,10 +39,10 @@ async fn get_signing_key_by_kid() {
     let missing = repo.get_signing_key_by_kid("nonexistent").await.unwrap();
     assert!(missing.is_none());
 }
+repo_test!(get_signing_key_by_kid);
 
-#[tokio::test]
-async fn retire_signing_key_sets_inactive() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn retire_signing_key_sets_inactive(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let key = make_signing_key_row("kid-3", true, "2027-01-01T00:00:00Z");
     repo.store_signing_key(&key).await.unwrap();
@@ -52,18 +54,18 @@ async fn retire_signing_key_sets_inactive() {
     assert!(!retired.is_active);
     assert!(repo.get_active_signing_key().await.unwrap().is_none());
 }
+repo_test!(retire_signing_key_sets_inactive);
 
-#[tokio::test]
-async fn retire_nonexistent_signing_key_returns_false() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn retire_nonexistent_signing_key_returns_false(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let updated = repo.retire_signing_key("nonexistent").await.unwrap();
     assert!(!updated);
 }
+repo_test!(retire_nonexistent_signing_key_returns_false);
 
-#[tokio::test]
-async fn delete_expired_signing_keys_removes_old() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn delete_expired_signing_keys_removes_old(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     let expired = make_signing_key_row("kid-old", false, "2025-01-01T00:00:00Z");
     let valid = make_signing_key_row("kid-new", false, "2027-01-01T00:00:00Z");
@@ -89,10 +91,11 @@ async fn delete_expired_signing_keys_removes_old() {
             .is_some()
     );
 }
+repo_test!(delete_expired_signing_keys_removes_old);
 
-#[tokio::test]
-async fn no_active_key_returns_none() {
-    let repo = super::build_sqlite_test_repo_only().await;
+async fn no_active_key_returns_none(f: &dyn TestFixture) {
+    let repo = f.repo();
 
     assert!(repo.get_active_signing_key().await.unwrap().is_none());
 }
+repo_test!(no_active_key_returns_none);
