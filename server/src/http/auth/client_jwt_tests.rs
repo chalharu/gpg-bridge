@@ -3,7 +3,10 @@ use crate::jwt::{
     encrypt_jwe_direct, encrypt_private_key, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
 use crate::repository::{
-    ClientPairingRow, ClientRow, RequestRow, SignatureRepository, SigningKeyRow,
+    AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
+    ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
+    PairingRepository, PairingRow, RequestRepository, RequestRow, SignatureRepository,
+    SigningKeyRepository, SigningKeyRow,
 };
 use async_trait::async_trait;
 use axum::Router;
@@ -24,16 +27,7 @@ struct MockRepo {
 }
 
 #[async_trait]
-impl SignatureRepository for MockRepo {
-    async fn run_migrations(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn health_check(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    fn backend_name(&self) -> &'static str {
-        "mock"
-    }
+impl SigningKeyRepository for MockRepo {
     async fn store_signing_key(&self, _: &SigningKeyRow) -> anyhow::Result<()> {
         unimplemented!()
     }
@@ -49,25 +43,12 @@ impl SignatureRepository for MockRepo {
     async fn delete_expired_signing_keys(&self, _: &str) -> anyhow::Result<u64> {
         unimplemented!()
     }
+}
+
+#[async_trait]
+impl ClientRepository for MockRepo {
     async fn get_client_by_id(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
         Ok(None)
-    }
-    async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
-        Ok(self
-            .pairings
-            .iter()
-            .filter(|p| p.client_id == client_id)
-            .cloned()
-            .collect())
-    }
-    async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
-        Ok(None)
-    }
-    async fn store_jti(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        Ok(true)
-    }
-    async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
-        Ok(0)
     }
     async fn create_client(&self, _: &ClientRow) -> anyhow::Result<()> {
         unimplemented!()
@@ -109,26 +90,17 @@ impl SignatureRepository for MockRepo {
     ) -> anyhow::Result<bool> {
         unimplemented!()
     }
-    async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn get_pairing_by_id(
-        &self,
-        _: &str,
-    ) -> anyhow::Result<Option<crate::repository::PairingRow>> {
-        unimplemented!()
-    }
-    async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn count_unconsumed_pairings(&self, _now: &str) -> anyhow::Result<i64> {
-        unimplemented!()
-    }
-    async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
+}
+
+#[async_trait]
+impl ClientPairingRepository for MockRepo {
+    async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
+        Ok(self
+            .pairings
+            .iter()
+            .filter(|p| p.client_id == client_id)
+            .cloned()
+            .collect())
     }
     async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
         unimplemented!()
@@ -146,31 +118,48 @@ impl SignatureRepository for MockRepo {
     async fn update_client_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
-    async fn create_request(&self, _: &crate::repository::CreateRequestRow) -> anyhow::Result<()> {
+}
+
+#[async_trait]
+impl PairingRepository for MockRepo {
+    async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
         unimplemented!()
     }
-    async fn count_pending_requests_for_pairing(&self, _: &str, _: &str) -> anyhow::Result<i64> {
+    async fn get_pairing_by_id(&self, _: &str) -> anyhow::Result<Option<PairingRow>> {
         unimplemented!()
     }
-    async fn create_audit_log(&self, _: &crate::repository::AuditLogRow) -> anyhow::Result<()> {
+    async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
-    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+    async fn count_unconsumed_pairings(&self, _: &str) -> anyhow::Result<i64> {
         unimplemented!()
     }
-    async fn get_full_request_by_id(
-        &self,
-        _: &str,
-    ) -> anyhow::Result<Option<crate::repository::FullRequestRow>> {
+    async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+impl RequestRepository for MockRepo {
+    async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
+        Ok(None)
+    }
+    async fn get_full_request_by_id(&self, _: &str) -> anyhow::Result<Option<FullRequestRow>> {
         unimplemented!()
     }
     async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
         unimplemented!()
     }
+    async fn create_request(&self, _: &CreateRequestRow) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+    async fn count_pending_requests_for_pairing(&self, _: &str, _: &str) -> anyhow::Result<i64> {
+        unimplemented!()
+    }
     async fn get_pending_requests_for_client(
         &self,
         _: &str,
-    ) -> anyhow::Result<Vec<crate::repository::FullRequestRow>> {
+    ) -> anyhow::Result<Vec<FullRequestRow>> {
         unimplemented!()
     }
     async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
@@ -195,6 +184,33 @@ impl SignatureRepository for MockRepo {
     async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
         unimplemented!()
     }
+    async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+impl AuditLogRepository for MockRepo {
+    async fn create_audit_log(&self, _: &AuditLogRow) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+impl JtiRepository for MockRepo {
+    async fn store_jti(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+    async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
+        Ok(0)
+    }
+}
+
+#[async_trait]
+impl CleanupRepository for MockRepo {
     async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
         unimplemented!()
     }
@@ -203,6 +219,19 @@ impl SignatureRepository for MockRepo {
     }
     async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
         unimplemented!()
+    }
+}
+
+#[async_trait]
+impl SignatureRepository for MockRepo {
+    async fn run_migrations(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn health_check(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn backend_name(&self) -> &'static str {
+        "mock"
     }
 }
 

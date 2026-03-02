@@ -6,7 +6,8 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
+use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
+use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
 
 use super::{
     X_COORD, Y_COORD, build_test_router, make_client_row, make_device_assertion,
@@ -20,8 +21,9 @@ use super::{
 #[tokio::test]
 async fn register_device_stores_correct_client_row() {
     let (sk, _) = make_signing_key_row();
-    let repo = Arc::new(MockRepository::new(sk));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let body = register_body("fid-row", "tok-row");
@@ -37,9 +39,7 @@ async fn register_device_stores_correct_client_row() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let clients = repo.clients.lock().unwrap();
-    assert_eq!(clients.len(), 1);
-    let c = &clients[0];
+    let c = repo.get_client_by_id("fid-row").await.unwrap().unwrap();
     assert_eq!(c.client_id, "fid-row");
     assert_eq!(c.device_token, "tok-row");
     assert!(!c.public_keys.is_empty());
@@ -57,7 +57,9 @@ async fn register_device_stores_correct_client_row() {
 #[tokio::test]
 async fn register_device_jwt_has_correct_sub_and_future_exp() {
     let (sk, pub_jwk) = make_signing_key_row();
-    let state = make_test_app_state(MockRepository::new(sk));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let before = chrono::Utc::now().timestamp();
@@ -110,8 +112,9 @@ async fn register_device_jwt_has_correct_sub_and_future_exp() {
 #[tokio::test]
 async fn register_device_uses_first_enc_kid_when_none_specified() {
     let (sk, _) = make_signing_key_row();
-    let repo = Arc::new(MockRepository::new(sk));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     // Body without explicit default_kid — should use the enc key's kid
@@ -140,15 +143,16 @@ async fn register_device_uses_first_enc_kid_when_none_specified() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let clients = repo.clients.lock().unwrap();
-    assert_eq!(clients[0].default_kid, "my-enc-kid");
+    let c = repo.get_client_by_id("fid-dk").await.unwrap().unwrap();
+    assert_eq!(c.default_kid, "my-enc-kid");
 }
 
 #[tokio::test]
 async fn register_device_uses_explicit_default_kid() {
     let (sk, _) = make_signing_key_row();
-    let repo = Arc::new(MockRepository::new(sk));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let body = json!({
@@ -182,14 +186,16 @@ async fn register_device_uses_explicit_default_kid() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let clients = repo.clients.lock().unwrap();
-    assert_eq!(clients[0].default_kid, "chosen-kid");
+    let c = repo.get_client_by_id("fid-ek").await.unwrap().unwrap();
+    assert_eq!(c.default_kid, "chosen-kid");
 }
 
 #[tokio::test]
 async fn register_device_invalid_default_kid_returns_400() {
     let (sk, _) = make_signing_key_row();
-    let state = make_test_app_state(MockRepository::new(sk));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let body = json!({
@@ -226,8 +232,9 @@ async fn register_device_invalid_default_kid_returns_400() {
 #[tokio::test]
 async fn register_device_public_keys_contains_all_keys() {
     let (sk, _) = make_signing_key_row();
-    let repo = Arc::new(MockRepository::new(sk));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let body = register_body("fid-pk", "tok-pk");
@@ -243,9 +250,8 @@ async fn register_device_public_keys_contains_all_keys() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let clients = repo.clients.lock().unwrap();
-    let stored_keys: Vec<serde_json::Value> =
-        serde_json::from_str(&clients[0].public_keys).unwrap();
+    let c = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
+    let stored_keys: Vec<serde_json::Value> = serde_json::from_str(&c.public_keys).unwrap();
     // register_body provides 1 sig + 1 enc = 2 total
     assert_eq!(stored_keys.len(), 2);
 }
@@ -263,7 +269,10 @@ async fn update_device_only_token_succeeds() {
         "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
     );
     let client = make_client_row("fid-ot", "old-tok", &keys, "enc-1");
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ot", "/device");
@@ -297,7 +306,10 @@ async fn update_device_only_default_kid_succeeds() {
         "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
     );
     let client = make_client_row("fid-ok", "tok-ok", &keys, "enc-1");
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ok", "/device");
