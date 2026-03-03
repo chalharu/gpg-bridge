@@ -1,0 +1,1722 @@
+[
+  {
+    "file": "server/src/config.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "config.rs (production)",
+    "count": 365,
+    "limit": 200
+  },
+  {
+    "file": "server/src/config.rs",
+    "line": 106,
+    "kind": "method",
+    "name": "from_lookup",
+    "count": 101,
+    "limit": 30
+  },
+  {
+    "file": "server/src/config.rs",
+    "line": 282,
+    "kind": "method",
+    "name": "validate_duration_upper_bounds",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/config_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "config_tests.rs",
+    "count": 319,
+    "limit": 200
+  },
+  {
+    "file": "server/src/config_tests.rs",
+    "line": 4,
+    "kind": "method",
+    "name": "config_uses_defaults_and_required_values",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/error.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "error.rs (production)",
+    "count": 252,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/auth/client_jwt.rs",
+    "line": 121,
+    "kind": "method",
+    "name": "filter_valid_pairings",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/client_jwt_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "client_jwt_tests.rs",
+    "count": 462,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/auth/client_jwt_tests.rs",
+    "line": 397,
+    "kind": "method",
+    "name": "multiple_valid_tokens_returns_all",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/client_jwt_tests.rs",
+    "line": 435,
+    "kind": "method",
+    "name": "expired_outer_jws_rejects_all",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth.rs",
+    "line": 25,
+    "kind": "method",
+    "name": "from_request_parts",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "daemon_auth_tests.rs",
+    "count": 587,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 287,
+    "kind": "method",
+    "name": "valid_daemon_auth_succeeds",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 344,
+    "kind": "method",
+    "name": "wrong_daemon_key_returns_401",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 386,
+    "kind": "method",
+    "name": "request_not_found_returns_401",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 421,
+    "kind": "method",
+    "name": "wrong_aud_returns_401",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 461,
+    "kind": "method",
+    "name": "jti_replay_returns_401",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 501,
+    "kind": "method",
+    "name": "expired_outer_jws_returns_401",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/daemon_auth_tests.rs",
+    "line": 548,
+    "kind": "method",
+    "name": "invalid_request_jwt_returns_401",
+    "count": 52,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/device_assertion_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "device_assertion_tests.rs",
+    "count": 497,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/auth/device_assertion_tests.rs",
+    "line": 446,
+    "kind": "method",
+    "name": "jti_replay_returns_401",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/auth/sign_jwt_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_jwt_tests.rs",
+    "count": 368,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/device/public_key/add.rs",
+    "line": 14,
+    "kind": "method",
+    "name": "add_public_key",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/public_key/add.rs",
+    "line": 80,
+    "kind": "method",
+    "name": "check_duplicate_kids",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/public_key/delete.rs",
+    "line": 11,
+    "kind": "method",
+    "name": "delete_public_key",
+    "count": 43,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/register.rs",
+    "line": 11,
+    "kind": "method",
+    "name": "register_device",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "gpg_key.rs",
+    "count": 506,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 151,
+    "kind": "method",
+    "name": "add_gpg_key_upsert_overwrites_existing",
+    "count": 47,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 204,
+    "kind": "method",
+    "name": "list_gpg_keys_returns_registered",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 269,
+    "kind": "method",
+    "name": "delete_gpg_key_success",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 330,
+    "kind": "method",
+    "name": "add_gpg_key_multiple_keys_success",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 459,
+    "kind": "method",
+    "name": "delete_gpg_key_concurrent_modification_conflict",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/public_key.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "public_key.rs",
+    "count": 486,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/device/tests/public_key.rs",
+    "line": 296,
+    "kind": "method",
+    "name": "delete_public_key_in_flight_returns_409",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/public_key.rs",
+    "line": 330,
+    "kind": "method",
+    "name": "delete_public_key_auto_reassign_default_kid",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/public_key.rs",
+    "line": 426,
+    "kind": "method",
+    "name": "delete_public_key_no_default_kid_reassign_when_not_affected",
+    "count": 44,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "register.rs",
+    "count": 423,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 317,
+    "kind": "method",
+    "name": "refresh_device_jwt_success",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 359,
+    "kind": "method",
+    "name": "refresh_device_jwt_sub_mismatch_returns_401",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 394,
+    "kind": "method",
+    "name": "refresh_device_jwt_expired_issued_at_returns_401",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "register_mutations.rs",
+    "count": 315,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 21,
+    "kind": "method",
+    "name": "register_device_stores_correct_client_row",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 58,
+    "kind": "method",
+    "name": "register_device_jwt_has_correct_sub_and_future_exp",
+    "count": 47,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 111,
+    "kind": "method",
+    "name": "register_device_uses_first_enc_kid_when_none_specified",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 148,
+    "kind": "method",
+    "name": "register_device_uses_explicit_default_kid",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 190,
+    "kind": "method",
+    "name": "register_device_invalid_default_kid_returns_400",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 258,
+    "kind": "method",
+    "name": "update_device_only_token_succeeds",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 292,
+    "kind": "method",
+    "name": "update_device_only_default_kid_succeeds",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/update.rs",
+    "line": 10,
+    "kind": "method",
+    "name": "update_device",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod.rs",
+    "line": 78,
+    "kind": "method",
+    "name": "build_router",
+    "count": 87,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "mod_tests.rs",
+    "count": 542,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 33,
+    "kind": "method",
+    "name": "health_returns_ok_status",
+    "count": 57,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 92,
+    "kind": "method",
+    "name": "health_returns_problem_details_when_repository_unavailable",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 175,
+    "kind": "method",
+    "name": "router_rejects_unsupported_accept_with_406",
+    "count": 42,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 219,
+    "kind": "method",
+    "name": "router_accepts_v1_media_type_and_adds_security_headers",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 350,
+    "kind": "method",
+    "name": "router_handles_cors_preflight_options",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 386,
+    "kind": "method",
+    "name": "router_cors_preflight_allows_authorization_header",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 420,
+    "kind": "method",
+    "name": "router_cors_preflight_allows_patch_and_delete_methods",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/mod_tests.rs",
+    "line": 474,
+    "kind": "method",
+    "name": "router_returns_429_when_rate_limit_exceeded",
+    "count": 76,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/gpg_keys.rs",
+    "line": 25,
+    "kind": "method",
+    "name": "query_gpg_keys",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/session.rs",
+    "line": 21,
+    "kind": "method",
+    "name": "get_pairing_session",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/session.rs",
+    "line": 78,
+    "kind": "method",
+    "name": "verify_pairing_jwt",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/session_stream.rs",
+    "line": 118,
+    "kind": "method",
+    "name": "next_event",
+    "count": 42,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "coverage.rs",
+    "count": 409,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 77,
+    "kind": "method",
+    "name": "pair_device_unknown_signing_key_returns_400",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 116,
+    "kind": "method",
+    "name": "pair_device_pairing_not_found_returns_410",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 211,
+    "kind": "method",
+    "name": "delete_by_daemon_last_pairing_deletes_client",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 255,
+    "kind": "method",
+    "name": "delete_by_phone_last_pairing_deletes_client",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 299,
+    "kind": "method",
+    "name": "delete_by_daemon_preserves_client_with_remaining_pairings",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/coverage.rs",
+    "line": 373,
+    "kind": "method",
+    "name": "delete_by_phone_preserves_client_with_remaining_pairings",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "crud.rs",
+    "count": 382,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 64,
+    "kind": "method",
+    "name": "pair_device_returns_200_with_pairing_id",
+    "count": 46,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 112,
+    "kind": "method",
+    "name": "pair_device_expired_pairing_returns_410",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 153,
+    "kind": "method",
+    "name": "pair_device_already_consumed_returns_409",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 198,
+    "kind": "method",
+    "name": "delete_by_phone_returns_204",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 271,
+    "kind": "method",
+    "name": "delete_by_daemon_returns_204",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 315,
+    "kind": "method",
+    "name": "refresh_returns_200_with_new_jwt",
+    "count": 43,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/crud.rs",
+    "line": 360,
+    "kind": "method",
+    "name": "refresh_pairing_not_found_returns_404",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/gpg_keys.rs",
+    "line": 15,
+    "kind": "method",
+    "name": "query_gpg_keys_returns_aggregated_keys",
+    "count": 59,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/gpg_keys.rs",
+    "line": 76,
+    "kind": "method",
+    "name": "query_gpg_keys_returns_empty_when_no_keys",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/gpg_keys.rs",
+    "line": 112,
+    "kind": "method",
+    "name": "query_gpg_keys_missing_client_returns_remaining_keys",
+    "count": 54,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/gpg_keys.rs",
+    "line": 168,
+    "kind": "method",
+    "name": "query_gpg_keys_malformed_json_returns_500",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/helpers_unit.rs",
+    "line": 148,
+    "kind": "method",
+    "name": "delete_by_daemon_cleanup_db_error_returns_500",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "pair_errors.rs",
+    "count": 329,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 55,
+    "kind": "method",
+    "name": "pair_device_corrupt_public_key_returns_500",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 100,
+    "kind": "method",
+    "name": "pair_device_invalid_expired_format_returns_500",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 141,
+    "kind": "method",
+    "name": "pair_device_consume_db_error_returns_500",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 185,
+    "kind": "method",
+    "name": "pair_device_create_link_db_error_returns_500",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 229,
+    "kind": "method",
+    "name": "pair_device_expired_signing_key_returns_401",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 272,
+    "kind": "method",
+    "name": "pair_device_signing_key_db_error_returns_500",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/pair_errors.rs",
+    "line": 307,
+    "kind": "method",
+    "name": "pair_device_get_pairing_db_error_returns_500",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "refresh_token_errors.rs",
+    "count": 388,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 46,
+    "kind": "method",
+    "name": "refresh_signing_key_disappears_returns_500",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 90,
+    "kind": "method",
+    "name": "refresh_update_not_found_returns_404",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 133,
+    "kind": "method",
+    "name": "refresh_update_db_error_returns_500",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 176,
+    "kind": "method",
+    "name": "refresh_ownership_db_error_returns_500",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/refresh_token_errors.rs",
+    "line": 361,
+    "kind": "method",
+    "name": "delete_by_phone_cleanup_db_error_returns_500",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/sse.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sse.rs",
+    "count": 373,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/pairing/tests/sse.rs",
+    "line": 172,
+    "kind": "method",
+    "name": "session_already_paired_returns_sse_with_paired_event",
+    "count": 56,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/sse.rs",
+    "line": 230,
+    "kind": "method",
+    "name": "session_pending_pairing_returns_200_sse_stream",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/pairing/tests/sse.rs",
+    "line": 325,
+    "kind": "method",
+    "name": "session_notify_delivers_paired_event_on_waiting_stream",
+    "count": 61,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/rate_limit/config.rs",
+    "line": 78,
+    "kind": "method",
+    "name": "from_app_config_maps_all_fields",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/rate_limit/sliding_window.rs",
+    "line": 53,
+    "kind": "method",
+    "name": "check_and_record",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/rate_limit/sliding_window_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sliding_window_tests.rs",
+    "count": 258,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/delete_request.rs",
+    "line": 22,
+    "kind": "method",
+    "name": "delete_sign_request",
+    "count": 63,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/delete_request.rs",
+    "line": 90,
+    "kind": "method",
+    "name": "send_cancel_to_all",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/get_request.rs",
+    "line": 14,
+    "kind": "method",
+    "name": "get_sign_request",
+    "count": 91,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/handler.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "handler.rs",
+    "count": 245,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/handler.rs",
+    "line": 20,
+    "kind": "method",
+    "name": "post_sign_request",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_events.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_events.rs",
+    "count": 455,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/sign_events.rs",
+    "line": 32,
+    "kind": "method",
+    "name": "get_sign_events",
+    "count": 101,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_events.rs",
+    "line": 217,
+    "kind": "method",
+    "name": "next_event",
+    "count": 50,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_result.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_result.rs",
+    "count": 267,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/sign_result.rs",
+    "line": 39,
+    "kind": "method",
+    "name": "handle_approved",
+    "count": 54,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_result.rs",
+    "line": 98,
+    "kind": "method",
+    "name": "handle_denied",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_result.rs",
+    "line": 148,
+    "kind": "method",
+    "name": "handle_unavailable",
+    "count": 61,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/sign_result.rs",
+    "line": 214,
+    "kind": "method",
+    "name": "send_cancel_to_others",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/delete_request.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "delete_request.rs",
+    "count": 249,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/tests/delete_request.rs",
+    "line": 37,
+    "kind": "method",
+    "name": "setup_delete_happy_path",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/delete_request.rs",
+    "line": 99,
+    "kind": "method",
+    "name": "delete_pending_request_returns_204",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/delete_request.rs",
+    "line": 190,
+    "kind": "method",
+    "name": "delete_not_found_returns_404",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/get_and_result.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "get_and_result.rs",
+    "count": 403,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/tests/get_and_result.rs",
+    "line": 129,
+    "kind": "method",
+    "name": "get_sign_request_returns_empty_when_no_pending_requests",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/get_and_result.rs",
+    "line": 165,
+    "kind": "method",
+    "name": "get_sign_request_returns_pending_request_items",
+    "count": 54,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/patch_request.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "patch_request.rs",
+    "count": 342,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/tests/patch_request.rs",
+    "line": 42,
+    "kind": "method",
+    "name": "setup_phase2_happy_path",
+    "count": 50,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/patch_request.rs",
+    "line": 250,
+    "kind": "method",
+    "name": "patch_multiple_clients_happy_path",
+    "count": 56,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/post_request.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "post_request.rs",
+    "count": 312,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/tests/post_request.rs",
+    "line": 187,
+    "kind": "method",
+    "name": "multiple_clients_happy_path",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/sign_events.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_events.rs",
+    "count": 208,
+    "limit": 200
+  },
+  {
+    "file": "server/src/http/signing/tests/sign_events.rs",
+    "line": 40,
+    "kind": "method",
+    "name": "setup_sign_events",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/sign_events.rs",
+    "line": 80,
+    "kind": "method",
+    "name": "sign_events_approved_returns_immediate_sse",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/signing/tests/sign_events.rs",
+    "line": 169,
+    "kind": "method",
+    "name": "sign_events_request_not_found_returns_404",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/jobs/mod.rs",
+    "line": 11,
+    "kind": "file",
+    "name": "mod.rs (test)",
+    "count": 239,
+    "limit": 200
+  },
+  {
+    "file": "server/src/jobs/mod.rs",
+    "line": 214,
+    "kind": "method",
+    "name": "run_delete_expired_audit_logs",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "server/src/jobs/tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "tests.rs",
+    "count": 707,
+    "limit": 200
+  },
+  {
+    "file": "server/src/jobs/tests.rs",
+    "line": 36,
+    "kind": "method",
+    "name": "run_all_jobs_calls_cleanup_methods",
+    "count": 69,
+    "limit": 30
+  },
+  {
+    "file": "server/src/main.rs",
+    "line": 36,
+    "kind": "method",
+    "name": "main",
+    "count": 53,
+    "limit": 30
+  },
+  {
+    "file": "server/src/observability.rs",
+    "line": 40,
+    "kind": "method",
+    "name": "init_tracing_rejects_invalid_log_format",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/observability.rs",
+    "line": 80,
+    "kind": "method",
+    "name": "init_tracing_json_does_not_reject_format",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/mod.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "mod.rs",
+    "count": 395,
+    "limit": 200
+  },
+  {
+    "file": "server/src/repository/postgres.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "postgres.rs (production)",
+    "count": 866,
+    "limit": 200
+  },
+  {
+    "file": "server/src/repository/postgres.rs",
+    "line": 248,
+    "kind": "method",
+    "name": "delete_client_pairing_and_cleanup",
+    "count": 43,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/postgres.rs",
+    "line": 594,
+    "kind": "method",
+    "name": "add_unavailable_client_id",
+    "count": 51,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/postgres.rs",
+    "line": 880,
+    "kind": "method",
+    "name": "postgres_repository_connects_to_embedded_postgresql",
+    "count": 67,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sqlite.rs (production)",
+    "count": 866,
+    "limit": 200
+  },
+  {
+    "file": "server/src/repository/sqlite.rs",
+    "line": 248,
+    "kind": "method",
+    "name": "delete_client_pairing_and_cleanup",
+    "count": 43,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite.rs",
+    "line": 594,
+    "kind": "method",
+    "name": "add_unavailable_client_id",
+    "count": 51,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sqlite_tests.rs",
+    "count": 926,
+    "limit": 200
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 7,
+    "kind": "method",
+    "name": "sqlite_test_config",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 70,
+    "kind": "method",
+    "name": "sqlite_enforces_foreign_key_constraints",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 359,
+    "kind": "method",
+    "name": "delete_expired_jtis_removes_old",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 465,
+    "kind": "method",
+    "name": "delete_expired_audit_logs_by_retention",
+    "count": 50,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite_tests.rs",
+    "line": 630,
+    "kind": "method",
+    "name": "delete_expired_client_jwt_pairings_removes_and_cascades",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/test_support.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "test_support.rs",
+    "count": 772,
+    "limit": 200
+  },
+  {
+    "file": "server/src/test_support.rs",
+    "line": 121,
+    "kind": "method",
+    "name": "default",
+    "count": 49,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/command.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "command.rs (production)",
+    "count": 245,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/assuan/command.rs",
+    "line": 58,
+    "kind": "method",
+    "name": "parse",
+    "count": 44,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/command.rs",
+    "line": 207,
+    "kind": "method",
+    "name": "parse_sethash",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/command_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "command_tests.rs",
+    "count": 402,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/assuan/handler.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "handler.rs (production)",
+    "count": 298,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/assuan/handler.rs",
+    "line": 86,
+    "kind": "method",
+    "name": "handle",
+    "count": 65,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/handler.rs",
+    "line": 243,
+    "kind": "method",
+    "name": "handle_readkey",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/handler_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "handler_tests.rs",
+    "count": 550,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/assuan/session.rs",
+    "line": 86,
+    "kind": "method",
+    "name": "read_bounded_line",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/assuan/session_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "session_tests.rs",
+    "count": 260,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/assuan/sign_handler.rs",
+    "line": 117,
+    "kind": "file",
+    "name": "sign_handler.rs (test)",
+    "count": 247,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/config.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "config.rs (production)",
+    "count": 220,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/config.rs",
+    "line": 156,
+    "kind": "method",
+    "name": "build_app_config",
+    "count": 54,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/config_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "config_tests.rs",
+    "count": 271,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/config_tests.rs",
+    "line": 85,
+    "kind": "method",
+    "name": "cli_overrides_env_and_file_config",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/gpg_key_cache.rs",
+    "line": 269,
+    "kind": "method",
+    "name": "refresh_populates_cache_from_server",
+    "count": 61,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "http.rs (production)",
+    "count": 216,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/http.rs",
+    "line": 66,
+    "kind": "method",
+    "name": "send_get_with_retry",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http.rs",
+    "line": 103,
+    "kind": "method",
+    "name": "send_post_json_with_retry",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http.rs",
+    "line": 144,
+    "kind": "method",
+    "name": "send_patch_json_with_retry",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http.rs",
+    "line": 183,
+    "kind": "method",
+    "name": "send_delete_with_retry",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "http_tests.rs",
+    "count": 358,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/http_tests.rs",
+    "line": 23,
+    "kind": "method",
+    "name": "send_get_with_retry_sends_bearer_header",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http_tests.rs",
+    "line": 57,
+    "kind": "method",
+    "name": "send_post_json_with_retry_sends_bearer_and_json_body",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http_tests.rs",
+    "line": 223,
+    "kind": "method",
+    "name": "send_delete_with_retry_returns_status_on_204",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/http_tests.rs",
+    "line": 305,
+    "kind": "method",
+    "name": "send_get_with_retry_retries_on_500_then_succeeds",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/ipc/mod.rs",
+    "line": 194,
+    "kind": "method",
+    "name": "ipc_server_accepts_connection_and_shutdown_cleans_up_socket",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/ipc/unix.rs",
+    "line": 27,
+    "kind": "method",
+    "name": "prepare_unix_socket_path",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/ipc/unix.rs",
+    "line": 76,
+    "kind": "method",
+    "name": "create_unix_socket_symlink",
+    "count": 71,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/ipc/unix.rs",
+    "line": 160,
+    "kind": "method",
+    "name": "run_unix_accept_loop",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/ipc/windows.rs",
+    "line": 35,
+    "kind": "method",
+    "name": "run_windows_accept_loop",
+    "count": 47,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/main.rs",
+    "line": 50,
+    "kind": "method",
+    "name": "main",
+    "count": 127,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/pairing_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "pairing_tests.rs",
+    "count": 250,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/pairing_tests.rs",
+    "line": 87,
+    "kind": "method",
+    "name": "wait_for_paired_event_extracts_token",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/pairing_tests.rs",
+    "line": 206,
+    "kind": "method",
+    "name": "run_pairing_flow_end_to_end",
+    "count": 58,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sexp.rs",
+    "line": 17,
+    "kind": "method",
+    "name": "ec_to_sexp",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_event_sse.rs (production)",
+    "count": 277,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/sign_event_sse.rs",
+    "line": 80,
+    "kind": "method",
+    "name": "wait_for_sign_result",
+    "count": 52,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse.rs",
+    "line": 163,
+    "kind": "method",
+    "name": "process_stream",
+    "count": 43,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_event_sse_tests.rs",
+    "count": 521,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 235,
+    "kind": "method",
+    "name": "reconnects_on_server_error_then_succeeds",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 272,
+    "kind": "method",
+    "name": "reconnects_on_stream_close_then_succeeds",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 310,
+    "kind": "method",
+    "name": "bearer_token_sent_in_request",
+    "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 426,
+    "kind": "method",
+    "name": "retry_after_429_then_succeeds",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_event_sse_tests.rs",
+    "line": 464,
+    "kind": "method",
+    "name": "heartbeat_timeout_triggers_reconnect",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_flow.rs",
+    "line": 93,
+    "kind": "method",
+    "name": "run_phase1",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_flow_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "sign_flow_tests.rs",
+    "count": 316,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/sign_flow_tests.rs",
+    "line": 121,
+    "kind": "method",
+    "name": "run_phase1_sends_request_and_parses_response",
+    "count": 39,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_flow_tests.rs",
+    "line": 162,
+    "kind": "method",
+    "name": "run_phase2_returns_accepted_on_204",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_flow_tests.rs",
+    "line": 201,
+    "kind": "method",
+    "name": "run_phase2_returns_already_decided_on_409",
+    "count": 45,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sign_flow_tests.rs",
+    "line": 248,
+    "kind": "method",
+    "name": "cancel_sends_delete_request",
+    "count": 40,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sse.rs",
+    "line": 34,
+    "kind": "file",
+    "name": "sse.rs (test)",
+    "count": 329,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/sse.rs",
+    "line": 117,
+    "kind": "method",
+    "name": "run_with_handler",
+    "count": 132,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sse.rs",
+    "line": 250,
+    "kind": "method",
+    "name": "connect",
+    "count": 38,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/sse_tests.rs",
+    "line": 33,
+    "kind": "method",
+    "name": "receives_sse_event_from_stream",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/token_refresh.rs",
+    "line": 163,
+    "kind": "method",
+    "name": "check_and_refresh_all",
+    "count": 32,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/token_refresh_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "token_refresh_tests.rs",
+    "count": 269,
+    "limit": 200
+  },
+  {
+    "file": "daemon/src/token_refresh_tests.rs",
+    "line": 189,
+    "kind": "method",
+    "name": "check_and_refresh_all_refreshes_expired_token",
+    "count": 51,
+    "limit": 30
+  },
+  {
+    "file": "daemon/src/token_refresh_tests.rs",
+    "line": 242,
+    "kind": "method",
+    "name": "check_and_refresh_all_reports_re_pairing_needed",
+    "count": 41,
+    "limit": 30
+  }
+]

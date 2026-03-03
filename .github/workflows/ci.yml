@@ -43,12 +43,14 @@ jobs:
               - 'server/**'
               - 'daemon/**'
               - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
             flutter:
               - 'mobile/lib/**'
               - 'mobile/test/**'
               - 'mobile/pubspec.*'
               - 'mobile/analysis_options.yaml'
               - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
             android:
               - 'mobile/android/**'
               - '.github/workflows/ci.yml'
@@ -87,6 +89,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check line counts (Rust)
+        run: python3 .github/scripts/check-line-counts.py --lang rust --max-file-lines 200 --max-method-lines 30 --baseline .github/line-count-baseline-rust.json server/src daemon/src
 
   # ---------------------------------------------------------------------------
   # Rust coverage (test + lcov + threshold) — runs in parallel with lint
@@ -155,6 +160,9 @@ jobs:
         working-directory: mobile
         run: flutter analyze
 
+      - name: Check line counts (Dart)
+        run: python3 .github/scripts/check-line-counts.py --lang dart --max-file-lines 200 --max-method-lines 30 --baseline .github/line-count-baseline-dart.json mobile/lib mobile/test
+
   # ---------------------------------------------------------------------------
   # Flutter coverage (test + lcov + threshold) — parallel with lint
   # ---------------------------------------------------------------------------
@@ -218,6 +226,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/android/**/*.gradle*', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Flutter pub get (generates required files)
         working-directory: mobile
         run: flutter pub get
@@ -252,6 +270,14 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: mobile/ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile') }}
+          restore-keys: |
+            pods-${{ runner.os }}-
+
       - name: Install CocoaPods dependencies
         working-directory: mobile/ios
         run: pod install
@@ -266,6 +292,72 @@ jobs:
             -only-testing:RunnerTests \
             -resultBundlePath TestResults \
             CODE_SIGNING_ALLOWED=NO
+
+  # ---------------------------------------------------------------------------
+  # Security audit (Rust) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Security audit (Rust)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run cargo audit
+        run: python3 .github/scripts/check-cargo-audit.py --root .
+
+  # ---------------------------------------------------------------------------
+  # Dependency check (Dart) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  dart-deps:
+    name: Dependency check (Dart)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Check Dart dependencies
+        run: python3 .github/scripts/check-dart-deps.py --project-dir mobile
+
+  # ---------------------------------------------------------------------------
+  # SQL migration check — parallel with other gates
+  # ---------------------------------------------------------------------------
+  migration-check:
+    name: SQL migration check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate migrations
+        run: python3 .github/scripts/check-migrations.py server/migrations
 
   # ---------------------------------------------------------------------------
   # Docker build & push
