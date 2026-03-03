@@ -11,18 +11,13 @@ Per-method override: // ci:max-method-lines <N>   (place on the line immediately
 For Rust files containing #[cfg(test)], production and test portions are
 counted independently (each portion gets its own file-line budget).
 
-Baseline:
-  --baseline <path>   JSON file listing known violations.
-                      Violations matching the baseline (same file, same or fewer lines)
-                      are treated as warnings, not errors.  Only *new* or *worsened*
-                      violations cause CI failure.
-  --update-baseline   Overwrite the baseline file with current violations and exit 0.
+By default violations are treated as warnings (--warn-only). Remove --warn-only
+to fail CI on any violation.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -322,10 +317,6 @@ def main() -> None:
     ap.add_argument('--lang', required=True, choices=['rust', 'dart'])
     ap.add_argument('--max-file-lines', type=int, default=200)
     ap.add_argument('--max-method-lines', type=int, default=30)
-    ap.add_argument('--baseline', type=Path, default=None,
-                    help='JSON baseline file of known violations')
-    ap.add_argument('--update-baseline', action='store_true',
-                    help='Overwrite baseline with current violations and exit 0')
     ap.add_argument('--warn-only', action='store_true',
                     help='Emit violations as warnings instead of errors (never fail)')
     ap.add_argument('paths', nargs='+', help='Files or directories to scan')
@@ -345,31 +336,6 @@ def main() -> None:
             analyse_file(t, args.lang, args.max_file_lines, args.max_method_lines)
         )
 
-    # --- Update baseline mode ---
-    if args.update_baseline:
-        baseline_path = args.baseline
-        if baseline_path is None:
-            print("error: --baseline is required with --update-baseline", file=sys.stderr)
-            sys.exit(2)
-        baseline_data = [
-            {'file': v.file, 'line': v.line, 'kind': v.kind,
-             'name': v.name, 'count': v.count, 'limit': v.limit}
-            for v in all_violations
-        ]
-        baseline_path.write_text(json.dumps(baseline_data, indent=2) + '\n')
-        print(f"Baseline updated: {len(all_violations)} violations written to {baseline_path}")
-        sys.exit(0)
-
-    # --- Load baseline ---
-    baseline: set[tuple[str, str, str]] = set()  # (file, kind, name)
-    baseline_counts: dict[tuple[str, str, str], int] = {}
-    if args.baseline and args.baseline.exists():
-        data = json.loads(args.baseline.read_text())
-        for entry in data:
-            key = (entry['file'], entry['kind'], entry['name'])
-            baseline.add(key)
-            baseline_counts[key] = entry['count']
-
     # --- warn-only mode ---
     if args.warn_only:
         if all_violations:
@@ -381,50 +347,18 @@ def main() -> None:
               f"{len(all_violations)} warning(s)).")
         sys.exit(0)
 
-    # --- Classify violations ---
-    new_violations: list[Violation] = []
-    worsened_violations: list[Violation] = []
-    known_violations: list[Violation] = []
-
-    for v in all_violations:
-        key = (v.file, v.kind, v.name)
-        if key in baseline:
-            if v.count > baseline_counts[key]:
-                worsened_violations.append(v)
-            else:
-                known_violations.append(v)
-        else:
-            new_violations.append(v)
-
-    # --- Report ---
-    failures = new_violations + worsened_violations
-
-    if known_violations:
-        print(f"ℹ️  {len(known_violations)} known baseline violation(s) (not blocking).")
-
-    if worsened_violations:
+    # --- Strict mode: all violations are errors ---
+    if all_violations:
         print(f"\n{'='*60}")
-        print(f"Worsened violations ({len(worsened_violations)}):")
+        print(f"Violations ({len(all_violations)}):")
         print(f"{'='*60}")
-        for v in worsened_violations:
-            key = (v.file, v.kind, v.name)
-            old = baseline_counts.get(key, 0)
-            print(f"  {v} (was {old} lines)")
-
-    if new_violations:
-        print(f"\n{'='*60}")
-        print(f"New violations ({len(new_violations)}):")
-        print(f"{'='*60}")
-        for v in new_violations:
+        for v in all_violations:
             print(f"  {v}")
-
-    if failures:
-        print(f"\n❌ {len(failures)} new/worsened violation(s) — fix or add exception comments.")
+        print(f"\n❌ {len(all_violations)} violation(s) — fix or add exception comments.")
         sys.exit(1)
     else:
         total = len(targets)
-        print(f"Line-count check passed ({total} {args.lang} files scanned, "
-              f"{len(known_violations)} baselined).")
+        print(f"Line-count check passed ({total} {args.lang} files scanned).")
 
 
 if __name__ == '__main__':

@@ -84,6 +84,16 @@ jobs:
         with:
           components: rustfmt,clippy
 
+      - name: Check Cargo.lock cache
+        id: cargo-lock-check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.cargo-lock-marker
+          key: cargo-lock-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Create Cargo.lock marker
+        run: mkdir -p /tmp/.cargo-lock-marker && cp Cargo.lock /tmp/.cargo-lock-marker/
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -91,11 +101,10 @@ jobs:
           cache-all-crates: true
 
       - name: Clean stale cache on lockfile change
+        if: steps.cargo-lock-check.outputs.cache-hit != 'true'
         run: |
-          if ! git diff --quiet HEAD~1 -- Cargo.lock 2>/dev/null; then
-            echo 'Cargo.lock changed — cleaning build artifacts'
-            cargo clean
-          fi
+          echo 'Cargo.lock changed — cleaning build artifacts'
+          cargo clean || true
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -133,6 +142,16 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Check Cargo.lock cache
+        id: cargo-lock-check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.cargo-lock-marker
+          key: cargo-lock-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Create Cargo.lock marker
+        run: mkdir -p /tmp/.cargo-lock-marker && cp Cargo.lock /tmp/.cargo-lock-marker/
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -140,11 +159,10 @@ jobs:
           cache-all-crates: true
 
       - name: Clean stale cache on lockfile change
+        if: steps.cargo-lock-check.outputs.cache-hit != 'true'
         run: |
-          if ! git diff --quiet HEAD~1 -- Cargo.lock 2>/dev/null; then
-            echo 'Cargo.lock changed — cleaning build artifacts'
-            cargo clean
-          fi
+          echo 'Cargo.lock changed — cleaning build artifacts'
+          cargo clean || true
 
       - name: Coverage (includes tests, fail under 80%)
         run: cargo llvm-cov --workspace --lcov --output-path lcov-rust.info --fail-under-lines 80 -- --include-ignored
