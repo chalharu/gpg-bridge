@@ -25,6 +25,8 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       flutter: ${{ steps.filter.outputs.flutter }}
+      android: ${{ steps.filter.outputs.android }}
+      ios: ${{ steps.filter.outputs.ios }}
       docker: ${{ steps.filter.outputs.docker }}
     steps:
       - name: Checkout
@@ -42,7 +44,16 @@ jobs:
               - 'daemon/**'
               - '.github/workflows/ci.yml'
             flutter:
-              - 'mobile/**'
+              - 'mobile/lib/**'
+              - 'mobile/test/**'
+              - 'mobile/pubspec.*'
+              - 'mobile/analysis_options.yaml'
+              - '.github/workflows/ci.yml'
+            android:
+              - 'mobile/android/**'
+              - '.github/workflows/ci.yml'
+            ios:
+              - 'mobile/ios/**'
               - '.github/workflows/ci.yml'
             docker:
               - 'Dockerfile.server'
@@ -50,15 +61,13 @@ jobs:
               - '.github/workflows/ci.yml'
 
   # ---------------------------------------------------------------------------
-  # Rust quality gate
+  # Rust lint (format + clippy) — runs in parallel with coverage
   # ---------------------------------------------------------------------------
-  rust-quality-gate:
-    name: Rust quality gate
+  rust-lint:
+    name: Rust lint
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    env:
-      CARGO_INCREMENTAL: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,10 +75,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt,clippy,llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+          components: rustfmt,clippy
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -82,8 +88,35 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Coverage (includes tests)
-        run: cargo llvm-cov --workspace --lcov --output-path lcov-rust.info
+  # ---------------------------------------------------------------------------
+  # Rust coverage (test + lcov + threshold) — runs in parallel with lint
+  # ---------------------------------------------------------------------------
+  rust-coverage:
+    name: Rust coverage
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Coverage (includes tests, fail under 80%)
+        run: cargo llvm-cov --workspace --include-ignored --lcov --output-path lcov-rust.info --fail-under-lines 80
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -93,10 +126,10 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # Flutter quality gate
+  # Flutter lint (format + analyze) — runs in parallel with test/coverage
   # ---------------------------------------------------------------------------
-  flutter-quality-gate:
-    name: Flutter quality gate
+  flutter-lint:
+    name: Flutter lint
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.flutter == 'true'
@@ -122,9 +155,37 @@ jobs:
         working-directory: mobile
         run: flutter analyze
 
+  # ---------------------------------------------------------------------------
+  # Flutter coverage (test + lcov + threshold) — parallel with lint
+  # ---------------------------------------------------------------------------
+  flutter-coverage:
+    name: Flutter coverage
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
       - name: Tests with coverage
         working-directory: mobile
         run: flutter test --coverage
+
+      - name: Check coverage threshold (80%)
+        run: |
+          TOTAL=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf>0) printf "%.1f", lh/lf*100; else print "0.0"}' mobile/coverage/lcov.info)
+          echo "Flutter coverage: ${TOTAL}%"
+          awk "BEGIN{exit (${TOTAL} < 80.0) ? 1 : 0}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -134,16 +195,86 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
+  # Android native tests (Kotlin JUnit) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  android-native-test:
+    name: Android native tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Flutter pub get (generates required files)
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Run Android unit tests
+        working-directory: mobile/android
+        run: ./gradlew app:testDebugUnitTest
+
+  # ---------------------------------------------------------------------------
+  # iOS native tests (XCTest) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  ios-native-test:
+    name: iOS native tests
+    runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.ios == 'true' || needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get (generates required files)
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ios
+        run: pod install
+
+      - name: Run iOS unit tests
+        working-directory: mobile/ios
+        run: |
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -only-testing:RunnerTests \
+            -resultBundlePath TestResults \
+            CODE_SIGNING_ALLOWED=NO
+
+  # ---------------------------------------------------------------------------
   # Docker build & push
   # ---------------------------------------------------------------------------
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [rust-quality-gate, changes]
+    needs: [rust-lint, rust-coverage, changes]
     if: >-
       always()
       && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.rust == 'true')
-      && needs.rust-quality-gate.result != 'failure'
+      && needs.rust-lint.result != 'failure'
+      && needs.rust-coverage.result != 'failure'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -152,7 +283,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -176,7 +307,7 @@ jobs:
           context: .
           file: Dockerfile.server
           platforms: linux/amd64
-          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+          push: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
