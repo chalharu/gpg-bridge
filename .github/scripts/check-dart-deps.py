@@ -3,7 +3,9 @@
 
 Policy:
   - Outdated or insecure DIRECT dependencies with available resolutions → CI failure
-  - Issues only in TRANSITIVE dependencies → warning (exit 0)
+  - Issues in TRANSITIVE dependencies that could be resolved by updating a
+    direct dependency → CI failure
+  - Issues in TRANSITIVE deps that persist even after updating all direct deps → warning
 
 Usage:
   python3 check-dart-deps.py [--project-dir <path>]
@@ -111,15 +113,30 @@ def main() -> None:
         sys.exit(1)
 
     direct_deps = load_direct_deps(pubspec)
+
+    # Run outdated check twice: with and without --no-dev-dependencies
+    # to get the full picture
     outdated_data = run_outdated_all(project_dir)
+    # Also run with --no-transitive to understand direct dep situation
+    outdated_no_dev = run_outdated(project_dir)
 
     packages = outdated_data.get('packages', [])
     if not packages:
         print("Dart dependency check: all dependencies are up to date.")
         sys.exit(0)
 
+    # Build a lookup of direct dep packages and their resolvable versions
+    direct_resolvable: dict[str, str | None] = {}
+    for pkg in packages:
+        name = pkg.get('package', '')
+        if name in direct_deps:
+            resolvable_info = pkg.get('resolvable') or {}
+            r = resolvable_info.get('version') if isinstance(resolvable_info, dict) else None
+            direct_resolvable[name] = r
+
     direct_issues: list[dict] = []
-    transitive_issues: list[dict] = []
+    resolvable_transitive_issues: list[dict] = []
+    unresolvable_transitive_issues: list[dict] = []
 
     for pkg in packages:
         name = pkg.get('package', '')
@@ -148,19 +165,39 @@ def main() -> None:
         if name in direct_deps:
             direct_issues.append(info)
         else:
-            transitive_issues.append(info)
+            # Transitive dep: check if any direct dep has a pending update
+            # If direct deps have updates available, updating them might resolve
+            # this transitive dep issue
+            has_updatable_direct = any(
+                v is not None and v != 'unknown'
+                for v in direct_resolvable.values()
+                if v is not None
+            )
+            if has_updatable_direct:
+                resolvable_transitive_issues.append(info)
+            else:
+                unresolvable_transitive_issues.append(info)
 
-    if transitive_issues:
-        print(f"\n⚠️  {len(transitive_issues)} transitive dependency update(s) available (warning only):")
-        for issue in transitive_issues:
+    # --- Report unresolvable transitive issues (warning only) ---
+    if unresolvable_transitive_issues:
+        print(f"\n⚠️  {len(unresolvable_transitive_issues)} transitive dependency update(s) (not resolvable by updating direct deps):")
+        for issue in unresolvable_transitive_issues:
             disc = " [DISCONTINUED]" if issue['discontinued'] else ""
             msg = f"  {issue['name']}: {issue['current']} → {issue['resolvable']}{disc}"
             print(msg)
             print(f"::warning::{issue['name']} {issue['current']} → {issue['resolvable']}{disc}")
 
+    # --- Report resolvable transitive issues (error) ---
+    if resolvable_transitive_issues:
+        print(f"\n❌ {len(resolvable_transitive_issues)} transitive dependency update(s) (resolvable by updating direct deps):")
+        for issue in resolvable_transitive_issues:
+            disc = " [DISCONTINUED]" if issue['discontinued'] else ""
+            msg = f"  {issue['name']}: {issue['current']} → {issue['resolvable']}{disc}"
+            print(msg)
+            print(f"::error::{issue['name']} {issue['current']} → {issue['resolvable']}{disc}")
+
+    # --- Report direct issues (error) ---
     if direct_issues:
-        # Check if any are discontinued – those are always errors
-        has_discontinued = any(i['discontinued'] for i in direct_issues)
         print(f"\n❌ {len(direct_issues)} direct dependency update(s) available:")
         for issue in direct_issues:
             disc = " [DISCONTINUED]" if issue['discontinued'] else ""
@@ -168,17 +205,13 @@ def main() -> None:
             print(msg)
             print(f"::error::{issue['name']} {issue['current']} → {issue['resolvable']}{disc}")
 
-        if has_discontinued:
-            print("\nDirect dependencies include discontinued packages – failing CI.")
-            sys.exit(1)
-        else:
-            # Resolvable updates in direct deps: warn but don't fail
-            # (User can upgrade at their discretion)
-            print("\nDirect dependencies have resolvable updates – treating as warning.")
-            sys.exit(0)
+    errors = direct_issues + resolvable_transitive_issues
+    if errors:
+        print(f"\n{len(errors)} dependency issue(s) require attention – failing CI.")
+        sys.exit(1)
     else:
-        if transitive_issues:
-            print("\nOnly transitive dependencies have updates – no action required.")
+        if unresolvable_transitive_issues:
+            print("\nOnly unresolvable transitive dependencies have updates – no action required.")
         else:
             print("Dart dependency check: all dependencies are up to date.")
         sys.exit(0)

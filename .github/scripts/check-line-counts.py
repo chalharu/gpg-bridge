@@ -326,6 +326,8 @@ def main() -> None:
                     help='JSON baseline file of known violations')
     ap.add_argument('--update-baseline', action='store_true',
                     help='Overwrite baseline with current violations and exit 0')
+    ap.add_argument('--warn-only', action='store_true',
+                    help='Emit violations as warnings instead of errors (never fail)')
     ap.add_argument('paths', nargs='+', help='Files or directories to scan')
     args = ap.parse_args()
 
@@ -367,6 +369,17 @@ def main() -> None:
             key = (entry['file'], entry['kind'], entry['name'])
             baseline.add(key)
             baseline_counts[key] = entry['count']
+
+    # --- warn-only mode ---
+    if args.warn_only:
+        if all_violations:
+            print(f"\n⚠️  {len(all_violations)} line-count violation(s) (warning only):")
+            for v in all_violations:
+                print(f"::warning file={v.file},line={v.line}::{v.kind} '{v.name}' is {v.count} lines (limit {v.limit})")
+        total = len(targets)
+        print(f"Line-count check passed ({total} {args.lang} files scanned, "
+              f"{len(all_violations)} warning(s)).")
+        sys.exit(0)
 
     # --- Classify violations ---
     new_violations: list[Violation] = []

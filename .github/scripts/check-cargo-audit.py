@@ -3,12 +3,13 @@
 
 Policy:
   - Advisories affecting DIRECT dependencies → CI failure (exit 1)
-  - Advisories affecting only TRANSITIVE dependencies → warning (exit 0)
-    If running on a PR, outputs a GitHub Actions warning annotation.
+  - Advisories on TRANSITIVE deps that could be resolved by updating a direct
+    dependency to its latest version → CI failure (exit 1)
+  - Advisories on TRANSITIVE deps that persist even with all direct deps at
+    latest → warning only (exit 0)
 
 Usage:
-  pip install cargo-audit  (or install via cargo install cargo-audit)
-  python3 check-cargo-audit.py [--cargo-toml <path>]
+  python3 check-cargo-audit.py [--root <path>]
 """
 
 from __future__ import annotations
@@ -52,6 +53,65 @@ def collect_workspace_direct_deps(root: Path) -> set[str]:
     return deps
 
 
+def get_reverse_deps(root: Path, crate_name: str) -> set[str]:
+    """Get the set of crates that directly depend on the given crate using cargo tree."""
+    try:
+        result = subprocess.run(
+            ['cargo', 'tree', '--invert', '--package', crate_name,
+             '--depth', '1', '--prefix', 'none', '--format', '{p}'],
+            cwd=root, capture_output=True, text=True, timeout=60,
+        )
+        parents: set[str] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Format: "crate_name v1.2.3" or "crate_name v1.2.3 (path)"
+            name = line.split()[0] if line.split() else ''
+            if name and name != crate_name:
+                parents.add(name)
+        return parents
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+
+
+def find_direct_ancestor(root: Path, crate_name: str, direct_deps: set[str],
+                         visited: set[str] | None = None) -> set[str]:
+    """Walk up the dependency tree to find which direct deps pull in a transitive crate."""
+    if visited is None:
+        visited = set()
+    if crate_name in visited:
+        return set()
+    visited.add(crate_name)
+
+    ancestors: set[str] = set()
+    parents = get_reverse_deps(root, crate_name)
+    for parent in parents:
+        if parent in direct_deps:
+            ancestors.add(parent)
+        else:
+            ancestors.update(find_direct_ancestor(root, parent, direct_deps, visited))
+    return ancestors
+
+
+def check_if_update_resolves(root: Path, direct_dep: str) -> bool:
+    """Check if updating a direct dependency could resolve a transitive vuln.
+
+    We check cargo update --dry-run for the dependency. If it shows updates,
+    the issue might be resolvable by updating.
+    """
+    try:
+        result = subprocess.run(
+            ['cargo', 'update', '--dry-run', '--package', direct_dep],
+            cwd=root, capture_output=True, text=True, timeout=60,
+        )
+        # If there's a newer version available, the output will show "Updating"
+        output = result.stdout + result.stderr
+        return 'Updating' in output or 'Locking' in output
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def run_audit(root: Path) -> dict:
     """Run cargo audit --json and return parsed output."""
     result = subprocess.run(
@@ -84,7 +144,8 @@ def main() -> None:
         sys.exit(0)
 
     direct_issues: list[dict] = []
-    transitive_issues: list[dict] = []
+    resolvable_transitive_issues: list[dict] = []
+    unresolvable_transitive_issues: list[dict] = []
 
     for vuln in vulnerabilities:
         advisory = vuln.get('advisory', {})
@@ -100,29 +161,61 @@ def main() -> None:
                 'title': title,
             })
         else:
-            transitive_issues.append({
+            # Find which direct deps pull in this transitive crate
+            ancestors = find_direct_ancestor(args.root, crate_name, direct_deps)
+            resolvable = False
+            if ancestors:
+                # Check if updating any ancestor could resolve the issue
+                for ancestor in ancestors:
+                    if check_if_update_resolves(args.root, ancestor):
+                        resolvable = True
+                        break
+
+            issue = {
                 'crate': crate_name,
                 'id': advisory_id,
                 'title': title,
-            })
+                'ancestors': sorted(ancestors) if ancestors else [],
+            }
+            if resolvable:
+                resolvable_transitive_issues.append(issue)
+            else:
+                unresolvable_transitive_issues.append(issue)
 
-    if transitive_issues:
-        print(f"\n⚠️  {len(transitive_issues)} advisory(ies) in transitive dependencies (warning only):")
-        for issue in transitive_issues:
+    # --- Report unresolvable transitive issues (warning only) ---
+    if unresolvable_transitive_issues:
+        print(f"\n⚠️  {len(unresolvable_transitive_issues)} advisory(ies) in transitive dependencies (not resolvable by updating direct deps):")
+        for issue in unresolvable_transitive_issues:
             msg = f"  {issue['id']}: {issue['crate']} – {issue['title']}"
+            if issue['ancestors']:
+                msg += f" (via {', '.join(issue['ancestors'])})"
             print(msg)
             print(f"::warning::{issue['id']}: transitive dep '{issue['crate']}' – {issue['title']}")
 
+    # --- Report resolvable transitive issues (error) ---
+    if resolvable_transitive_issues:
+        print(f"\n❌ {len(resolvable_transitive_issues)} advisory(ies) in transitive dependencies (resolvable by updating direct deps):")
+        for issue in resolvable_transitive_issues:
+            msg = f"  {issue['id']}: {issue['crate']} – {issue['title']}"
+            if issue['ancestors']:
+                msg += f" (update {', '.join(issue['ancestors'])})"
+            print(msg)
+            print(f"::error::{issue['id']}: transitive dep '{issue['crate']}' – {issue['title']} (resolvable via {', '.join(issue['ancestors'])})")
+
+    # --- Report direct issues (error) ---
     if direct_issues:
         print(f"\n❌ {len(direct_issues)} advisory(ies) in DIRECT dependencies:")
         for issue in direct_issues:
             msg = f"  {issue['id']}: {issue['crate']} – {issue['title']}"
             print(msg)
             print(f"::error::{issue['id']}: direct dep '{issue['crate']}' – {issue['title']}")
+
+    errors = direct_issues + resolvable_transitive_issues
+    if errors:
         sys.exit(1)
     else:
-        if transitive_issues:
-            print("\nOnly transitive dependencies affected – treating as warning.")
+        if unresolvable_transitive_issues:
+            print("\nOnly unresolvable transitive dependencies affected – treating as warning.")
         sys.exit(0)
 
 
