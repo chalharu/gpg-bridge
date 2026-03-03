@@ -60,12 +60,12 @@
     "line": 1,
     "kind": "file",
     "name": "client_jwt_tests.rs",
-    "count": 462,
+    "count": 491,
     "limit": 200
   },
   {
     "file": "server/src/http/auth/client_jwt_tests.rs",
-    "line": 397,
+    "line": 426,
     "kind": "method",
     "name": "multiple_valid_tokens_returns_all",
     "count": 36,
@@ -73,7 +73,7 @@
   },
   {
     "file": "server/src/http/auth/client_jwt_tests.rs",
-    "line": 435,
+    "line": 464,
     "kind": "method",
     "name": "expired_outer_jws_rejects_all",
     "count": 40,
@@ -92,12 +92,12 @@
     "line": 1,
     "kind": "file",
     "name": "daemon_auth_tests.rs",
-    "count": 587,
+    "count": 616,
     "limit": 200
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 287,
+    "line": 316,
     "kind": "method",
     "name": "valid_daemon_auth_succeeds",
     "count": 38,
@@ -105,7 +105,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 344,
+    "line": 373,
     "kind": "method",
     "name": "wrong_daemon_key_returns_401",
     "count": 40,
@@ -113,7 +113,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 386,
+    "line": 415,
     "kind": "method",
     "name": "request_not_found_returns_401",
     "count": 33,
@@ -121,7 +121,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 421,
+    "line": 450,
     "kind": "method",
     "name": "wrong_aud_returns_401",
     "count": 38,
@@ -129,7 +129,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 461,
+    "line": 490,
     "kind": "method",
     "name": "jti_replay_returns_401",
     "count": 38,
@@ -137,7 +137,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 501,
+    "line": 530,
     "kind": "method",
     "name": "expired_outer_jws_returns_401",
     "count": 45,
@@ -145,7 +145,7 @@
   },
   {
     "file": "server/src/http/auth/daemon_auth_tests.rs",
-    "line": 548,
+    "line": 577,
     "kind": "method",
     "name": "invalid_request_jwt_returns_401",
     "count": 52,
@@ -156,12 +156,12 @@
     "line": 1,
     "kind": "file",
     "name": "device_assertion_tests.rs",
-    "count": 497,
+    "count": 526,
     "limit": 200
   },
   {
     "file": "server/src/http/auth/device_assertion_tests.rs",
-    "line": 446,
+    "line": 475,
     "kind": "method",
     "name": "jti_replay_returns_401",
     "count": 33,
@@ -172,7 +172,7 @@
     "line": 1,
     "kind": "file",
     "name": "sign_jwt_tests.rs",
-    "count": 368,
+    "count": 400,
     "limit": 200
   },
   {
@@ -212,44 +212,52 @@
     "line": 1,
     "kind": "file",
     "name": "gpg_key.rs",
-    "count": 506,
+    "count": 543,
     "limit": 200
   },
   {
     "file": "server/src/http/device/tests/gpg_key.rs",
-    "line": 151,
+    "line": 169,
     "kind": "method",
     "name": "add_gpg_key_upsert_overwrites_existing",
-    "count": 47,
+    "count": 45,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/gpg_key.rs",
-    "line": 204,
+    "line": 220,
     "kind": "method",
     "name": "list_gpg_keys_returns_registered",
-    "count": 34,
+    "count": 37,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/gpg_key.rs",
-    "line": 269,
+    "line": 291,
     "kind": "method",
     "name": "delete_gpg_key_success",
-    "count": 34,
+    "count": 37,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/gpg_key.rs",
-    "line": 330,
+    "line": 358,
     "kind": "method",
     "name": "add_gpg_key_multiple_keys_success",
-    "count": 39,
+    "count": 40,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/gpg_key.rs",
-    "line": 459,
+    "line": 461,
+    "kind": "method",
+    "name": "add_gpg_key_key_id_too_long_rejected",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/gpg_key.rs",
+    "line": 494,
     "kind": "method",
     "name": "delete_gpg_key_concurrent_modification_conflict",
     "count": 36,
@@ -260,12 +268,20 @@
     "line": 1,
     "kind": "file",
     "name": "public_key.rs",
-    "count": 486,
+    "count": 534,
     "limit": 200
   },
   {
     "file": "server/src/http/device/tests/public_key.rs",
-    "line": 296,
+    "line": 218,
+    "kind": "method",
+    "name": "delete_public_key_success",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/public_key.rs",
+    "line": 332,
     "kind": "method",
     "name": "delete_public_key_in_flight_returns_409",
     "count": 32,
@@ -273,18 +289,18 @@
   },
   {
     "file": "server/src/http/device/tests/public_key.rs",
-    "line": 330,
+    "line": 366,
     "kind": "method",
     "name": "delete_public_key_auto_reassign_default_kid",
-    "count": 39,
+    "count": 41,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/public_key.rs",
-    "line": 426,
+    "line": 470,
     "kind": "method",
     "name": "delete_public_key_no_default_kid_reassign_when_not_affected",
-    "count": 44,
+    "count": 46,
     "limit": 30
   },
   {
@@ -292,31 +308,63 @@
     "line": 1,
     "kind": "file",
     "name": "register.rs",
-    "count": 423,
+    "count": 460,
     "limit": 200
   },
   {
     "file": "server/src/http/device/tests/register.rs",
-    "line": 317,
+    "line": 154,
     "kind": "method",
-    "name": "refresh_device_jwt_success",
-    "count": 40,
+    "name": "update_device_token_success",
+    "count": 31,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/register.rs",
-    "line": 359,
+    "line": 187,
     "kind": "method",
-    "name": "refresh_device_jwt_sub_mismatch_returns_401",
-    "count": 33,
+    "name": "update_device_default_kid_success",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 220,
+    "kind": "method",
+    "name": "update_device_default_kid_not_found_returns_400",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 253,
+    "kind": "method",
+    "name": "update_device_both_fields_success",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 350,
+    "kind": "method",
+    "name": "refresh_device_jwt_success",
+    "count": 42,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/register.rs",
     "line": 394,
     "kind": "method",
-    "name": "refresh_device_jwt_expired_issued_at_returns_401",
+    "name": "refresh_device_jwt_sub_mismatch_returns_401",
     "count": 35,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register.rs",
+    "line": 431,
+    "kind": "method",
+    "name": "refresh_device_jwt_expired_issued_at_returns_401",
+    "count": 37,
     "limit": 30
   },
   {
@@ -324,63 +372,55 @@
     "line": 1,
     "kind": "file",
     "name": "register_mutations.rs",
-    "count": 315,
+    "count": 326,
     "limit": 200
-  },
-  {
-    "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 21,
-    "kind": "method",
-    "name": "register_device_stores_correct_client_row",
-    "count": 31,
-    "limit": 30
   },
   {
     "file": "server/src/http/device/tests/register_mutations.rs",
     "line": 58,
     "kind": "method",
     "name": "register_device_jwt_has_correct_sub_and_future_exp",
-    "count": 47,
+    "count": 49,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 111,
+    "line": 113,
     "kind": "method",
     "name": "register_device_uses_first_enc_kid_when_none_specified",
+    "count": 36,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 151,
+    "kind": "method",
+    "name": "register_device_uses_explicit_default_kid",
+    "count": 41,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 194,
+    "kind": "method",
+    "name": "register_device_invalid_default_kid_returns_400",
+    "count": 33,
+    "limit": 30
+  },
+  {
+    "file": "server/src/http/device/tests/register_mutations.rs",
+    "line": 264,
+    "kind": "method",
+    "name": "update_device_only_token_succeeds",
     "count": 35,
     "limit": 30
   },
   {
     "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 148,
-    "kind": "method",
-    "name": "register_device_uses_explicit_default_kid",
-    "count": 40,
-    "limit": 30
-  },
-  {
-    "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 190,
-    "kind": "method",
-    "name": "register_device_invalid_default_kid_returns_400",
-    "count": 31,
-    "limit": 30
-  },
-  {
-    "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 258,
-    "kind": "method",
-    "name": "update_device_only_token_succeeds",
-    "count": 32,
-    "limit": 30
-  },
-  {
-    "file": "server/src/http/device/tests/register_mutations.rs",
-    "line": 292,
+    "line": 301,
     "kind": "method",
     "name": "update_device_only_default_kid_succeeds",
-    "count": 32,
+    "count": 35,
     "limit": 30
   },
   {
@@ -1120,115 +1160,115 @@
     "limit": 30
   },
   {
-    "file": "server/src/repository/mod.rs",
-    "line": 1,
-    "kind": "file",
-    "name": "mod.rs",
-    "count": 395,
-    "limit": 200
-  },
-  {
-    "file": "server/src/repository/postgres.rs",
-    "line": 1,
-    "kind": "file",
-    "name": "postgres.rs (production)",
-    "count": 866,
-    "limit": 200
-  },
-  {
-    "file": "server/src/repository/postgres.rs",
-    "line": 248,
+    "file": "server/src/repository/postgres/client_pairing.rs",
+    "line": 53,
     "kind": "method",
     "name": "delete_client_pairing_and_cleanup",
     "count": 43,
     "limit": 30
   },
   {
-    "file": "server/src/repository/postgres.rs",
-    "line": 594,
-    "kind": "method",
-    "name": "add_unavailable_client_id",
-    "count": 51,
-    "limit": 30
-  },
-  {
-    "file": "server/src/repository/postgres.rs",
-    "line": 880,
-    "kind": "method",
-    "name": "postgres_repository_connects_to_embedded_postgresql",
-    "count": 67,
-    "limit": 30
-  },
-  {
-    "file": "server/src/repository/sqlite.rs",
+    "file": "server/src/repository/postgres/request.rs",
     "line": 1,
     "kind": "file",
-    "name": "sqlite.rs (production)",
-    "count": 866,
+    "name": "request.rs",
+    "count": 265,
     "limit": 200
   },
   {
-    "file": "server/src/repository/sqlite.rs",
-    "line": 248,
+    "file": "server/src/repository/postgres/request.rs",
+    "line": 127,
+    "kind": "method",
+    "name": "add_unavailable_client_id",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/sqlite/client_pairing.rs",
+    "line": 53,
     "kind": "method",
     "name": "delete_client_pairing_and_cleanup",
     "count": 43,
     "limit": 30
   },
   {
-    "file": "server/src/repository/sqlite.rs",
-    "line": 594,
-    "kind": "method",
-    "name": "add_unavailable_client_id",
-    "count": 51,
-    "limit": 30
-  },
-  {
-    "file": "server/src/repository/sqlite_tests.rs",
+    "file": "server/src/repository/sqlite/request.rs",
     "line": 1,
     "kind": "file",
-    "name": "sqlite_tests.rs",
-    "count": 926,
+    "name": "request.rs",
+    "count": 265,
     "limit": 200
   },
   {
-    "file": "server/src/repository/sqlite_tests.rs",
-    "line": 7,
+    "file": "server/src/repository/sqlite/request.rs",
+    "line": 127,
+    "kind": "method",
+    "name": "add_unavailable_client_id",
+    "count": 37,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/tests/audit_log_tests.rs",
+    "line": 26,
+    "kind": "method",
+    "name": "delete_expired_audit_logs_by_retention",
+    "count": 47,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/tests/cleanup_tests.rs",
+    "line": 50,
+    "kind": "method",
+    "name": "delete_expired_client_jwt_pairings_removes_and_cascades",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/tests/client_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "client_tests.rs",
+    "count": 220,
+    "limit": 200
+  },
+  {
+    "file": "server/src/repository/tests/fixture.rs",
+    "line": 99,
+    "kind": "method",
+    "name": "setup",
+    "count": 31,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/tests/infrastructure_tests.rs",
+    "line": 29,
+    "kind": "method",
+    "name": "sqlite_enforces_foreign_key_constraints",
+    "count": 34,
+    "limit": 30
+  },
+  {
+    "file": "server/src/repository/tests/mod.rs",
+    "line": 15,
     "kind": "method",
     "name": "sqlite_test_config",
     "count": 32,
     "limit": 30
   },
   {
-    "file": "server/src/repository/sqlite_tests.rs",
-    "line": 70,
-    "kind": "method",
-    "name": "sqlite_enforces_foreign_key_constraints",
-    "count": 35,
-    "limit": 30
+    "file": "server/src/repository/tests/request_tests.rs",
+    "line": 1,
+    "kind": "file",
+    "name": "request_tests.rs",
+    "count": 252,
+    "limit": 200
   },
   {
-    "file": "server/src/repository/sqlite_tests.rs",
-    "line": 359,
+    "file": "server/src/repository/tests/request_tests.rs",
+    "line": 212,
     "kind": "method",
-    "name": "delete_expired_jtis_removes_old",
-    "count": 32,
-    "limit": 30
-  },
-  {
-    "file": "server/src/repository/sqlite_tests.rs",
-    "line": 465,
-    "kind": "method",
-    "name": "delete_expired_audit_logs_by_retention",
-    "count": 50,
-    "limit": 30
-  },
-  {
-    "file": "server/src/repository/sqlite_tests.rs",
-    "line": 630,
-    "kind": "method",
-    "name": "delete_expired_client_jwt_pairings_removes_and_cascades",
-    "count": 36,
+    "name": "add_unavailable_client_id_cas_logic",
+    "count": 44,
     "limit": 30
   },
   {
@@ -1236,12 +1276,12 @@
     "line": 1,
     "kind": "file",
     "name": "test_support.rs",
-    "count": 772,
+    "count": 789,
     "limit": 200
   },
   {
     "file": "server/src/test_support.rs",
-    "line": 121,
+    "line": 123,
     "kind": "method",
     "name": "default",
     "count": 49,

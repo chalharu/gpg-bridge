@@ -123,9 +123,12 @@ def main() -> None:
 
     for pkg in packages:
         name = pkg.get('package', '')
-        current = pkg.get('current', {}).get('version', 'unknown')
-        resolvable = pkg.get('resolvable', {}).get('version')
-        latest = pkg.get('latest', {}).get('version')
+        current_info = pkg.get('current') or {}
+        current = current_info.get('version', 'unknown') if isinstance(current_info, dict) else 'unknown'
+        resolvable_info = pkg.get('resolvable') or {}
+        resolvable = resolvable_info.get('version') if isinstance(resolvable_info, dict) else None
+        latest_info = pkg.get('latest') or {}
+        latest = latest_info.get('version') if isinstance(latest_info, dict) else None
 
         # Only flag if there's an upgrade available beyond current
         if not resolvable or resolvable == current:
