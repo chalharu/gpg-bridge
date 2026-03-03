@@ -1,0 +1,53 @@
+# Production build for gpg-bridge-server
+# Usage: docker build -f Dockerfile.server -t gpg-bridge-server .
+
+# ── Stage 1: Build ───────────────────────────────────────────────────
+FROM rust:1.93-alpine AS builder
+
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static perl make
+
+WORKDIR /build
+
+# 1) Copy manifests and lock file only (dependency layer cache)
+COPY Cargo.toml Cargo.lock ./
+COPY server/Cargo.toml server/Cargo.toml
+COPY daemon/Cargo.toml daemon/Cargo.toml
+COPY server/build.rs server/build.rs
+
+# 2) Create dummy sources so `cargo build` resolves and compiles deps
+RUN mkdir -p server/src daemon/src server/migrations && \
+    echo "fn main() {}" > server/src/main.rs && \
+    touch server/src/lib.rs && \
+    echo "fn main() {}" > daemon/src/main.rs
+
+# 3) Build dependencies (cached unless Cargo.toml/Cargo.lock change)
+RUN cargo build --release --package gpg-bridge-server
+
+# 4) Remove dummy artefacts so the real build is not considered fresh
+RUN rm -rf server/src daemon/src server/migrations \
+    target/release/.fingerprint/gpg-bridge-server-* \
+    target/release/deps/gpg_bridge_server-* \
+    target/release/gpg-bridge-server
+
+# 5) Copy real source code + migrations
+COPY server/ server/
+COPY daemon/ daemon/
+
+# 6) Build the real binary
+RUN cargo build --release --package gpg-bridge-server && \
+    strip target/release/gpg-bridge-server
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────
+FROM alpine:3.21 AS runtime
+
+# CA certificates for outbound TLS (FCM, postgres over TLS, etc.)
+RUN apk add --no-cache ca-certificates-bundle && \
+    addgroup -S app && adduser -S app -G app
+
+COPY --from=builder /build/target/release/gpg-bridge-server /usr/local/bin/gpg-bridge-server
+
+USER app
+
+EXPOSE 3000
+
+ENTRYPOINT ["gpg-bridge-server"]

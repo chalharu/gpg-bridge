@@ -1,6 +1,6 @@
 ---
 created: 2025-12-30
-updated: 2026-02-20T23:00
+updated: 2026-03-03
 ---
 # 📋 GPG署名システム - 要求定義・要件定義
 
@@ -186,7 +186,7 @@ IPベースのレート制限に加え、以下のアプリケーションレベ
 #### 実装方針
 - **ミドルウェア方式**: axumのミドルウェアレイヤーで実装し、各ハンドラに依存しない横断的な制御を行う
 - **ストレージ**: v1.0ではインメモリ（プロセス内）のスライディングウィンドウ方式。スケールアウト時（v2.0以降）はRedis等の共有ストアに移行
-- **IPアドレス取得**: `X-Forwarded-For` ヘッダ（Fly.ioリバースプロキシ経由）を使用し、信頼できるプロキシからのヘッダのみ採用
+- **IPアドレス取得**: `X-Forwarded-For` ヘッダ（Renderリバースプロキシ経由）を使用し、信頼できるプロキシからのヘッダのみ採用
 
 ---
 
@@ -370,7 +370,7 @@ IPベースのレート制限に加え、以下のアプリケーションレベ
 - **鍵の有効期間**: 549日（基準 × 1.5 + 1日。クロックスキューやバッチ処理のラグに対する境界条件余裕として+1日）
 - **ローテーション間隔**: 基準 × 0.5 = 183日（約6ヶ月）
 - **鍵の永続化**: DBに保存（`signing_keys`テーブル）
-- **秘密鍵の暗号化**: JWK形式の秘密鍵を環境変数由来のAES-128-GCM鍵で暗号化して保存する。暗号化鍵はFly.ioのsecrets機能（`fly secrets set`）で管理し、アプリケーション起動時に環境変数から読み込む
+- **秘密鍵の暗号化**: JWK形式の秘密鍵を環境変数由来のAES-128-GCM鍵で暗号化して保存する。暗号化鍵はRenderの環境変数機能（Environment Variables）で管理し、アプリケーション起動時に環境変数から読み込む
 - **署名時の鍵選択**: 最新のアクティブ鍵（`is_active=true`）を使用し、JWSヘッダーに`kid`を含める
 - **検証時の鍵選択**: JWSヘッダーの`kid`で`signing_keys`から鍵を特定し、有効期間内（`expires_at`未到達）であれば検証を受け入れる
 - **鍵のライフサイクル**:
@@ -392,8 +392,8 @@ IPベースのレート制限に加え、以下のアプリケーションレベ
 | --- | --- | --- |
 | **PC Daemon** | Rust / tokio / reqwest / eventsource-stream | Assuan最小実装とSSE受信をRustで一貫実装しやすい |
 | **Web API** | Rust / axum / tokio / serde / tracing | 既存方針との整合性が高く、非同期I/OとAPI実装に適する |
-| **配備基盤** | Fly.io | Rustアプリをそのまま運用しやすく、SSE接続との相性が良い |
-| **DBaaS** | Neon (PostgreSQL) | 現行要件はPostgres中心で、DB特化サービスの方が運用を単純化できる |
+| **配備基盤** | Render | Docker対応でRustアプリをそのまま運用しやすく、無料枠でSSE接続にも対応 |
+| **DBaaS** | Render PostgreSQL | 配備基盤と同一プラットフォームで運用を単純化でき、無料枠が利用可能 |
 | **Push通知** | Firebase Cloud Messaging HTTP v1 | モバイル通知の標準的な実装手段で、要件と整合 |
 | **モバイルアプリ** | Flutter（第一候補） / Kotlin+Swift（代替） | 速度重視ならFlutter、OS機能重視ならネイティブ |
 | **認証/JWT** | JWS: ES256 / JWE: ECDH-ES or ECDH-ES+A256KW + A256GCM | JWSはES256で署名（サーバー署名・クライアント署名ともにEC P-256に統一）。client_jwtは外側JWS（ES256、サーバー署名）が内側JWE（ECDH-ES + A256GCM、Direct Key Agreement）をネストする構造。E2E暗号化のJWEはECDH-ES+A256KW（Key Wrapping）+A256GCMでDaemon↔スマホ間のエンドツーエンド保護 |
@@ -401,10 +401,10 @@ IPベースのレート制限に加え、以下のアプリケーションレベ
 
 ### 5.5 DBaaS選定方針
 
-- **第一候補**: Neon
-- **比較対象**: Supabase
-- **v1採用判断**: 本システムはサーバー主導APIであり、まずはマネージドPostgreSQLの安定運用を優先する
-- **Supabase再評価条件**: 将来、RLS・Realtime・Storageを本格利用する要件が追加された場合
+- **第一候補**: Render PostgreSQL
+- **比較対象**: Neon, Supabase
+- **v1採用判断**: 配備基盤（Render）と同一プラットフォームで運用を統一し、無料枠の範囲でマネージドPostgreSQLの安定運用を実現する
+- **他サービス再評価条件**: 将来、無料枠の制約（ストレージ・接続数等）が問題となった場合、またはRLS・Realtime・Storage等の高度な機能が必要となった場合
 
 ---
 
@@ -1516,7 +1516,7 @@ data: { "signature": "eyJ...(JWE)", "status": "approved|denied|unavailable|expir
 - [ ] DaemonがGPG公開鍵をディスクに永続化しないことの検証（プロセス内メモリの揮発性キャッシュのみ許可）
 - [ ] 署名フロー完了後（approved/denied/unavailable/expiredイベント受信後またはタイムアウト後）のDaemon一時鍵ペア（認証用一時鍵・E2Eエフェメラル鍵・返却パスE2E暗号化用一時鍵のすべて）の安全な破棄（メモリからのゼロクリア）
 - [ ] サーバー署名鍵（ES256）の`signing_keys`テーブルへの永続化と`kid`によるJWSヘッダー付与
-- [ ] `signing_keys.private_key`の環境変数由来AES-128-GCM鍵による暗号化保存（Fly.io secrets経由で鍵管理）
+- [ ] `signing_keys.private_key`の環境変数由来AES-128-GCM鍵による暗号化保存（Render環境変数経由で鍵管理）
 - [ ] サーバー署名鍵ローテーション時の既存JWT検証継続性の保証（リタイア鍵の有効期間549日 > 最長JWT有効期間365日 + ローテーション間隔183日）
 - [ ] サーバー署名鍵のライフサイクル管理（アクティブ→リタイア→期限切れ→削除）
 - [ ] `device_jwt_issued_at`の記録（POST /device初回発行時に初期設定、POST /device/refresh更新時に現在時刻で更新）
@@ -1610,7 +1610,7 @@ data: { "signature": "eyJ...(JWE)", "status": "approved|denied|unavailable|expir
 | **フォーマット** | `event: heartbeat\n\n` | SSE名前付きイベント（dataフィールドなし）。SSE仕様上アプリケーション層にはディスパッチされないが、バイトストリーム層での接続活性検知（中間プロキシ・NATアイドルタイムアウト防止、接続断絶検知）に使用する |
 
 **設計理由:**
-- Fly.ioのリバースプロキシおよび中間ロードバランサーがアイドル接続をタイムアウトで切断するのを防止
+- Renderのリバースプロキシおよび中間ロードバランサーがアイドル接続をタイムアウトで切断するのを防止
 - ネットワーク経路上のNAT/ファイアウォールのアイドルタイムアウトを防止
 - クライアント側での接続断絶検知を可能にする（プロクシがコネクションを切断しても、TCP FINが届かないケースに対応）
 

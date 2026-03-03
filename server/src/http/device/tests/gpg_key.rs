@@ -6,7 +6,10 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
+use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
+use crate::test_support::{
+    MockRepository, build_test_sqlite_repo, make_test_app_state, make_test_app_state_arc,
+};
 
 use super::{
     X_COORD, Y_COORD, build_test_router, make_device_assertion, make_gpg_client_row,
@@ -16,7 +19,10 @@ use super::{
 #[tokio::test]
 async fn add_gpg_key_success() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -44,7 +50,10 @@ async fn add_gpg_key_success() {
 #[tokio::test]
 async fn add_gpg_key_empty_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -66,7 +75,10 @@ async fn add_gpg_key_empty_rejected() {
 #[tokio::test]
 async fn add_gpg_key_invalid_keygrip_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -94,7 +106,10 @@ async fn add_gpg_key_invalid_keygrip_rejected() {
 #[tokio::test]
 async fn add_gpg_key_invalid_key_id_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -122,7 +137,10 @@ async fn add_gpg_key_invalid_key_id_rejected() {
 #[tokio::test]
 async fn add_gpg_key_empty_public_key_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -161,8 +179,10 @@ async fn add_gpg_key_upsert_overwrites_existing() {
         "public_key": { "kty": "EC", "crv": "P-256" }
     }]);
     let client = make_gpg_client_row("fid-upsert", &keys, "enc-1", &existing_gpg.to_string());
-    let repo = Arc::new(MockRepository::with_client(sk, client));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-upsert", "/device/gpg_key");
@@ -186,11 +206,7 @@ async fn add_gpg_key_upsert_overwrites_existing() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let clients = repo.clients.lock().unwrap();
-    let c = clients
-        .iter()
-        .find(|c| c.client_id == "fid-upsert")
-        .unwrap();
+    let c = repo.get_client_by_id("fid-upsert").await.unwrap().unwrap();
     let gpg_keys: Vec<serde_json::Value> = serde_json::from_str(&c.gpg_keys).unwrap();
     assert_eq!(gpg_keys.len(), 1);
     assert_eq!(gpg_keys[0]["key_id"], "0xCCDD");
@@ -214,7 +230,10 @@ async fn list_gpg_keys_returns_registered() {
         "public_key": { "kty": "EC" }
     }]);
     let client = make_gpg_client_row("fid-list", &keys, "enc-1", &gpg.to_string());
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-list", "/device/gpg_key");
@@ -239,7 +258,10 @@ async fn list_gpg_keys_returns_registered() {
 #[tokio::test]
 async fn list_gpg_keys_empty() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -279,7 +301,10 @@ async fn delete_gpg_key_success() {
         "public_key": { "kty": "EC" }
     }]);
     let client = make_gpg_client_row("fid-del-gpg", &keys, "enc-1", &gpg.to_string());
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(
@@ -304,7 +329,10 @@ async fn delete_gpg_key_success() {
 #[tokio::test]
 async fn delete_gpg_key_not_found() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(
@@ -329,8 +357,10 @@ async fn delete_gpg_key_not_found() {
 #[tokio::test]
 async fn add_gpg_key_multiple_keys_success() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo = Arc::new(MockRepository::with_client(sk, client));
-    let state = make_test_app_state_arc(repo.clone());
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -361,8 +391,7 @@ async fn add_gpg_key_multiple_keys_success() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let clients = repo.clients.lock().unwrap();
-    let c = clients.iter().find(|c| c.client_id == "fid-gpg").unwrap();
+    let c = repo.get_client_by_id("fid-gpg").await.unwrap().unwrap();
     let gpg_keys: Vec<serde_json::Value> = serde_json::from_str(&c.gpg_keys).unwrap();
     assert_eq!(gpg_keys.len(), 2);
 }
@@ -400,7 +429,10 @@ async fn add_gpg_key_concurrent_modification_conflict() {
 #[tokio::test]
 async fn add_gpg_key_non_object_public_key_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -428,7 +460,10 @@ async fn add_gpg_key_non_object_public_key_rejected() {
 #[tokio::test]
 async fn add_gpg_key_key_id_too_long_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
@@ -496,7 +531,10 @@ async fn delete_gpg_key_concurrent_modification_conflict() {
 #[tokio::test]
 async fn delete_gpg_key_invalid_keygrip_format() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let state = make_test_app_state(MockRepository::with_client(sk, client));
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    repo.create_client(&client).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key/invalid-format");

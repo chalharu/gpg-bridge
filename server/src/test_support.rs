@@ -19,8 +19,10 @@ use crate::jwt::{
     jwk_to_json, sign_jws,
 };
 use crate::repository::{
-    AuditLogRow, ClientPairingRow, ClientRow, CreateRequestRow, FullRequestRow, PairingRow,
-    RequestRow, SignatureRepository, SigningKeyRow,
+    AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
+    ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
+    PairingRepository, PairingRow, RequestRepository, RequestRow, SignatureRepository,
+    SigningKeyRepository, SigningKeyRow,
 };
 
 // ---------------------------------------------------------------------------
@@ -202,24 +204,7 @@ impl MockRepository {
 }
 
 #[async_trait]
-impl SignatureRepository for MockRepository {
-    async fn run_migrations(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn health_check(&self) -> anyhow::Result<()> {
-        if self.fail_health {
-            anyhow::bail!("connection refused");
-        }
-        Ok(())
-    }
-
-    fn backend_name(&self) -> &'static str {
-        self.backend
-    }
-
-    // -- Signing Keys --------------------------------------------------------
-
+impl SigningKeyRepository for MockRepository {
     async fn store_signing_key(&self, _: &SigningKeyRow) -> anyhow::Result<()> {
         Ok(())
     }
@@ -257,9 +242,10 @@ impl SignatureRepository for MockRepository {
             .push(now.to_owned());
         Ok(*self.expired_signing_keys.lock().unwrap())
     }
+}
 
-    // -- Clients -------------------------------------------------------------
-
+#[async_trait]
+impl ClientRepository for MockRepository {
     async fn get_client_by_id(&self, client_id: &str) -> anyhow::Result<Option<ClientRow>> {
         Ok(self
             .clients
@@ -344,8 +330,54 @@ impl SignatureRepository for MockRepository {
         Ok(())
     }
 
-    // -- Client Pairings -----------------------------------------------------
+    async fn update_client_public_keys(
+        &self,
+        client_id: &str,
+        public_keys: &str,
+        default_kid: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool> {
+        let mut clients = self.clients.lock().unwrap();
+        if let Some(c) = clients
+            .iter_mut()
+            .find(|c| c.client_id == client_id && c.updated_at == expected_updated_at)
+        {
+            c.public_keys = public_keys.to_owned();
+            c.default_kid = default_kid.to_owned();
+            c.updated_at = updated_at.to_owned();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 
+    async fn update_client_gpg_keys(
+        &self,
+        client_id: &str,
+        gpg_keys: &str,
+        updated_at: &str,
+        expected_updated_at: &str,
+    ) -> anyhow::Result<bool> {
+        if self.force_gpg_update_conflict {
+            return Ok(false);
+        }
+        let mut clients = self.clients.lock().unwrap();
+        if let Some(c) = clients
+            .iter_mut()
+            .find(|c| c.client_id == client_id && c.updated_at == expected_updated_at)
+        {
+            c.gpg_keys = gpg_keys.to_owned();
+            c.updated_at = updated_at.to_owned();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+#[async_trait]
+impl ClientPairingRepository for MockRepository {
     async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
         self.check_forced_error("get_client_pairings")?;
         Ok(self
@@ -430,9 +462,10 @@ impl SignatureRepository for MockRepository {
             Ok(false)
         }
     }
+}
 
-    // -- Pairings ------------------------------------------------------------
-
+#[async_trait]
+impl PairingRepository for MockRepository {
     async fn create_pairing(&self, pairing_id: &str, expired: &str) -> anyhow::Result<()> {
         self.check_forced_error("create_pairing")?;
         self.pairings.lock().unwrap().push(PairingRow {
@@ -485,11 +518,27 @@ impl SignatureRepository for MockRepository {
             .push(now.to_owned());
         Ok(*self.expired_pairings.lock().unwrap())
     }
+}
 
-    // -- Requests ------------------------------------------------------------
-
+#[async_trait]
+impl RequestRepository for MockRepository {
     async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
         Ok(self.request.lock().unwrap().clone())
+    }
+
+    async fn get_full_request_by_id(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<FullRequestRow>> {
+        Ok(self.full_request.lock().unwrap().clone())
+    }
+
+    async fn update_request_phase2(
+        &self,
+        _request_id: &str,
+        _encrypted_payloads: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(self.update_phase2_result.lock().unwrap().unwrap_or(true))
     }
 
     async fn create_request(&self, row: &CreateRequestRow) -> anyhow::Result<()> {
@@ -507,21 +556,6 @@ impl SignatureRepository for MockRepository {
         _pairing_id: &str,
     ) -> anyhow::Result<i64> {
         Ok(self.pending_count)
-    }
-
-    async fn get_full_request_by_id(
-        &self,
-        _request_id: &str,
-    ) -> anyhow::Result<Option<FullRequestRow>> {
-        Ok(self.full_request.lock().unwrap().clone())
-    }
-
-    async fn update_request_phase2(
-        &self,
-        _request_id: &str,
-        _encrypted_payloads: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(self.update_phase2_result.lock().unwrap().unwrap_or(true))
     }
 
     async fn get_pending_requests_for_client(
@@ -587,8 +621,13 @@ impl SignatureRepository for MockRepository {
         Ok(self.expired_requests.lock().unwrap().clone())
     }
 
-    // -- Audit Log -----------------------------------------------------------
+    async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool> {
+        Ok(self.in_flight_kids.lock().unwrap().iter().any(|k| k == kid))
+    }
+}
 
+#[async_trait]
+impl AuditLogRepository for MockRepository {
     async fn create_audit_log(&self, row: &AuditLogRow) -> anyhow::Result<()> {
         if self.force_audit_log_error {
             anyhow::bail!("forced audit_log error");
@@ -611,60 +650,10 @@ impl SignatureRepository for MockRepository {
         ));
         Ok(*self.expired_audit_logs.lock().unwrap())
     }
+}
 
-    // -- Public Keys / GPG Keys ----------------------------------------------
-
-    async fn update_client_public_keys(
-        &self,
-        client_id: &str,
-        public_keys: &str,
-        default_kid: &str,
-        updated_at: &str,
-        expected_updated_at: &str,
-    ) -> anyhow::Result<bool> {
-        let mut clients = self.clients.lock().unwrap();
-        if let Some(c) = clients
-            .iter_mut()
-            .find(|c| c.client_id == client_id && c.updated_at == expected_updated_at)
-        {
-            c.public_keys = public_keys.to_owned();
-            c.default_kid = default_kid.to_owned();
-            c.updated_at = updated_at.to_owned();
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn update_client_gpg_keys(
-        &self,
-        client_id: &str,
-        gpg_keys: &str,
-        updated_at: &str,
-        expected_updated_at: &str,
-    ) -> anyhow::Result<bool> {
-        if self.force_gpg_update_conflict {
-            return Ok(false);
-        }
-        let mut clients = self.clients.lock().unwrap();
-        if let Some(c) = clients
-            .iter_mut()
-            .find(|c| c.client_id == client_id && c.updated_at == expected_updated_at)
-        {
-            c.gpg_keys = gpg_keys.to_owned();
-            c.updated_at = updated_at.to_owned();
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn is_kid_in_flight(&self, kid: &str) -> anyhow::Result<bool> {
-        Ok(self.in_flight_kids.lock().unwrap().iter().any(|k| k == kid))
-    }
-
-    // -- JTI -----------------------------------------------------------------
-
+#[async_trait]
+impl JtiRepository for MockRepository {
     async fn store_jti(&self, _jti: &str, _expired: &str) -> anyhow::Result<bool> {
         Ok(self.jti_accepted)
     }
@@ -677,9 +666,10 @@ impl SignatureRepository for MockRepository {
             .push(now.to_owned());
         Ok(*self.expired_jtis.lock().unwrap())
     }
+}
 
-    // -- Background Job Cleanup ----------------------------------------------
-
+#[async_trait]
+impl CleanupRepository for MockRepository {
     async fn delete_unpaired_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
         self.check_forced_error("delete_unpaired_clients")?;
         self.called_delete_unpaired_clients
@@ -705,6 +695,24 @@ impl SignatureRepository for MockRepository {
             .unwrap()
             .push(cutoff.to_owned());
         Ok(*self.expired_client_jwt.lock().unwrap())
+    }
+}
+
+#[async_trait]
+impl SignatureRepository for MockRepository {
+    async fn run_migrations(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn health_check(&self) -> anyhow::Result<()> {
+        if self.fail_health {
+            anyhow::bail!("connection refused");
+        }
+        Ok(())
+    }
+
+    fn backend_name(&self) -> &'static str {
+        self.backend
     }
 }
 
@@ -752,6 +760,17 @@ pub fn make_client_jwt(
         exp: 1_900_000_000,
     };
     sign_jws(&outer, priv_jwk, kid).unwrap()
+}
+
+/// Build an in-memory [`SqliteRepository`] with migrations applied, wrapped
+/// in `Arc` for use in HTTP handler tests.
+pub async fn build_test_sqlite_repo() -> Arc<crate::repository::SqliteRepository> {
+    use crate::repository::MIGRATOR;
+    use crate::repository::sqlite::tests::build_sqlite_test_pool;
+
+    let pool = build_sqlite_test_pool().await;
+    MIGRATOR.run(&pool).await.unwrap();
+    Arc::new(crate::repository::SqliteRepository { pool })
 }
 
 /// Build an [`AppState`] from any [`SignatureRepository`] implementor, using
