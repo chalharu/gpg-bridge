@@ -116,7 +116,7 @@ jobs:
           cache-on-failure: true
 
       - name: Coverage (includes tests, fail under 80%)
-        run: cargo llvm-cov --workspace --include-ignored --lcov --output-path lcov-rust.info --fail-under-lines 80
+        run: cargo llvm-cov --workspace --lcov --output-path lcov-rust.info --fail-under-lines 80 -- --include-ignored
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -221,6 +221,10 @@ jobs:
       - name: Flutter pub get (generates required files)
         working-directory: mobile
         run: flutter pub get
+
+      - name: Configure Android build
+        working-directory: mobile
+        run: flutter build apk --config-only
 
       - name: Run Android unit tests
         working-directory: mobile/android
