@@ -2,35 +2,32 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'server/**'
-      - 'daemon/**'
-      - 'mobile/**'
-      - '.github/workflows/ci.yml'
+    branches: [main]
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'server/**'
-      - 'daemon/**'
-      - 'mobile/**'
-      - '.github/workflows/ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Change detection
+  # ---------------------------------------------------------------------------
   changes:
     name: Detect changed areas
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       flutter: ${{ steps.filter.outputs.flutter }}
+      android: ${{ steps.filter.outputs.android }}
+      ios: ${{ steps.filter.outputs.ios }}
+      docker: ${{ steps.filter.outputs.docker }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,12 +43,85 @@ jobs:
               - 'server/**'
               - 'daemon/**'
               - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
             flutter:
-              - 'mobile/**'
+              - 'mobile/lib/**'
+              - 'mobile/test/**'
+              - 'mobile/pubspec.*'
+              - 'mobile/analysis_options.yaml'
+              - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
+            android:
+              - 'mobile/android/**'
+              - '.github/workflows/ci.yml'
+            ios:
+              - 'mobile/ios/**'
+              - '.github/workflows/ci.yml'
+            docker:
+              - 'Dockerfile.server'
+              - '.dockerignore'
               - '.github/workflows/ci.yml'
 
-  rust-check:
-    name: Rust cargo check
+  # ---------------------------------------------------------------------------
+  # Rust lint (format + clippy) — runs in parallel with coverage
+  # ---------------------------------------------------------------------------
+  rust-lint:
+    name: Rust lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore file timestamps
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      # NOTE: This cache key is intentionally shared between rust-lint and
+      # rust-coverage. The second writer is a harmless no-op (same immutable key).
+      - name: Check Cargo.lock cache
+        id: cargo-lock-check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.cargo-lock-marker
+          key: cargo-lock-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Create Cargo.lock marker
+        run: mkdir -p /tmp/.cargo-lock-marker && cp Cargo.lock /tmp/.cargo-lock-marker/
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+
+      - name: Clean stale cache on lockfile change
+        if: steps.cargo-lock-check.outputs.cache-hit != 'true'
+        run: |
+          echo 'Cargo.lock changed — cleaning build artifacts'
+          cargo clean || true
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check line counts (Rust)
+        run: python3 .github/scripts/check-line-counts.py --lang rust --max-file-lines 200 --max-method-lines 30 --warn-only server/src daemon/src
+
+  # ---------------------------------------------------------------------------
+  # Rust coverage (test + lcov + threshold) — runs in parallel with lint
+  # ---------------------------------------------------------------------------
+  rust-coverage:
+    name: Rust coverage
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -60,22 +130,58 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore file timestamps
+        uses: chetan/git-restore-mtime-action@v2
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # NOTE: Same cache key as rust-lint (intentional — see comment above).
+      - name: Check Cargo.lock cache
+        id: cargo-lock-check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.cargo-lock-marker
+          key: cargo-lock-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Create Cargo.lock marker
+        run: mkdir -p /tmp/.cargo-lock-marker && cp Cargo.lock /tmp/.cargo-lock-marker/
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
           cache-on-failure: true
+          cache-all-crates: true
 
-      - name: Cargo check
-        run: cargo check --workspace --locked
+      - name: Clean stale cache on lockfile change
+        if: steps.cargo-lock-check.outputs.cache-hit != 'true'
+        run: |
+          echo 'Cargo.lock changed — cleaning build artifacts'
+          cargo clean || true
 
-  flutter-analyze:
-    name: Flutter analyze
+      - name: Coverage (includes tests, fail under 80%)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov-rust.info --fail-under-lines 80 -- --include-ignored
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov-rust.info
+          flags: rust
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Flutter lint (format + analyze) — runs in parallel with test/coverage
+  # ---------------------------------------------------------------------------
+  flutter-lint:
+    name: Flutter lint
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.flutter == 'true'
@@ -89,10 +195,269 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter pub get
+      - name: Install dependencies
         working-directory: mobile
         run: flutter pub get
 
-      - name: Flutter analyze
+      - name: Format check
+        working-directory: mobile
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
         working-directory: mobile
         run: flutter analyze
+
+      - name: Check line counts (Dart)
+        run: python3 .github/scripts/check-line-counts.py --lang dart --max-file-lines 200 --max-method-lines 30 --warn-only mobile/lib mobile/test
+
+  # ---------------------------------------------------------------------------
+  # Flutter coverage (test + lcov + threshold) — parallel with lint
+  # ---------------------------------------------------------------------------
+  flutter-coverage:
+    name: Flutter coverage
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Tests with coverage
+        working-directory: mobile
+        run: flutter test --coverage
+
+      - name: Check coverage threshold (80%)
+        run: |
+          TOTAL=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf>0) printf "%.1f", lh/lf*100; else print "0.0"}' mobile/coverage/lcov.info)
+          echo "Flutter coverage: ${TOTAL}%"
+          awk "BEGIN{exit (${TOTAL} < 80.0) ? 1 : 0}"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: mobile/coverage/lcov.info
+          flags: flutter
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Android native tests (Kotlin JUnit) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  android-native-test:
+    name: Android native tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/android/**/*.gradle*', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Flutter pub get (generates required files)
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Configure Android build
+        working-directory: mobile
+        run: flutter build apk --config-only
+
+      - name: Run Android unit tests
+        working-directory: mobile/android
+        run: ./gradlew app:testDebugUnitTest
+
+  # ---------------------------------------------------------------------------
+  # iOS native tests (XCTest) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  ios-native-test:
+    name: iOS native tests
+    runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.ios == 'true' || needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get (generates required files)
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: mobile/ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile') }}
+          restore-keys: |
+            pods-${{ runner.os }}-
+
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ios
+        run: pod install
+
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: deriveddata-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile', 'mobile/pubspec.lock', 'mobile/ios/Runner.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            deriveddata-${{ runner.os }}-
+
+      - name: Run iOS unit tests
+        working-directory: mobile/ios
+        run: |
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -only-testing:RunnerTests \
+            -resultBundlePath TestResults \
+            CODE_SIGNING_ALLOWED=NO
+
+  # ---------------------------------------------------------------------------
+  # Security audit (Rust) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Security audit (Rust)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run cargo audit
+        run: python3 .github/scripts/check-cargo-audit.py --root .
+
+  # ---------------------------------------------------------------------------
+  # Dependency check (Dart) — parallel with other gates
+  # ---------------------------------------------------------------------------
+  dart-deps:
+    name: Dependency check (Dart)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Check Dart dependencies
+        run: python3 .github/scripts/check-dart-deps.py --project-dir mobile
+
+  # ---------------------------------------------------------------------------
+  # SQL migration check — parallel with other gates
+  # ---------------------------------------------------------------------------
+  migration-check:
+    name: SQL migration check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate migrations
+        run: python3 .github/scripts/check-migrations.py server/migrations
+
+  # ---------------------------------------------------------------------------
+  # Docker build & push
+  # NOTE: This job intentionally does NOT depend on security-audit or
+  # migration-check. Those jobs are informational/advisory and should not
+  # block Docker image builds.
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker build & push
+    runs-on: ubuntu-latest
+    needs: [rust-lint, rust-coverage, changes]
+    if: >-
+      always()
+      && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.rust == 'true')
+      && (needs.rust-lint.result == 'success' || needs.rust-lint.result == 'skipped')
+      && (needs.rust-coverage.result == 'success' || needs.rust-coverage.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/chalharu/gpg-bridge-server
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.server
+          platforms: linux/amd64
+          push: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

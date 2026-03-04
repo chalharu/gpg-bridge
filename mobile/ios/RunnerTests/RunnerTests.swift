@@ -181,6 +181,7 @@ class RunnerTests: XCTestCase {
     XCTAssertNotNil(jwk["x"]?.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression))
     XCTAssertNotNil(jwk["y"]?.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression))
 
+    try operations.generateKeyPair(alias: KeystoreKeyLabels.e2eKey)
     let e2eJwk = try operations.getPublicKeyJwk(alias: KeystoreKeyLabels.e2eKey)
     XCTAssertEqual(e2eJwk["use"], "enc")
     XCTAssertEqual(e2eJwk["alg"], "ECDH-ES+A256KW")
@@ -191,7 +192,12 @@ class RunnerTests: XCTestCase {
     backend.queryResult = NSString(string: "not-a-key")
     let operations = IOSSecureEnclaveOperations(backend: backend)
 
-    XCTAssertThrowsError(try operations.generateKeyPair(alias: KeystoreKeyLabels.deviceKey)) { error in
+    // queryPrivateKey returns the non-nil NSString, so generateKeyPair
+    // treats it as an existing key and returns early.  The type mismatch
+    // surfaces when the value is actually *used* (e.g. createSignature).
+    XCTAssertThrowsError(
+      try operations.sign(alias: KeystoreKeyLabels.deviceKey, dataBase64: "AAAA")
+    ) { error in
       guard case KeystoreError.securityFailure(let message) = error else {
         XCTFail("expected securityFailure")
         return

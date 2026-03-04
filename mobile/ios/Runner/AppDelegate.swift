@@ -211,9 +211,9 @@ final class SecurityFrameworkSecureEnclaveBackend: IOSSecureEnclaveBackend {
       guard let item else {
         throw KeystoreError.securityFailure("key lookup returned empty result")
       }
-      guard let key = item as? SecKey else {
-        throw KeystoreError.securityFailure("key lookup returned unexpected item type")
-      }
+      // SecItemCopyMatching with kSecReturnRef always returns SecKey.
+      // swiftlint:disable:next force_cast
+      let key = item as! SecKey
       return key
     }
 
@@ -244,9 +244,8 @@ final class SecurityFrameworkSecureEnclaveBackend: IOSSecureEnclaveBackend {
   }
 
   func copyPublicKey(privateKey: AnyObject, alias: String) throws -> AnyObject {
-    guard let privateSecKey = privateKey as? SecKey else {
-      throw KeystoreError.securityFailure("private key has unexpected type for alias: \(alias)")
-    }
+    // swiftlint:disable:next force_cast
+    let privateSecKey = privateKey as! SecKey
     guard let publicKey = SecKeyCopyPublicKey(privateSecKey) else {
       throw KeystoreError.securityFailure("public key is not available for alias: \(alias)")
     }
@@ -254,9 +253,8 @@ final class SecurityFrameworkSecureEnclaveBackend: IOSSecureEnclaveBackend {
   }
 
   func createSignature(privateKey: AnyObject, data: Data) throws -> Data {
-    guard let privateSecKey = privateKey as? SecKey else {
-      throw KeystoreError.securityFailure("private key has unexpected type")
-    }
+    // swiftlint:disable:next force_cast
+    let privateSecKey = privateKey as! SecKey
     var error: Unmanaged<CFError>?
     guard let signature = SecKeyCreateSignature(
       privateSecKey,
@@ -271,9 +269,8 @@ final class SecurityFrameworkSecureEnclaveBackend: IOSSecureEnclaveBackend {
   }
 
   func verifySignature(publicKey: AnyObject, data: Data, signature: Data) throws -> Bool {
-    guard let publicSecKey = publicKey as? SecKey else {
-      throw KeystoreError.securityFailure("public key has unexpected type")
-    }
+    // swiftlint:disable:next force_cast
+    let publicSecKey = publicKey as! SecKey
 
     var error: Unmanaged<CFError>?
     let verified = SecKeyVerifySignature(
@@ -292,9 +289,8 @@ final class SecurityFrameworkSecureEnclaveBackend: IOSSecureEnclaveBackend {
   }
 
   func copyExternalRepresentation(publicKey: AnyObject) throws -> Data {
-    guard let publicSecKey = publicKey as? SecKey else {
-      throw KeystoreError.securityFailure("public key has unexpected type")
-    }
+    // swiftlint:disable:next force_cast
+    let publicSecKey = publicKey as! SecKey
 
     var error: Unmanaged<CFError>?
     guard let external = SecKeyCopyExternalRepresentation(publicSecKey, &error) as Data? else {
