@@ -5,6 +5,9 @@ Thresholds (configurable via CLI):
   --max-file-lines   200   (excluding import lines)
   --max-method-lines  30
 
+Note: blank lines and comment-only lines count toward the file-line limit;
+only import/use lines are excluded.
+
 Per-file override:   // ci:max-file-lines <N>
 Per-method override: // ci:max-method-lines <N>   (place on the line immediately before fn/method)
 
@@ -57,16 +60,56 @@ def parse_override(line: str, key: str) -> Optional[int]:
     return None
 
 
-def strip_strings_for_braces(line: str) -> str:
-    """Remove string literals and line-comments so brace counting is safer."""
+def strip_strings_for_braces(line: str, in_block_comment: bool = False) -> tuple[str, bool]:
+    """Remove string literals, line-comments, and block comments so brace counting is safer.
+
+    Returns (cleaned_line, still_in_block_comment).
+    """
     out: list[str] = []
     i = 0
     n = len(line)
+
     while i < n:
+        # Inside a block comment — search for */
+        if in_block_comment:
+            if line[i] == '*' and i + 1 < n and line[i + 1] == '/':
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
         ch = line[i]
-        # Single-line comment
+
+        # Block comment start /* */
+        if ch == '/' and i + 1 < n and line[i + 1] == '*':
+            in_block_comment = True
+            i += 2
+            continue
+
+        # Single-line comment //
         if ch == '/' and i + 1 < n and line[i + 1] == '/':
             break
+
+        # Rust raw string: r#"..."# or r##"..."## etc.
+        if ch == 'r' and i + 1 < n and line[i + 1] in ('#', '"'):
+            j = i + 1
+            hashes = 0
+            while j < n and line[j] == '#':
+                hashes += 1
+                j += 1
+            if j < n and line[j] == '"':
+                # Skip raw string body until "###
+                j += 1
+                closing = '"' + '#' * hashes
+                end = line.find(closing, j)
+                if end >= 0:
+                    i = end + len(closing)
+                else:
+                    # Raw string spans multiple lines — skip rest
+                    i = n
+                continue
+
         # Double-quoted string
         if ch == '"':
             i += 1
@@ -76,6 +119,7 @@ def strip_strings_for_braces(line: str) -> str:
                 i += 1
             i += 1  # skip closing quote
             continue
+
         # Single-quoted string / char literal
         if ch == "'":
             i += 1
@@ -85,9 +129,10 @@ def strip_strings_for_braces(line: str) -> str:
                 i += 1
             i += 1
             continue
+
         out.append(ch)
         i += 1
-    return ''.join(out)
+    return ''.join(out), in_block_comment
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +146,8 @@ _RUST_IMPORT_RE = re.compile(
 
 _RUST_FN_RE = re.compile(
     r'^\s*(pub\s*(\(.*?\)\s*)?)?'
-    r'(async\s+)?(unsafe\s+)?(const\s+)?'
+    r'(default\s+)?'
+    r'((?:(?:async|unsafe|const)\s+)*(?:extern\s*"[^"]*"\s+)?)'
     r'fn\s+(?P<name>\w+)'
 )
 
@@ -201,23 +247,27 @@ def analyse_file(
 
     # --- Rust: split production / test portions ---
     if lang == 'rust':
-        cfg_test_idx: Optional[int] = None
+        # Find ALL #[cfg(test)] boundaries — each starts a test region
+        cfg_test_indices: list[int] = []
         for i, line in enumerate(lines):
             if _RUST_CFG_TEST_RE.match(line):
-                cfg_test_idx = i
-                break
+                cfg_test_indices.append(i)
 
-        if cfg_test_idx is not None:
-            prod_lines = lines[:cfg_test_idx]
-            test_lines = lines[cfg_test_idx:]
+        if cfg_test_indices:
+            # Production = everything before the first #[cfg(test)]
+            prod_lines = lines[:cfg_test_indices[0]]
             violations.extend(
                 _check_portion(path, prod_lines, 0, is_import, detect_func,
                                file_limit, default_method_limit, 'production')
             )
-            violations.extend(
-                _check_portion(path, test_lines, cfg_test_idx, is_import, detect_func,
-                               file_limit, default_method_limit, 'test')
-            )
+            # Each #[cfg(test)] block = from index[i] to index[i+1] or end
+            for j, start_idx in enumerate(cfg_test_indices):
+                end_idx = cfg_test_indices[j + 1] if j + 1 < len(cfg_test_indices) else len(lines)
+                test_lines = lines[start_idx:end_idx]
+                violations.extend(
+                    _check_portion(path, test_lines, start_idx, is_import, detect_func,
+                                   file_limit, default_method_limit, 'test')
+                )
         else:
             violations.extend(
                 _check_portion(path, lines, 0, is_import, detect_func,
@@ -261,6 +311,7 @@ def _check_portion(
 
     # --- 2. Function / method line counts ---
     depth = 0
+    in_block_comment = False
     # Stack: [(name, start_line_0based, base_depth, method_limit)]
     func_stack: list[tuple[str, int, int, int]] = []
     pending_method_override: Optional[int] = None
@@ -276,7 +327,7 @@ def _check_portion(
         # Detect function start
         func_name = detect_func(raw_line)
         if func_name is not None:
-            mlimit = pending_method_override or default_method_limit
+            mlimit = pending_method_override if pending_method_override is not None else default_method_limit
             func_stack.append((func_name, abs_line, depth, mlimit))
             pending_method_override = None
         elif ov is None:
@@ -285,7 +336,7 @@ def _check_portion(
             pending_method_override = None
 
         # Count braces (with string/comment stripping)
-        safe = strip_strings_for_braces(raw_line)
+        safe, in_block_comment = strip_strings_for_braces(raw_line, in_block_comment)
         for ch in safe:
             if ch == '{':
                 depth += 1

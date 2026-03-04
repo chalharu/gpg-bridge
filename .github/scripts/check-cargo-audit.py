@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -22,18 +23,29 @@ from pathlib import Path
 
 
 def load_direct_deps(cargo_toml: Path) -> set[str]:
-    """Extract direct dependency crate names from Cargo.toml."""
+    """Extract direct dependency crate names from Cargo.toml.
+
+    Handles ``package = "..."`` renames: if a dep entry specifies a
+    ``package`` key, the *real* crate name (used by cargo audit) is used
+    instead of the manifest alias.
+    """
     data = tomllib.loads(cargo_toml.read_text())
     deps: set[str] = set()
     for section in ('dependencies', 'dev-dependencies', 'build-dependencies'):
-        for name in data.get(section, {}):
-            deps.add(name)
+        for alias, value in data.get(section, {}).items():
+            if isinstance(value, dict) and 'package' in value:
+                deps.add(value['package'])
+            else:
+                deps.add(alias)
 
     # Also check workspace members
     workspace = data.get('workspace', {})
     for section in ('dependencies', 'dev-dependencies'):
-        for name in workspace.get(section, {}):
-            deps.add(name)
+        for alias, value in workspace.get(section, {}).items():
+            if isinstance(value, dict) and 'package' in value:
+                deps.add(value['package'])
+            else:
+                deps.add(alias)
 
     return deps
 
@@ -53,8 +65,11 @@ def collect_workspace_direct_deps(root: Path) -> set[str]:
     return deps
 
 
-def get_reverse_deps(root: Path, crate_name: str) -> set[str]:
+def get_reverse_deps(root: Path, crate_name: str,
+                     cache: dict[str, set[str]] | None = None) -> set[str]:
     """Get the set of crates that directly depend on the given crate using cargo tree."""
+    if cache is not None and crate_name in cache:
+        return cache[crate_name]
     try:
         result = subprocess.run(
             ['cargo', 'tree', '--invert', '--package', crate_name,
@@ -70,13 +85,16 @@ def get_reverse_deps(root: Path, crate_name: str) -> set[str]:
             name = line.split()[0] if line.split() else ''
             if name and name != crate_name:
                 parents.add(name)
+        if cache is not None:
+            cache[crate_name] = parents
         return parents
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return set()
 
 
 def find_direct_ancestor(root: Path, crate_name: str, direct_deps: set[str],
-                         visited: set[str] | None = None) -> set[str]:
+                         visited: set[str] | None = None,
+                         cache: dict[str, set[str]] | None = None) -> set[str]:
     """Walk up the dependency tree to find which direct deps pull in a transitive crate."""
     if visited is None:
         visited = set()
@@ -85,21 +103,24 @@ def find_direct_ancestor(root: Path, crate_name: str, direct_deps: set[str],
     visited.add(crate_name)
 
     ancestors: set[str] = set()
-    parents = get_reverse_deps(root, crate_name)
+    parents = get_reverse_deps(root, crate_name, cache=cache)
     for parent in parents:
         if parent in direct_deps:
             ancestors.add(parent)
         else:
-            ancestors.update(find_direct_ancestor(root, parent, direct_deps, visited))
+            ancestors.update(find_direct_ancestor(root, parent, direct_deps, visited, cache=cache))
     return ancestors
 
 
-def check_if_update_resolves(root: Path, direct_dep: str) -> bool:
+def check_if_update_resolves(root: Path, direct_dep: str,
+                             cache: dict[str, bool] | None = None) -> bool:
     """Check if updating a direct dependency could resolve a transitive vuln.
 
     We check cargo update --dry-run for the dependency. If it shows updates,
     the issue might be resolvable by updating.
     """
+    if cache is not None and direct_dep in cache:
+        return cache[direct_dep]
     try:
         result = subprocess.run(
             ['cargo', 'update', '--dry-run', '--package', direct_dep],
@@ -107,19 +128,26 @@ def check_if_update_resolves(root: Path, direct_dep: str) -> bool:
         )
         # If there's a newer version available, the output will show "Updating"
         output = result.stdout + result.stderr
-        return 'Updating' in output or 'Locking' in output
+        resolved = 'Updating' in output or 'Locking' in output
+        if cache is not None:
+            cache[direct_dep] = resolved
+        return resolved
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
 
 
 def run_audit(root: Path) -> dict:
     """Run cargo audit --json and return parsed output."""
-    result = subprocess.run(
-        ['cargo', 'audit', '--json'],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ['cargo', 'audit', '--json'],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print('::error::cargo or cargo-audit not found on PATH')
+        sys.exit(1)
     # cargo audit exits non-zero when advisories are found
     try:
         return json.loads(result.stdout)
@@ -129,7 +157,6 @@ def run_audit(root: Path) -> dict:
 
 
 def main() -> None:
-    import argparse
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', type=Path, default=Path('.'),
                     help='Workspace root directory')
@@ -142,6 +169,10 @@ def main() -> None:
     if not vulnerabilities:
         print("cargo audit: no known vulnerabilities found.")
         sys.exit(0)
+
+    # Caches for subprocess calls to avoid repeated invocations
+    reverse_dep_cache: dict[str, set[str]] = {}
+    update_cache: dict[str, bool] = {}
 
     direct_issues: list[dict] = []
     resolvable_transitive_issues: list[dict] = []
@@ -162,12 +193,14 @@ def main() -> None:
             })
         else:
             # Find which direct deps pull in this transitive crate
-            ancestors = find_direct_ancestor(args.root, crate_name, direct_deps)
+            ancestors = find_direct_ancestor(args.root, crate_name, direct_deps,
+                                             cache=reverse_dep_cache)
             resolvable = False
             if ancestors:
                 # Check if updating any ancestor could resolve the issue
                 for ancestor in ancestors:
-                    if check_if_update_resolves(args.root, ancestor):
+                    if check_if_update_resolves(args.root, ancestor,
+                                                cache=update_cache):
                         resolvable = True
                         break
 

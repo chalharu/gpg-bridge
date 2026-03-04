@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -25,11 +26,12 @@ _MIGRATION_RE = re.compile(
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: check-migrations.py <migrations_dir>", file=sys.stderr)
-        sys.exit(1)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('migrations_dir', type=Path,
+                    help='Directory containing SQL migration files')
+    args = ap.parse_args()
 
-    migrations_dir = Path(sys.argv[1])
+    migrations_dir = args.migrations_dir
     if not migrations_dir.is_dir():
         print(f"::error::Migrations directory not found: {migrations_dir}")
         sys.exit(1)

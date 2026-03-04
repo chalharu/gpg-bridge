@@ -84,6 +84,8 @@ jobs:
         with:
           components: rustfmt,clippy
 
+      # NOTE: This cache key is intentionally shared between rust-lint and
+      # rust-coverage. The second writer is a harmless no-op (same immutable key).
       - name: Check Cargo.lock cache
         id: cargo-lock-check
         uses: actions/cache@v4
@@ -142,6 +144,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # NOTE: Same cache key as rust-lint (intentional — see comment above).
       - name: Check Cargo.lock cache
         id: cargo-lock-check
         uses: actions/cache@v4
@@ -408,6 +411,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Docker build & push
+  # NOTE: This job intentionally does NOT depend on security-audit or
+  # migration-check. Those jobs are informational/advisory and should not
+  # block Docker image builds.
   # ---------------------------------------------------------------------------
   docker:
     name: Docker build & push
@@ -416,8 +422,8 @@ jobs:
     if: >-
       always()
       && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.rust == 'true')
-      && needs.rust-lint.result != 'failure'
-      && needs.rust-coverage.result != 'failure'
+      && (needs.rust-lint.result == 'success' || needs.rust-lint.result == 'skipped')
+      && (needs.rust-coverage.result == 'success' || needs.rust-coverage.result == 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v4

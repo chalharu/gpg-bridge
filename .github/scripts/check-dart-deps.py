@@ -12,15 +12,33 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import subprocess
 import sys
-import re
 from pathlib import Path
 
+try:
+    import yaml
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
 
-def load_direct_deps(pubspec: Path) -> set[str]:
-    """Extract direct dependency names from pubspec.yaml (simple YAML parse)."""
+
+def _load_direct_deps_yaml(pubspec: Path) -> set[str]:
+    """Extract direct dependency names from pubspec.yaml using PyYAML."""
+    data = yaml.safe_load(pubspec.read_text())
+    deps: set[str] = set()
+    for section in ('dependencies', 'dev_dependencies'):
+        section_data = data.get(section)
+        if isinstance(section_data, dict):
+            deps.update(section_data.keys())
+    return deps
+
+
+def _load_direct_deps_fallback(pubspec: Path) -> set[str]:
+    """Extract direct dependency names from pubspec.yaml (simple parser fallback)."""
     deps: set[str] = set()
     in_section = False
     section_indent: int | None = None
@@ -51,14 +69,25 @@ def load_direct_deps(pubspec: Path) -> set[str]:
     return deps
 
 
+def load_direct_deps(pubspec: Path) -> set[str]:
+    """Extract direct dependency names from pubspec.yaml."""
+    if _HAS_YAML:
+        return _load_direct_deps_yaml(pubspec)
+    return _load_direct_deps_fallback(pubspec)
+
+
 def run_outdated_all(project_dir: Path) -> dict:
     """Run dart pub outdated --json (including dev deps)."""
-    result = subprocess.run(
-        ['dart', 'pub', 'outdated', '--json'],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ['dart', 'pub', 'outdated', '--json'],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print('::error::dart not found on PATH — cannot check dependencies')
+        sys.exit(1)
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -69,11 +98,13 @@ def run_outdated_all(project_dir: Path) -> dict:
                     return json.loads(line)
                 except json.JSONDecodeError:
                     continue
-        return {}
+    # No valid JSON found
+    stderr_msg = result.stderr.strip() if result.stderr else '(no stderr)'
+    print(f'::error::dart pub outdated produced no valid JSON (exit {result.returncode}): {stderr_msg}')
+    sys.exit(1)
 
 
 def main() -> None:
-    import argparse
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--project-dir', type=Path, default=Path('.'),
                     help='Flutter/Dart project directory')
