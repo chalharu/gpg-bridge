@@ -3,6 +3,7 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    id("jacoco")
 }
 
 android {
@@ -41,6 +42,29 @@ android {
 
 flutter {
     source = "../.."
+}
+
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+    reports {
+        xml.required.set(true)
+        xml.outputLocation.set(
+            layout.buildDirectory.file(
+                "reports/jacoco/test/jacocoTestReport.xml"
+            )
+        )
+        html.required.set(false)
+    }
+    val kotlinClasses = fileTree(
+        "${layout.buildDirectory.get()}/tmp/kotlin-classes/debug"
+    )
+    classDirectories.setFrom(kotlinClasses)
+    sourceDirectories.setFrom(layout.projectDirectory.dir("src/main/kotlin"))
+    executionData.setFrom(
+        fileTree(layout.buildDirectory) {
+            include("jacoco/testDebugUnitTest.exec")
+        }
+    )
 }
 
 dependencies {
