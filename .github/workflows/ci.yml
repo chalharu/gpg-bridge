@@ -461,3 +461,57 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Android APK build — artifact upload
+  # ---------------------------------------------------------------------------
+  android-apk-build:
+    name: Android APK build
+    runs-on: ubuntu-latest
+    needs: [android-native-test, flutter-lint, flutter-coverage, changes]
+    if: >-
+      always()
+      && (needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true')
+      && (needs.android-native-test.result == 'success' || needs.android-native-test.result == 'skipped')
+      && (needs.flutter-lint.result == 'success' || needs.flutter-lint.result == 'skipped')
+      && (needs.flutter-coverage.result == 'success' || needs.flutter-coverage.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/android/**/*.gradle*', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Build APK (release)
+        working-directory: mobile
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpg-bridge-apk-${{ github.sha }}
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
