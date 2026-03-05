@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -479,15 +480,17 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ---------------------------------------------------------------------------
-  # Android APK build — artifact upload
+  # Android APK build — GitHub Release upload
   # ---------------------------------------------------------------------------
   android-apk-build:
     name: Android APK build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [android-native-test, flutter-lint, flutter-coverage, changes]
     if: >-
       always()
-      && (needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true')
+      && startsWith(github.ref, 'refs/tags/v')
       && (needs.android-native-test.result == 'success' || needs.android-native-test.result == 'skipped')
       && (needs.flutter-lint.result == 'success' || needs.flutter-lint.result == 'skipped')
       && (needs.flutter-coverage.result == 'success' || needs.flutter-coverage.result == 'skipped')
@@ -525,9 +528,7 @@ jobs:
         working-directory: mobile
         run: flutter build apk --release
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: gpg-bridge-apk-${{ github.sha }}
-          path: mobile/build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 14
+          files: mobile/build/app/outputs/flutter-apk/app-release.apk
