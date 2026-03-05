@@ -1,3 +1,4 @@
+// ci:max-file-lines 210
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
@@ -45,85 +46,41 @@ pub struct AppError {
 }
 
 impl AppError {
+    fn new(kind: AppErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
     pub fn not_acceptable(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::NotAcceptable,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::NotAcceptable, detail)
     }
-
     pub fn unauthorized(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Unauthorized,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Unauthorized, detail)
     }
-
     pub fn validation(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Validation,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Validation, detail)
     }
-
     pub fn database(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Database,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Database, detail)
     }
-
     pub fn internal(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Internal,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Internal, detail)
     }
-
     pub fn conflict(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Conflict,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Conflict, detail)
     }
-
     pub fn not_found(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::NotFound,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::NotFound, detail)
     }
-
     pub fn gone(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Gone,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Gone, detail)
     }
-
     pub fn too_many_requests(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::TooManyRequests,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::TooManyRequests, detail)
     }
 
     /// Attach rate limit metadata (used for 429 response headers).
