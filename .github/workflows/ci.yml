@@ -127,6 +127,7 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     env:
       CARGO_INCREMENTAL: 0
+      CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -144,22 +145,24 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      # NOTE: Same cache key as rust-lint (intentional — see comment above).
       - name: Check Cargo.lock cache
         id: cargo-lock-check
         uses: actions/cache@v4
         with:
-          path: /tmp/.cargo-lock-marker
-          key: cargo-lock-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          path: /tmp/.cargo-lock-marker-cov
+          key: cargo-lock-cov-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Create Cargo.lock marker
-        run: mkdir -p /tmp/.cargo-lock-marker && cp Cargo.lock /tmp/.cargo-lock-marker/
+        run: mkdir -p /tmp/.cargo-lock-marker-cov && cp Cargo.lock /tmp/.cargo-lock-marker-cov/
 
-      - name: Cache Rust artifacts
+      # Separate cache prefix for coverage builds (instrumented binaries
+      # are incompatible with non-instrumented ones in rust-lint).
+      - name: Cache Rust artifacts (coverage)
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           cache-all-crates: true
+          prefix-key: v0-rust-coverage
 
       - name: Clean stale cache on lockfile change
         if: steps.cargo-lock-check.outputs.cache-hit != 'true'
@@ -332,7 +335,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: mobile/ios/Pods
-          key: pods-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile') }}
+          key: pods-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile', 'mobile/pubspec.lock') }}
           restore-keys: |
             pods-${{ runner.os }}-
 
@@ -348,10 +351,20 @@ jobs:
           restore-keys: |
             deriveddata-${{ runner.os }}-
 
-      - name: Run iOS unit tests
+      - name: Build for testing
         working-directory: mobile/ios
         run: |
-          xcodebuild test \
+          xcodebuild build-for-testing \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
+      - name: Run iOS unit tests (without rebuild)
+        working-directory: mobile/ios
+        run: |
+          xcodebuild test-without-building \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
@@ -464,6 +477,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -491,7 +507,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.server
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
