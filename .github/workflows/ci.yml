@@ -178,6 +178,7 @@ jobs:
         with:
           files: lcov-rust.info
           flags: rust
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
@@ -250,6 +251,7 @@ jobs:
         with:
           files: mobile/coverage/lcov.info
           flags: flutter
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
@@ -307,6 +309,7 @@ jobs:
         with:
           files: mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
           flags: android
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
@@ -397,6 +400,7 @@ jobs:
         with:
           files: lcov-ios.info
           flags: ios
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
