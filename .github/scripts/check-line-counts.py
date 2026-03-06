@@ -2,8 +2,16 @@
 """Check file and function/method line counts for Rust and Dart.
 
 Thresholds (configurable via CLI):
-  --max-file-lines   200   (excluding import lines)
-  --max-method-lines  30
+  --max-file-lines        200   (excluding import lines)
+  --max-method-lines       30
+  --max-test-file-lines   (defaults to --max-file-lines)
+  --max-test-method-lines (defaults to --max-method-lines)
+
+Test files are detected by:
+  - Filename matching *_tests.rs, *_test.rs, *_test.dart
+  - Files inside a tests/ directory
+  - The test portion from Rust #[cfg(test)] split
+  - Filenames matching test_*.rs or test_*.dart
 
 Note: blank lines and comment-only lines count toward the file-line limit;
 only import/use lines are excluded.
@@ -162,6 +170,20 @@ _DART_IMPORT_RE = re.compile(r'^\s*(import|export|part|library)\s+')
 _DART_CONTROL_FLOW = {'if', 'for', 'while', 'switch', 'catch', 'else', 'do', 'try'}
 _DART_REJECT_PRECEDING = {'return', 'throw', 'yield', 'await', 'new', 'assert', 'const'}
 
+# Patterns for detecting test files (name-based).
+_TEST_FILE_RE = re.compile(
+    r'(?:_tests?\.(?:rs|dart)$)|(?:^tests?\.(?:rs|dart)$)|(?:^test_.*\.(?:rs|dart)$)'
+)
+
+
+def is_test_file(path: Path) -> bool:
+    """Return True if the file is a test file based on name or directory."""
+    name = path.name
+    if _TEST_FILE_RE.search(name):
+        return True
+    # Files inside a tests/ directory
+    return any(part == 'tests' for part in path.parts)
+
 
 def is_rust_import(line: str) -> bool:
     return bool(_RUST_IMPORT_RE.match(line))
@@ -223,8 +245,13 @@ def analyse_file(
     lang: str,
     default_file_limit: int,
     default_method_limit: int,
+    test_file_limit: Optional[int] = None,
+    test_method_limit: Optional[int] = None,
 ) -> list[Violation]:
     """Analyse a single file and return violations."""
+
+    test_fl = test_file_limit if test_file_limit is not None else default_file_limit
+    test_ml = test_method_limit if test_method_limit is not None else default_method_limit
 
     try:
         lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
@@ -236,6 +263,9 @@ def analyse_file(
     detect_func = detect_rust_fn if lang == 'rust' else detect_dart_func
 
     violations: list[Violation] = []
+
+    # Determine if the whole file is a test file (name/directory based).
+    whole_file_is_test = is_test_file(path)
 
     # --- file-level override ---
     file_limit = default_file_limit
@@ -256,9 +286,11 @@ def analyse_file(
         if cfg_test_indices:
             # Production = everything before the first #[cfg(test)]
             prod_lines = lines[:cfg_test_indices[0]]
+            prod_fl = test_fl if whole_file_is_test else file_limit
+            prod_ml = test_ml if whole_file_is_test else default_method_limit
             violations.extend(
                 _check_portion(path, prod_lines, 0, is_import, detect_func,
-                               file_limit, default_method_limit, 'production')
+                               prod_fl, prod_ml, 'production')
             )
             # Each #[cfg(test)] block = from index[i] to index[i+1] or end
             for j, start_idx in enumerate(cfg_test_indices):
@@ -266,17 +298,21 @@ def analyse_file(
                 test_lines = lines[start_idx:end_idx]
                 violations.extend(
                     _check_portion(path, test_lines, start_idx, is_import, detect_func,
-                                   file_limit, default_method_limit, 'test')
+                                   max(file_limit, test_fl), test_ml, 'test')
                 )
         else:
+            fl = test_fl if whole_file_is_test else file_limit
+            ml = test_ml if whole_file_is_test else default_method_limit
             violations.extend(
                 _check_portion(path, lines, 0, is_import, detect_func,
-                               file_limit, default_method_limit, None)
+                               fl, ml, None)
             )
     else:
+        fl = test_fl if whole_file_is_test else file_limit
+        ml = test_ml if whole_file_is_test else default_method_limit
         violations.extend(
             _check_portion(path, lines, 0, is_import, detect_func,
-                           file_limit, default_method_limit, None)
+                           fl, ml, None)
         )
 
     return violations
@@ -368,6 +404,10 @@ def main() -> None:
     ap.add_argument('--lang', required=True, choices=['rust', 'dart'])
     ap.add_argument('--max-file-lines', type=int, default=200)
     ap.add_argument('--max-method-lines', type=int, default=30)
+    ap.add_argument('--max-test-file-lines', type=int, default=None,
+                    help='File line limit for test files (defaults to --max-file-lines)')
+    ap.add_argument('--max-test-method-lines', type=int, default=None,
+                    help='Method line limit for test files (defaults to --max-method-lines)')
     ap.add_argument('--warn-only', action='store_true',
                     help='Emit violations as warnings instead of errors (never fail)')
     ap.add_argument('paths', nargs='+', help='Files or directories to scan')
@@ -384,7 +424,9 @@ def main() -> None:
     all_violations: list[Violation] = []
     for t in targets:
         all_violations.extend(
-            analyse_file(t, args.lang, args.max_file_lines, args.max_method_lines)
+            analyse_file(t, args.lang, args.max_file_lines, args.max_method_lines,
+                         test_file_limit=args.max_test_file_lines,
+                         test_method_limit=args.max_test_method_lines)
         )
 
     # --- warn-only mode ---

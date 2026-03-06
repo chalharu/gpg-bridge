@@ -1,3 +1,4 @@
+// ci:max-file-lines 210
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
@@ -45,85 +46,41 @@ pub struct AppError {
 }
 
 impl AppError {
+    fn new(kind: AppErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+            instance: None,
+            rate_limit: None,
+        }
+    }
+
     pub fn not_acceptable(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::NotAcceptable,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::NotAcceptable, detail)
     }
-
     pub fn unauthorized(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Unauthorized,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Unauthorized, detail)
     }
-
     pub fn validation(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Validation,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Validation, detail)
     }
-
     pub fn database(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Database,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Database, detail)
     }
-
     pub fn internal(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Internal,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Internal, detail)
     }
-
     pub fn conflict(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Conflict,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Conflict, detail)
     }
-
     pub fn not_found(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::NotFound,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::NotFound, detail)
     }
-
     pub fn gone(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::Gone,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::Gone, detail)
     }
-
     pub fn too_many_requests(detail: impl Into<String>) -> Self {
-        Self {
-            kind: AppErrorKind::TooManyRequests,
-            detail: detail.into(),
-            instance: None,
-            rate_limit: None,
-        }
+        Self::new(AppErrorKind::TooManyRequests, detail)
     }
 
     /// Attach rate limit metadata (used for 429 response headers).
@@ -257,6 +214,8 @@ fn append_rate_limit_response_headers(headers: &mut axum::http::HeaderMap, meta:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::rate_limit::headers::{RATE_LIMIT, RATE_LIMIT_POLICY};
+    use axum::http::header::RETRY_AFTER;
 
     #[test]
     fn validation_error_returns_problem_json() {
@@ -288,5 +247,77 @@ mod tests {
         assert_eq!(problem.title, "Database error");
         assert_eq!(problem.status, 503);
         assert_eq!(problem.instance, Some("/health".to_owned()));
+    }
+
+    #[test]
+    fn constructors_map_to_expected_problem_details() {
+        let cases = [
+            (
+                AppError::unauthorized("auth failed"),
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized",
+                "https://gpg-bridge.dev/problems/unauthorized",
+            ),
+            (
+                AppError::conflict("conflict"),
+                StatusCode::CONFLICT,
+                "Conflict",
+                "https://gpg-bridge.dev/problems/conflict",
+            ),
+            (
+                AppError::not_found("missing"),
+                StatusCode::NOT_FOUND,
+                "Not found",
+                "https://gpg-bridge.dev/problems/not-found",
+            ),
+            (
+                AppError::gone("gone"),
+                StatusCode::GONE,
+                "Gone",
+                "https://gpg-bridge.dev/problems/gone",
+            ),
+            (
+                AppError::internal("internal"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error",
+                "https://gpg-bridge.dev/problems/internal",
+            ),
+        ];
+
+        for (app_error, expected_status, expected_title, expected_type) in cases {
+            let problem = app_error.to_problem_details();
+            assert_eq!(problem.status, expected_status.as_u16());
+            assert_eq!(problem.title, expected_title);
+            assert_eq!(problem.problem_type, expected_type);
+        }
+    }
+
+    #[test]
+    fn too_many_requests_response_includes_rate_limit_headers() {
+        let mut error = AppError::too_many_requests("slow down");
+        error.set_rate_limit_headers(60, 60, 0, 30);
+
+        let response = error.into_response();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "30");
+        assert_eq!(
+            response.headers().get(&RATE_LIMIT_POLICY).unwrap(),
+            "\"default\";q=60;w=60"
+        );
+        assert_eq!(
+            response.headers().get(&RATE_LIMIT).unwrap(),
+            "\"default\";r=0;t=30"
+        );
+    }
+
+    #[test]
+    fn anyhow_error_converts_to_internal_error() {
+        let app_error = AppError::from(anyhow::anyhow!("boom"));
+        let problem = app_error.to_problem_details();
+
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.title, "Internal server error");
+        assert!(problem.detail.contains("internal operation failed: boom"));
     }
 }

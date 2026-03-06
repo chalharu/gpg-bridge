@@ -318,3 +318,88 @@ fn config_accepts_standard_quota_of_one() {
     let config = result.unwrap();
     assert_eq!(config.rate_limit_standard_quota, 1);
 }
+
+#[test]
+fn config_rejects_zero_values_for_remaining_validation_guards() {
+    let cases = [
+        (
+            "SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS",
+            "SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS",
+        ),
+        (
+            "SERVER_RATE_LIMIT_STANDARD_QUOTA",
+            "SERVER_RATE_LIMIT_STANDARD_QUOTA",
+        ),
+        (
+            "SERVER_DEVICE_JWT_VALIDITY_SECONDS",
+            "SERVER_DEVICE_JWT_VALIDITY_SECONDS",
+        ),
+        (
+            "SERVER_PAIRING_JWT_VALIDITY_SECONDS",
+            "SERVER_PAIRING_JWT_VALIDITY_SECONDS",
+        ),
+        (
+            "SERVER_CLIENT_JWT_VALIDITY_SECONDS",
+            "SERVER_CLIENT_JWT_VALIDITY_SECONDS",
+        ),
+        (
+            "SERVER_REQUEST_JWT_VALIDITY_SECONDS",
+            "SERVER_REQUEST_JWT_VALIDITY_SECONDS",
+        ),
+        (
+            "SERVER_UNCONSUMED_PAIRING_LIMIT",
+            "SERVER_UNCONSUMED_PAIRING_LIMIT",
+        ),
+    ];
+
+    for (env_key, expected_message) in cases {
+        let result = AppConfig::from_lookup(&|key| match key {
+            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+            k if k == env_key => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert!(result.is_err(), "{env_key} should be rejected when zero");
+        assert!(
+            result.unwrap_err().to_string().contains(expected_message),
+            "expected error message to mention {expected_message}"
+        );
+    }
+}
+
+#[test]
+fn config_rejects_unpaired_client_max_age_overflow() {
+    let result = AppConfig::from_lookup(&|key| match key {
+        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some(u64::MAX.to_string()),
+        _ => None,
+    });
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("overflows when converted to seconds")
+    );
+}
+
+#[test]
+fn config_rejects_unpaired_client_max_age_exceeding_upper_bound() {
+    let result = AppConfig::from_lookup(&|key| match key {
+        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some("876001".to_owned()),
+        _ => None,
+    });
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds maximum allowed value")
+    );
+}
