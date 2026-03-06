@@ -623,6 +623,16 @@ jobs:
           path: mobile/coverage
         continue-on-error: true
 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get (for Sonar analysis)
+        working-directory: mobile
+        run: flutter pub get
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
