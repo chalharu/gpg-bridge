@@ -524,33 +524,6 @@ jobs:
           path: mobile/coverage
         continue-on-error: true
 
-      - name: Convert LCOV to SonarCloud generic coverage format
-        run: |
-          python3 -c "
-          import os, sys
-          out = ['<coverage version=\"1\">']
-          for lcov_path in ['lcov-rust.info', 'mobile/coverage/lcov.info']:
-              if not os.path.isfile(lcov_path):
-                  continue
-              current_file = None
-              for line in open(lcov_path):
-                  line = line.strip()
-                  if line.startswith('SF:'):
-                      current_file = line[3:]
-                      out.append(f'  <file path=\"{current_file}\">')
-                  elif line.startswith('DA:') and current_file:
-                      parts = line[3:].split(',')
-                      covered = 'true' if int(parts[1]) > 0 else 'false'
-                      out.append(f'    <lineToCover lineNumber=\"{parts[0]}\" covered=\"{covered}\"/>')
-                  elif line == 'end_of_record' and current_file:
-                      out.append('  </file>')
-                      current_file = None
-          out.append('</coverage>')
-          with open('sonar-coverage.xml', 'w') as f:
-              f.write('\n'.join(out))
-          print(f'Generated sonar-coverage.xml ({len(out)} lines)')
-          "
-
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
