@@ -1,10 +1,22 @@
 # Production build for gpg-bridge-server
 # Usage: docker build -f Dockerfile.server -t gpg-bridge-server .
+#
+# Cross-compilation: The builder stage runs on the host platform
+# ($BUILDPLATFORM) and cross-compiles for the target via tonistiigi/xx.
+# This avoids slow QEMU emulation for Rust compilation.
 
-# ── Stage 1: Build ───────────────────────────────────────────────────
-FROM rust:1.93-alpine AS builder
+# ── Stage 1: Build (cross-compile) ───────────────────────────────────
+FROM --platform=$BUILDPLATFORM rust:1.93-alpine AS builder
 
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static perl make
+# Cross-compilation helpers
+COPY --from=tonistiigi/xx / /
+ARG TARGETPLATFORM
+
+# Host build tools
+RUN apk add --no-cache clang lld pkgconfig perl make
+
+# Target libraries (xx-apk installs for the target architecture)
+RUN xx-apk add --no-cache musl-dev openssl-dev openssl-libs-static
 
 WORKDIR /build
 
@@ -21,21 +33,23 @@ RUN mkdir -p server/src daemon/src server/migrations && \
     echo "fn main() {}" > daemon/src/main.rs
 
 # 3) Build dependencies (cached unless Cargo.toml/Cargo.lock change)
-RUN cargo build --release --package gpg-bridge-server
+RUN xx-cargo build --release --package gpg-bridge-server
 
 # 4) Remove dummy artefacts so the real build is not considered fresh
-RUN rm -rf server/src daemon/src server/migrations \
-    target/release/.fingerprint/gpg-bridge-server-* \
-    target/release/deps/gpg_bridge_server-* \
-    target/release/gpg-bridge-server
+RUN rm -rf server/src daemon/src server/migrations && \
+    find target -type d -name 'gpg-bridge-server-*' -exec rm -rf {} + 2>/dev/null; \
+    find target -type f \( -name 'gpg_bridge_server*' -o -name 'libgpg_bridge_server*' -o -name 'gpg-bridge-server' \) -delete 2>/dev/null; \
+    true
 
 # 5) Copy real source code + migrations
 COPY server/ server/
 COPY daemon/ daemon/
 
-# 6) Build the real binary
-RUN cargo build --release --package gpg-bridge-server && \
-    strip target/release/gpg-bridge-server
+# 6) Build the real binary and verify it matches the target platform
+RUN xx-cargo build --release --package gpg-bridge-server && \
+    BINARY=$(find target -path '*/release/gpg-bridge-server' -type f | head -1) && \
+    xx-verify "$BINARY" && \
+    cp "$BINARY" /usr/local/bin/gpg-bridge-server
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────
 FROM alpine:3.21 AS runtime
@@ -44,7 +58,7 @@ FROM alpine:3.21 AS runtime
 RUN apk add --no-cache ca-certificates-bundle && \
     addgroup -S app && adduser -S app -G app
 
-COPY --from=builder /build/target/release/gpg-bridge-server /usr/local/bin/gpg-bridge-server
+COPY --from=builder /usr/local/bin/gpg-bridge-server /usr/local/bin/gpg-bridge-server
 
 USER app
 
