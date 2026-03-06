@@ -178,6 +178,7 @@ jobs:
         with:
           files: lcov-rust.info
           flags: rust
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
@@ -250,6 +251,7 @@ jobs:
         with:
           files: mobile/coverage/lcov.info
           flags: flutter
+          disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
@@ -298,6 +300,18 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew app:testDebugUnitTest
 
+      - name: Generate Android coverage report
+        working-directory: mobile/android
+        run: ./gradlew app:jacocoTestReport
+
+      - name: Upload Android coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+          flags: android
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   # ---------------------------------------------------------------------------
   # iOS native tests (XCTest) — parallel with other gates
   # ---------------------------------------------------------------------------
@@ -335,7 +349,7 @@ jobs:
       - name: Cache Xcode DerivedData
         uses: actions/cache@v4
         with:
-          path: ~/Library/Developer/Xcode/DerivedData
+          path: mobile/ios/DerivedData
           key: deriveddata-${{ runner.os }}-${{ hashFiles('mobile/ios/Podfile', 'mobile/pubspec.lock', 'mobile/ios/Runner.xcodeproj/project.pbxproj') }}
           restore-keys: |
             deriveddata-${{ runner.os }}-
@@ -347,6 +361,8 @@ jobs:
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -derivedDataPath DerivedData \
+            -enableCodeCoverage YES \
             CODE_SIGNING_ALLOWED=NO \
             -quiet
 
@@ -359,7 +375,33 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
             -only-testing:RunnerTests \
             -resultBundlePath TestResults \
+            -derivedDataPath DerivedData \
+            -enableCodeCoverage YES \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Convert Xcode coverage to lcov
+        working-directory: mobile/ios
+        run: |
+          PROFDATA=$(find DerivedData/Build/ProfileData -name 'Coverage.profdata' -type f 2>/dev/null | head -1)
+          if [ -z "$PROFDATA" ]; then
+            PROFDATA=$(find TestResults.xcresult -name '*.profdata' -type f 2>/dev/null | head -1)
+          fi
+          BINARY=$(find DerivedData/Build/Products/Debug-iphonesimulator -name 'Runner' -type f -perm /111 2>/dev/null | grep -v '.dSYM' | head -1)
+          if [ -z "$PROFDATA" ] || [ -z "$BINARY" ]; then
+            echo "::warning::iOS coverage data not found (profdata=${PROFDATA:-none}, binary=${BINARY:-none})"
+            exit 0
+          fi
+          xcrun llvm-cov export -format=lcov -instr-profile="$PROFDATA" "$BINARY" > ../../lcov-ios.info
+          echo "iOS coverage exported: $(wc -l < ../../lcov-ios.info) lines"
+
+      - name: Upload iOS coverage to Codecov
+        if: hashFiles('lcov-ios.info') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov-ios.info
+          flags: ios
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # Security audit (Rust) — parallel with other gates

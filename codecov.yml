@@ -1,0 +1,33 @@
+codecov:
+  require_ci_to_pass: true
+
+flags:
+  rust:
+    carryforward: true
+  flutter:
+    carryforward: true
+  android:
+    carryforward: true
+  ios:
+    carryforward: true
+
+coverage:
+  status:
+    project:
+      default:
+        flags:
+          - rust
+          - flutter
+      android:
+        flags:
+          - android
+        informational: true
+      ios:
+        flags:
+          - ios
+        informational: true
+    patch:
+      default:
+        flags:
+          - rust
+          - flutter
