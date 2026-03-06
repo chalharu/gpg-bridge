@@ -385,3 +385,21 @@ fn config_rejects_unpaired_client_max_age_overflow() {
             .contains("overflows when converted to seconds")
     );
 }
+
+#[test]
+fn config_rejects_unpaired_client_max_age_exceeding_upper_bound() {
+    let result = AppConfig::from_lookup(&|key| match key {
+        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some("876001".to_owned()),
+        _ => None,
+    });
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds maximum allowed value")
+    );
+}
