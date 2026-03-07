@@ -633,6 +633,15 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
+      - name: Generate fallback Flutter coverage for Sonar
+        if: needs.flutter-coverage.result != 'success'
+        working-directory: mobile
+        run: |
+          # Sonar cannot carry forward the previous Dart lcov report by itself.
+          # When the dedicated flutter-coverage job is skipped on Rust-only PRs,
+          # generate a fresh report here so mobile coverage remains visible.
+          flutter test --coverage
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
