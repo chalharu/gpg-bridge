@@ -1,5 +1,26 @@
 use super::*;
 
+async fn spawn_single_response_server(response: String) -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await;
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    addr
+}
+
+fn test_http_client(timeout: std::time::Duration) -> Client {
+    Client::builder().timeout(timeout).build().unwrap()
+}
+
 #[test]
 fn decode_jws_payload_parses_valid_jwt() {
     let jwt = build_test_jwt(1000, 2000);
@@ -78,35 +99,19 @@ fn needs_refresh_returns_false_when_exp_lte_iat() {
 
 #[tokio::test]
 async fn refresh_token_handles_connection_error() {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_millis(100))
-        .build()
-        .unwrap();
+    let client = test_http_client(std::time::Duration::from_millis(100));
     let result = refresh_token(&client, "http://127.0.0.1:1", "jwt").await;
     assert!(matches!(result, Err(TokenRefreshError::Other(_))));
 }
 
 #[tokio::test]
 async fn refresh_token_returns_re_pairing_on_401() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    let addr = spawn_single_response_server(
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
+    )
+    .await;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 401 Unauthorized\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap();
+    let client = test_http_client(std::time::Duration::from_secs(2));
     let result = refresh_token(&client, &format!("http://{addr}"), "old-jwt").await;
     assert!(matches!(
         result,
@@ -116,25 +121,12 @@ async fn refresh_token_returns_re_pairing_on_401() {
 
 #[tokio::test]
 async fn refresh_token_returns_re_pairing_on_404() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    let addr = spawn_single_response_server(
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
+    )
+    .await;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 404 Not Found\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap();
+    let client = test_http_client(std::time::Duration::from_secs(2));
     let result = refresh_token(&client, &format!("http://{addr}"), "old-jwt").await;
     assert!(matches!(
         result,
@@ -144,30 +136,15 @@ async fn refresh_token_returns_re_pairing_on_404() {
 
 #[tokio::test]
 async fn refresh_token_parses_new_jwt() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    let body = r#"{"client_jwt":"new-jwt-value"}"#;
+    let addr = spawn_single_response_server(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body,
+    ))
+    .await;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let body = r#"{"client_jwt":"new-jwt-value"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body,
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap();
+    let client = test_http_client(std::time::Duration::from_secs(2));
     let new_jwt = refresh_token(&client, &format!("http://{addr}"), "old-jwt")
         .await
         .unwrap();
