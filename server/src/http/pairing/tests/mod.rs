@@ -1,11 +1,16 @@
 use axum::Router;
 use axum::body::Body;
+use axum::http::{Request, header};
 use axum::routing::{delete, get, post};
 use serde_json::json;
 
 use crate::http::AppState;
-use crate::jwt::{DeviceAssertionClaims, PairingClaims, PayloadType, jwk_to_json, sign_jws};
-use crate::repository::ClientRow;
+use crate::jwt::{
+    DeviceAssertionClaims, PairingClaims, PayloadType, generate_signing_key_pair, jwk_to_json,
+    sign_jws,
+};
+use crate::repository::{ClientPairingRow, ClientRow, PairingRow};
+use crate::test_support::{MockRepository, make_signing_key_row};
 
 use super::{
     delete_pairing_by_daemon, delete_pairing_by_phone, get_pairing_token, pair_device,
@@ -46,6 +51,110 @@ fn build_app(state: AppState) -> Router {
         .route("/pairing/refresh", post(refresh_client_jwt))
         .route("/pairing/gpg-keys", post(query_gpg_keys))
         .with_state(state)
+}
+
+fn make_pairing_repo() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRepository) {
+    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
+    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    (priv_server, pub_server, server_kid, MockRepository::new(sk))
+}
+
+fn add_client_with_assertion_key(
+    repo: &MockRepository,
+    client_id: &str,
+) -> (josekit::jwk::Jwk, String) {
+    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
+    repo.clients
+        .lock()
+        .unwrap()
+        .push(make_client_with_public_key(
+            client_id,
+            &pub_client,
+            &client_kid,
+        ));
+    (priv_client, client_kid)
+}
+
+fn add_pairing(repo: &MockRepository, pairing_id: &str, expired: &str, client_id: Option<&str>) {
+    repo.pairings.lock().unwrap().push(PairingRow {
+        pairing_id: pairing_id.to_owned(),
+        expired: expired.to_owned(),
+        client_id: client_id.map(str::to_owned),
+    });
+}
+
+fn add_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) {
+    repo.client_pairings_data
+        .lock()
+        .unwrap()
+        .push(ClientPairingRow {
+            client_id: client_id.into(),
+            pairing_id: pairing_id.into(),
+            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
+        });
+}
+
+fn get_pairing_token_request() -> Request<Body> {
+    Request::get("/pairing-token").body(Body::empty()).unwrap()
+}
+
+fn pair_device_request(pairing_jwt: &str, device_assertion: &str) -> Request<Body> {
+    let body_json = json!({ "pairing_jwt": pairing_jwt });
+    Request::post("/pairing")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
+        .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+        .unwrap()
+}
+
+#[allow(dead_code)]
+fn pair_device_json_request(body_json: serde_json::Value, device_assertion: &str) -> Request<Body> {
+    Request::post("/pairing")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
+        .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+        .unwrap()
+}
+
+fn delete_pairing_by_phone_request(pairing_id: &str, device_assertion: &str) -> Request<Body> {
+    Request::delete(format!("/pairing/{pairing_id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn delete_pairing_by_daemon_request(client_jwt: &str) -> Request<Body> {
+    let body_json = json!({ "client_jwt": client_jwt });
+    Request::delete("/pairing")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+        .unwrap()
+}
+
+#[allow(dead_code)]
+fn refresh_pairing_request(client_jwt: &str) -> Request<Body> {
+    let body_json = json!({ "client_jwt": client_jwt });
+    Request::post("/pairing/refresh")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+        .unwrap()
+}
+
+#[allow(dead_code)]
+fn refresh_pairing_json_request(body_json: serde_json::Value) -> Request<Body> {
+    Request::post("/pairing/refresh")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+        .unwrap()
+}
+
+#[allow(dead_code)]
+fn pairing_session_request(auth_header: Option<&str>) -> Request<Body> {
+    let mut builder = Request::get("/pairing-session").header("X-Forwarded-For", "10.0.0.1");
+    if let Some(value) = auth_header {
+        builder = builder.header(header::AUTHORIZATION, value);
+    }
+    builder.body(Body::empty()).unwrap()
 }
 
 fn json_body(tokens: &[String]) -> Body {

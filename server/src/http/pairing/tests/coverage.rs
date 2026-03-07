@@ -10,8 +10,9 @@ use crate::test_support::{
 };
 
 use super::{
-    build_app, make_client_row, make_client_with_public_key, make_device_assertion_token,
-    make_pairing_token,
+    add_client_pairing, add_client_with_assertion_key, build_app, delete_pairing_by_daemon_request,
+    get_pairing_token_request, make_client_row, make_client_with_public_key,
+    make_device_assertion_token, make_pairing_repo, make_pairing_token, pair_device_request,
 };
 
 // ===========================================================================
@@ -22,17 +23,12 @@ use super::{
 
 #[tokio::test]
 async fn get_pairing_token_no_signing_key_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let mut repo = MockRepository::new(sk);
+    let (_priv_server, _pub_server, _server_kid, mut repo) = make_pairing_repo();
     repo.signing_key = None; // no active key
     let state = make_test_app_state(repo);
     let app = build_app(state);
 
-    let response = app
-        .oneshot(Request::get("/pairing-token").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -41,30 +37,17 @@ async fn get_pairing_token_no_signing_key_returns_500() {
 
 #[tokio::test]
 async fn pair_device_invalid_token_format_returns_400() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
 
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": "not-a-valid-jwt" });
 
     let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(pair_device_request("not-a-valid-jwt", &device_assertion))
         .await
         .unwrap();
 
@@ -75,17 +58,12 @@ async fn pair_device_invalid_token_format_returns_400() {
 
 #[tokio::test]
 async fn pair_device_unknown_signing_key_returns_400() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
 
     // Generate a DIFFERENT key pair to sign the pairing token
-    let (priv_other, _pub_other, other_kid) = generate_signing_key_pair().unwrap();
+    let (priv_other, _pub_other, other_kid, _) = make_pairing_repo();
 
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
@@ -94,16 +72,8 @@ async fn pair_device_unknown_signing_key_returns_400() {
     let pairing_token = make_pairing_token(&priv_other, &other_kid, "pair-test");
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
     let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(pair_device_request(&pairing_token, &device_assertion))
         .await
         .unwrap();
 
@@ -175,9 +145,7 @@ async fn delete_by_daemon_invalid_jwt_returns_401() {
 
 #[tokio::test]
 async fn delete_by_daemon_pairing_not_found_returns_404() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
     // No client_pairings → not found
 
     let state = make_test_app_state(repo);
@@ -190,15 +158,8 @@ async fn delete_by_daemon_pairing_not_found_returns_404() {
         "fid-1",
         "pair-missing",
     );
-    let body_json = json!({ "client_jwt": client_jwt });
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_daemon_request(&client_jwt))
         .await
         .unwrap();
 
@@ -209,36 +170,19 @@ async fn delete_by_daemon_pairing_not_found_returns_404() {
 
 #[tokio::test]
 async fn delete_by_daemon_last_pairing_deletes_client() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let repo = MockRepository::new(sk);
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
     repo.clients
         .lock()
         .unwrap()
         .push(make_client_row("fid-1", "[]"));
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-only".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    add_client_pairing(&repo, "fid-1", "pair-only");
 
     let state = make_test_app_state(repo);
     let app = build_app(state.clone());
 
     let client_jwt = make_client_jwt(&priv_server, &pub_server, &server_kid, "fid-1", "pair-only");
-    let body_json = json!({ "client_jwt": client_jwt });
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_daemon_request(&client_jwt))
         .await
         .unwrap();
 
