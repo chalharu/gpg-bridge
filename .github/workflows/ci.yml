@@ -612,6 +612,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     needs: [rust-coverage, flutter-coverage, android-native-test, changes]
     if: >-
       always()
@@ -698,6 +701,3 @@ jobs:
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
