@@ -64,6 +64,11 @@ enum ConnectOutcome {
     Error(anyhow::Error),
 }
 
+enum WaitDecision {
+    Return(SignResult),
+    Retry { delay: Duration, next_attempt: u32 },
+}
+
 /// Classification of errors during SSE stream processing.
 #[derive(Debug)]
 enum StreamError {
@@ -92,41 +97,86 @@ pub(crate) async fn wait_for_sign_result(
         }
 
         let bearer = build_sse_bearer(flow_state, &sse_url)?;
-        match connect_sse(client, &sse_url, &bearer).await {
-            ConnectOutcome::Response(resp) => {
-                attempt = 0;
-                match process_stream(resp, config, flow_state, expiry).await {
-                    Ok(result) => return Ok(result),
-                    Err(StreamError::Terminal(err)) => {
-                        return Err(err);
-                    }
-                    Err(StreamError::Transient(err)) => {
-                        tracing::debug!(?err, "SSE stream interrupted, reconnecting");
-                        let delay = compute_backoff(config, attempt);
-                        if sleep_until_or_expiry(delay, expiry).await {
-                            return Ok(SignResult::Expired);
-                        }
-                        attempt = attempt.saturating_add(1);
-                    }
-                }
-            }
-            ConnectOutcome::RateLimit(retry_after) => {
-                let backoff = compute_backoff(config, attempt);
-                let delay = std::cmp::max(backoff, retry_after);
+        match evaluate_wait_decision(
+            client, config, flow_state, &sse_url, &bearer, attempt, expiry,
+        )
+        .await?
+        {
+            WaitDecision::Return(result) => return Ok(result),
+            WaitDecision::Retry {
+                delay,
+                next_attempt,
+            } => {
                 if sleep_until_or_expiry(delay, expiry).await {
                     return Ok(SignResult::Expired);
                 }
-                attempt = attempt.saturating_add(1);
-            }
-            ConnectOutcome::Error(err) => {
-                tracing::warn!(?err, attempt, "sign-events SSE connect failed");
-                let delay = compute_backoff(config, attempt);
-                if sleep_until_or_expiry(delay, expiry).await {
-                    return Ok(SignResult::Expired);
-                }
-                attempt = attempt.saturating_add(1);
+                attempt = next_attempt;
             }
         }
+    }
+}
+
+async fn evaluate_wait_decision(
+    client: &Client,
+    config: &SignEventSseConfig,
+    flow_state: &SignFlowState,
+    sse_url: &str,
+    bearer: &HeaderValue,
+    attempt: u32,
+    expiry: tokio::time::Instant,
+) -> anyhow::Result<WaitDecision> {
+    match connect_sse(client, sse_url, bearer).await {
+        ConnectOutcome::Response(response) => {
+            handle_stream_response(response, config, flow_state, attempt, expiry).await
+        }
+        ConnectOutcome::RateLimit(retry_after) => {
+            Ok(rate_limit_retry(config, attempt, retry_after))
+        }
+        ConnectOutcome::Error(err) => Ok(connect_error_retry(config, attempt, err)),
+    }
+}
+
+async fn handle_stream_response(
+    response: reqwest::Response,
+    config: &SignEventSseConfig,
+    flow_state: &SignFlowState,
+    attempt: u32,
+    expiry: tokio::time::Instant,
+) -> anyhow::Result<WaitDecision> {
+    match process_stream(response, config, flow_state, expiry).await {
+        Ok(result) => Ok(WaitDecision::Return(result)),
+        Err(StreamError::Terminal(err)) => Err(err),
+        Err(StreamError::Transient(err)) => {
+            tracing::debug!(?err, "SSE stream interrupted, reconnecting");
+            Ok(WaitDecision::Retry {
+                delay: compute_backoff(config, attempt),
+                next_attempt: attempt.saturating_add(1),
+            })
+        }
+    }
+}
+
+fn rate_limit_retry(
+    config: &SignEventSseConfig,
+    attempt: u32,
+    retry_after: Duration,
+) -> WaitDecision {
+    let backoff = compute_backoff(config, attempt);
+    WaitDecision::Retry {
+        delay: std::cmp::max(backoff, retry_after),
+        next_attempt: attempt.saturating_add(1),
+    }
+}
+
+fn connect_error_retry(
+    config: &SignEventSseConfig,
+    attempt: u32,
+    err: anyhow::Error,
+) -> WaitDecision {
+    tracing::warn!(?err, attempt, "sign-events SSE connect failed");
+    WaitDecision::Retry {
+        delay: compute_backoff(config, attempt),
+        next_attempt: attempt.saturating_add(1),
     }
 }
 

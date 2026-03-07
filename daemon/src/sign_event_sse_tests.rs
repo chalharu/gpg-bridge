@@ -489,6 +489,59 @@ async fn heartbeat_timeout_triggers_reconnect() {
 }
 
 #[tokio::test]
+async fn transient_stream_retry_preserves_attempt_progression() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
+    let config = fast_config();
+    let sse_url = format!("{}/sign-events", flow_state.server_url);
+    let bearer = build_sse_bearer(&flow_state, &sse_url).unwrap();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await.unwrap();
+        socket.write_all(sse_headers().as_bytes()).await.unwrap();
+        drop(socket);
+    });
+
+    let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+    let attempt = 3;
+    let decision = evaluate_wait_decision(
+        &client,
+        &config,
+        &flow_state,
+        &sse_url,
+        &bearer,
+        attempt,
+        tokio::time::Instant::now() + Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+
+    match decision {
+        WaitDecision::Retry {
+            delay,
+            next_attempt,
+        } => {
+            let expected_base = config
+                .initial_backoff
+                .saturating_mul(2_u32.saturating_pow(attempt.min(16)))
+                .min(config.max_backoff);
+            let min_expected_delay = expected_base
+                .saturating_sub(Duration::from_millis(expected_base.as_millis() as u64 / 4));
+
+            assert!(delay >= min_expected_delay);
+            assert!(delay <= expected_base);
+            assert_eq!(next_attempt, attempt + 1);
+        }
+        WaitDecision::Return(result) => {
+            panic!("expected retry decision, got result: {result:?}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn decryption_failure_returns_terminal_error() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
