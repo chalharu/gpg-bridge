@@ -124,6 +124,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -159,6 +160,14 @@ jobs:
           cache-on-failure: true
           cache-all-crates: true
           prefix-key: v0-rust-coverage
+
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.theseus/postgresql
+          key: embedded-postgres-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            embedded-postgres-${{ runner.os }}-
 
       - name: Clean stale cache on lockfile change
         if: steps.cargo-lock-check.outputs.cache-hit != 'true'
@@ -558,10 +567,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     needs: [android-native-test, flutter-lint, flutter-coverage, changes]
     if: >-
       always()
-      && startsWith(github.ref, 'refs/tags/v')
+      && (needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true')
       && (needs.android-native-test.result == 'success' || needs.android-native-test.result == 'skipped')
       && (needs.flutter-lint.result == 'success' || needs.flutter-lint.result == 'skipped')
       && (needs.flutter-coverage.result == 'success' || needs.flutter-coverage.result == 'skipped')
@@ -570,6 +584,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Flutter
+        if: needs.flutter-coverage.result != 'success'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -595,14 +610,58 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
+      - name: Compute Android build version
+        id: apk_version
+        run: |
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            BUILD_NAME="${GITHUB_REF_NAME#v}"
+          else
+            BUILD_NAME="0.0.0-sha.${SHORT_SHA}"
+          fi
+          BUILD_NUMBER="$((16#${SHORT_SHA}))"
+          APK_NAME="gpg-bridge-${BUILD_NAME}.apk"
+          {
+            echo "build_name=${BUILD_NAME}"
+            echo "build_number=${BUILD_NUMBER}"
+            echo "apk_name=${APK_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure Android release signing
+        if: env.ANDROID_KEYSTORE_BASE64 != '' && env.ANDROID_KEY_ALIAS != '' && env.ANDROID_KEYSTORE_PASSWORD != '' && env.ANDROID_KEY_PASSWORD != ''
+        working-directory: mobile/android
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release-keystore.jks
+          cat > key.properties <<EOF
+          storeFile=release-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
       - name: Build APK (release)
         working-directory: mobile
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release \
+            --build-name "${{ steps.apk_version.outputs.build_name }}" \
+            --build-number "${{ steps.apk_version.outputs.build_number }}"
+
+      - name: Rename APK output
+        run: |
+          mv mobile/build/app/outputs/flutter-apk/app-release.apk \
+            "mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}
 
       - name: Upload APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: mobile/build/app/outputs/flutter-apk/app-release.apk
+          files: mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}
 
   # ---------------------------------------------------------------------------
   # SonarCloud analysis
@@ -658,15 +717,61 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Rust
+        if: needs.rust-coverage.result != 'success'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        if: needs.rust-coverage.result != 'success'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Download Android coverage artifact
+        if: needs.android-native-test.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-android
+          path: .artifacts/android
+        continue-on-error: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
+      - name: Generate fallback Rust coverage for Sonar
+        if: needs.rust-coverage.result != 'success'
+        run: |
+          # Sonar cannot carry forward the previous Rust lcov report by itself.
+          # When the dedicated rust-coverage job is skipped on Flutter-only PRs,
+          # generate a fresh report here so Rust coverage remains visible.
+          # This fallback is not the quality gate for Rust changes.
+          cargo llvm-cov --workspace --lcov --output-path lcov-rust.info -- --include-ignored
+
       - name: Flutter pub get (for Sonar analysis)
+        if: needs.flutter-coverage.result != 'success'
         working-directory: mobile
         run: flutter pub get
+
+      - name: Generate fallback Flutter coverage for Sonar
+        if: needs.flutter-coverage.result != 'success'
+        working-directory: mobile
+        run: |
+          # Sonar cannot carry forward the previous Dart lcov report by itself.
+          # When the dedicated flutter-coverage job is skipped on Rust-only PRs,
+          # generate a fresh report here so mobile coverage remains visible.
+          # This fallback is not the quality gate for Flutter changes.
+          flutter test --coverage
+          TOTAL=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf>0) printf "%.1f", lh/lf*100; else print "0.0"}' coverage/lcov.info)
+          echo "Flutter fallback coverage: ${TOTAL}%"
 
       - name: Ensure Android coverage report for Sonar
         if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
@@ -696,8 +801,13 @@ jobs:
       - name: Verify Android coverage report for Sonar
         if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
         run: |
-          test -f mobile/build/app/reports/jacoco/test/jacocoTestReport.xml
-          grep -q '<report' mobile/build/app/reports/jacoco/test/jacocoTestReport.xml
+          REPORT=mobile/build/app/reports/jacoco/test/jacocoTestReport.xml
+          if [ ! -f "$REPORT" ]; then
+            echo '::error::Android JaCoCo XML report was not generated for Sonar'
+            find mobile/build -maxdepth 8 -type f | sort | grep -E 'jacoco|test.*xml' || true
+            exit 1
+          fi
+          grep -q '<report' "$REPORT"
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
