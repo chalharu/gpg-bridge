@@ -312,10 +312,22 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew app:jacocoTestReport
 
+      - name: Stage Android coverage report
+        run: |
+          mkdir -p .artifacts/android
+          REPORT=mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+          if [ ! -f "$REPORT" ]; then
+            echo '::error::Android JaCoCo XML report was not generated'
+            find mobile/android/app/build -maxdepth 8 -type f | sort | grep -E 'jacoco|test.*xml' || true
+            exit 1
+          fi
+          cp "$REPORT" .artifacts/android/jacocoTestReport.xml
+          grep -q '<report' .artifacts/android/jacocoTestReport.xml
+
       - name: Upload Android coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+          files: .artifacts/android/jacocoTestReport.xml
           flags: android
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -324,7 +336,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jacoco-android
-          path: mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+          path: .artifacts/android/jacocoTestReport.xml
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # iOS native tests (XCTest) — parallel with other gates
@@ -633,7 +646,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: jacoco-android
-          path: mobile/android/app/build/reports/jacoco/test
+          path: .artifacts/android
         continue-on-error: true
 
       - name: Setup Java
@@ -655,6 +668,11 @@ jobs:
       - name: Ensure Android coverage report for Sonar
         if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
         run: |
+          mkdir -p mobile/android/app/build/reports/jacoco/test
+          if [ -f .artifacts/android/jacocoTestReport.xml ]; then
+            cp .artifacts/android/jacocoTestReport.xml mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+            exit 0
+          fi
           if [ -f mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml ]; then
             exit 0
           fi
@@ -663,6 +681,14 @@ jobs:
           cd android
           ./gradlew app:testDebugUnitTest
           ./gradlew app:jacocoTestReport
+          REPORT=app/build/reports/jacoco/test/jacocoTestReport.xml
+          if [ ! -f "$REPORT" ]; then
+            echo '::error::Android JaCoCo XML report was not generated for Sonar'
+            find app/build -maxdepth 8 -type f | sort | grep -E 'jacoco|test.*xml' || true
+            exit 1
+          fi
+          grep -q '<report' "$REPORT"
+          cp "$REPORT" app/build/reports/jacoco/test/jacocoTestReport.xml
 
       - name: Verify Android coverage report for Sonar
         if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
