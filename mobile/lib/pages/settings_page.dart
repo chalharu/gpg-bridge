@@ -25,17 +25,17 @@ class SettingsPage extends ConsumerWidget {
                 ref.read(themeModeStateProvider.notifier).setThemeMode(value);
               }
             },
-            child: Column(
+            child: const Column(
               children: [
-                const RadioListTile<ThemeMode>(
+                RadioListTile<ThemeMode>(
                   title: Text('システム設定に従う'),
                   value: ThemeMode.system,
                 ),
-                const RadioListTile<ThemeMode>(
+                RadioListTile<ThemeMode>(
                   title: Text('ライト'),
                   value: ThemeMode.light,
                 ),
-                const RadioListTile<ThemeMode>(
+                RadioListTile<ThemeMode>(
                   title: Text('ダーク'),
                   value: ThemeMode.dark,
                 ),
