@@ -703,20 +703,6 @@ jobs:
           path: mobile/coverage
         continue-on-error: true
 
-      - name: Download Android coverage artifact
-        if: needs.android-native-test.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          name: jacoco-android
-          path: .artifacts/android
-        continue-on-error: true
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
       - name: Setup Rust
         if: needs.rust-coverage.result != 'success'
         uses: dtolnay/rust-toolchain@stable
@@ -757,7 +743,6 @@ jobs:
           cargo llvm-cov --workspace --lcov --output-path lcov-rust.info -- --include-ignored
 
       - name: Flutter pub get (for Sonar analysis)
-        if: needs.flutter-coverage.result != 'success'
         working-directory: mobile
         run: flutter pub get
 
