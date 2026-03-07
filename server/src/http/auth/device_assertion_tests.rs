@@ -1,270 +1,30 @@
 use super::*;
 use crate::jwt::{generate_signing_key_pair, jwk_to_json, sign_jws};
-use crate::repository::{
-    AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
-    ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
-    PairingRepository, PairingRow, RequestRepository, RequestRow, SignatureRepository,
-    SigningKeyRepository, SigningKeyRow,
-};
-use async_trait::async_trait;
+use crate::repository::ClientRow;
+use crate::test_support::{MockRepository, make_test_app_state};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Json, Router};
-use std::sync::Arc;
 use tower::ServiceExt;
-
-// ---- Mock repository ----
-
-#[derive(Debug)]
-struct MockRepo {
-    client: Option<ClientRow>,
-    jti_accepted: bool,
-}
-
-impl MockRepo {
-    fn with_client(client: ClientRow) -> Self {
-        Self {
-            client: Some(client),
-            jti_accepted: true,
-        }
-    }
-
-    fn with_replay() -> Self {
-        Self {
-            client: None,
-            jti_accepted: false,
-        }
-    }
-}
-
-#[async_trait]
-impl SigningKeyRepository for MockRepo {
-    async fn store_signing_key(&self, _: &SigningKeyRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn get_active_signing_key(&self) -> anyhow::Result<Option<SigningKeyRow>> {
-        unimplemented!()
-    }
-    async fn get_signing_key_by_kid(&self, _: &str) -> anyhow::Result<Option<SigningKeyRow>> {
-        unimplemented!()
-    }
-    async fn retire_signing_key(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_expired_signing_keys(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl ClientRepository for MockRepo {
-    async fn get_client_by_id(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
-        Ok(self.client.clone())
-    }
-    async fn create_client(&self, _: &ClientRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn client_by_device_token(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
-        unimplemented!()
-    }
-    async fn update_client_device_token(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_device_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_client_public_keys(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn update_client_gpg_keys(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl ClientPairingRepository for MockRepo {
-    async fn get_client_pairings(&self, _: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
-        Ok(vec![])
-    }
-    async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_client_pairing_and_cleanup(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<(bool, bool)> {
-        unimplemented!()
-    }
-    async fn update_client_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl PairingRepository for MockRepo {
-    async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn get_pairing_by_id(&self, _: &str) -> anyhow::Result<Option<PairingRow>> {
-        unimplemented!()
-    }
-    async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn count_unconsumed_pairings(&self, _: &str) -> anyhow::Result<i64> {
-        unimplemented!()
-    }
-    async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl RequestRepository for MockRepo {
-    async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
-        Ok(None)
-    }
-    async fn get_full_request_by_id(&self, _: &str) -> anyhow::Result<Option<FullRequestRow>> {
-        unimplemented!()
-    }
-    async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn create_request(&self, _: &CreateRequestRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn count_pending_requests_for_pairing(&self, _: &str, _: &str) -> anyhow::Result<i64> {
-        unimplemented!()
-    }
-    async fn get_pending_requests_for_client(
-        &self,
-        _: &str,
-    ) -> anyhow::Result<Vec<FullRequestRow>> {
-        unimplemented!()
-    }
-    async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn add_unavailable_client_id(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<Option<(String, String)>> {
-        unimplemented!()
-    }
-    async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
-        unimplemented!()
-    }
-    async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl AuditLogRepository for MockRepo {
-    async fn create_audit_log(&self, _: &AuditLogRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl JtiRepository for MockRepo {
-    async fn store_jti(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        Ok(self.jti_accepted)
-    }
-    async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
-        Ok(0)
-    }
-}
-
-#[async_trait]
-impl CleanupRepository for MockRepo {
-    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl SignatureRepository for MockRepo {
-    async fn run_migrations(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn health_check(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    fn backend_name(&self) -> &'static str {
-        "mock"
-    }
-}
 
 // ---- Helpers ----
 
-fn make_state(repo: impl SignatureRepository + 'static) -> AppState {
-    use crate::http::pairing::notifier::PairingNotifier;
-    use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
+fn make_state(repo: MockRepository) -> AppState {
+    make_test_app_state(repo)
+}
 
-    AppState {
-        repository: Arc::new(repo),
-        base_url: "https://api.example.com".to_owned(),
-        signing_key_secret: "test-secret-key!".to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(crate::http::fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
+fn repo_with_client(client: ClientRow) -> MockRepository {
+    MockRepository {
+        clients: std::sync::Mutex::new(vec![client]),
+        ..Default::default()
+    }
+}
+
+fn replay_repo() -> MockRepository {
+    MockRepository {
+        jti_accepted: false,
+        ..Default::default()
     }
 }
 
@@ -310,7 +70,7 @@ fn make_client_row(pub_jwk: &josekit::jwk::Jwk, kid: &str) -> ClientRow {
 async fn valid_device_assertion_succeeds() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let client = make_client_row(&pub_jwk, &kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     let token = make_valid_token(&priv_jwk, &kid, "https://api.example.com/v1/sign");
@@ -329,7 +89,7 @@ async fn valid_device_assertion_succeeds() {
 
 #[tokio::test]
 async fn missing_auth_header_returns_401() {
-    let state = make_state(MockRepo::with_replay());
+    let state = make_state(replay_repo());
     let app = build_app(state);
 
     let response = app
@@ -346,7 +106,7 @@ async fn wrong_key_returns_401() {
     let (_other_priv, other_pub, other_kid) = generate_signing_key_pair().unwrap();
     // Client has a different key than the one used to sign
     let client = make_client_row(&other_pub, &other_kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     // Token signed with `priv_jwk` but client has `other_pub`
@@ -368,10 +128,7 @@ async fn wrong_key_returns_401() {
 #[tokio::test]
 async fn client_not_found_returns_401() {
     let (priv_jwk, _pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let repo = MockRepo {
-        client: None,
-        jti_accepted: true,
-    };
+    let repo = MockRepository::default();
     let state = make_state(repo);
     let app = build_app(state);
 
@@ -393,7 +150,7 @@ async fn client_not_found_returns_401() {
 async fn wrong_aud_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let client = make_client_row(&pub_jwk, &kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     // Token has wrong audience
@@ -415,7 +172,7 @@ async fn wrong_aud_returns_401() {
 async fn expired_token_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let client = make_client_row(&pub_jwk, &kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     let claims = DeviceAssertionClaims {
@@ -445,7 +202,7 @@ async fn expired_token_returns_401() {
 async fn iss_ne_sub_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let client = make_client_row(&pub_jwk, &kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     let claims = DeviceAssertionClaims {
@@ -485,9 +242,10 @@ async fn jti_replay_returns_401() {
         default_kid: kid.clone(),
         gpg_keys: "[]".into(),
     };
-    let repo = MockRepo {
-        client: Some(client),
-        jti_accepted: false, // simulate replay
+    let repo = MockRepository {
+        clients: std::sync::Mutex::new(vec![client]),
+        jti_accepted: false,
+        ..Default::default()
     };
     let state = make_state(repo);
     let app = build_app(state);
@@ -510,7 +268,7 @@ async fn jti_replay_returns_401() {
 async fn exp_window_too_large_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let client = make_client_row(&pub_jwk, &kid);
-    let state = make_state(MockRepo::with_client(client));
+    let state = make_state(repo_with_client(client));
     let app = build_app(state);
 
     // exp - iat = 120 > 60 → rejected
