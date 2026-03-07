@@ -1,19 +1,6 @@
-use sqlx::SqlitePool;
-
-mod audit_log;
-mod cleanup;
-mod client;
-mod client_pairing;
 mod infrastructure;
-mod jti;
-mod pairing;
 mod request;
-mod signing_key;
-
-#[derive(Debug, Clone)]
-pub struct SqliteRepository {
-    pub(crate) pool: SqlitePool,
-}
+pub type SqliteRepository = super::sql::SqlRepository<sqlx::Sqlite>;
 
 #[cfg(test)]
 pub(crate) mod tests {

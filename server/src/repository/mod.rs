@@ -19,6 +19,7 @@ mod pairing;
 mod postgres;
 mod request;
 mod signing_key;
+mod sql;
 pub(crate) mod sqlite;
 
 #[cfg(test)]
