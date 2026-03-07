@@ -325,6 +325,12 @@ jobs:
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Upload Android coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-android
+          path: mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+
   # ---------------------------------------------------------------------------
   # iOS native tests (XCTest) — parallel with other gates
   # ---------------------------------------------------------------------------
@@ -595,12 +601,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-    needs: [rust-coverage, flutter-coverage, changes]
+    needs: [rust-coverage, flutter-coverage, android-native-test, changes]
     if: >-
       always()
-      && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.flutter == 'true')
+      && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.flutter == 'true' || needs.changes.outputs.android == 'true')
       && (needs.rust-coverage.result == 'success' || needs.rust-coverage.result == 'skipped')
       && (needs.flutter-coverage.result == 'success' || needs.flutter-coverage.result == 'skipped')
+      && (needs.android-native-test.result == 'success' || needs.android-native-test.result == 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -623,6 +630,20 @@ jobs:
           path: mobile/coverage
         continue-on-error: true
 
+      - name: Download Android coverage artifact
+        if: needs.android-native-test.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-android
+          path: mobile/android/app/build/reports/jacoco/test
+        continue-on-error: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -632,6 +653,24 @@ jobs:
       - name: Flutter pub get (for Sonar analysis)
         working-directory: mobile
         run: flutter pub get
+
+      - name: Ensure Android coverage report for Sonar
+        if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
+        run: |
+          if [ -f mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml ]; then
+            exit 0
+          fi
+          cd mobile
+          flutter build apk --config-only
+          cd android
+          ./gradlew app:testDebugUnitTest
+          ./gradlew app:jacocoTestReport
+
+      - name: Verify Android coverage report for Sonar
+        if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
+        run: |
+          test -f mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
+          grep -q '<report' mobile/android/app/build/reports/jacoco/test/jacocoTestReport.xml
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
