@@ -53,8 +53,15 @@ impl TestFixture for SqliteTestFixture {
 // ---------------------------------------------------------------------------
 
 use crate::repository::postgres::PostgresRepository;
+use postgresql_embedded::{PostgreSQL, SettingsBuilder, VersionReq};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use std::path::PathBuf;
+use std::time::Duration;
 use tokio::sync::OnceCell;
+use tokio::time::sleep;
+
+const EMBEDDED_POSTGRES_VERSION: &str = "=18.2.0";
+const EMBEDDED_POSTGRES_RETRY_COUNT: usize = 3;
 
 struct SharedPostgres {
     _postgresql: postgresql_embedded::PostgreSQL,
@@ -68,25 +75,57 @@ unsafe impl Sync for SharedPostgres {}
 
 static SHARED_PG: OnceCell<SharedPostgres> = OnceCell::const_new();
 
+fn build_embedded_postgres() -> PostgreSQL {
+    let version = std::env::var("GPG_BRIDGE_TEST_POSTGRES_VERSION")
+        .unwrap_or_else(|_| EMBEDDED_POSTGRES_VERSION.to_string());
+    let installation_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".theseus")
+        .join("postgresql");
+    let settings = SettingsBuilder::new()
+        .version(VersionReq::parse(&version).expect("invalid postgres version"))
+        .installation_dir(installation_dir)
+        .build();
+    PostgreSQL::new(settings)
+}
+
+async fn start_shared_postgres_with_retry() -> SharedPostgres {
+    for attempt in 1..=EMBEDDED_POSTGRES_RETRY_COUNT {
+        let mut pg = build_embedded_postgres();
+        let start_result = match pg.setup().await {
+            Ok(()) => pg.start().await,
+            Err(error) => Err(error),
+        };
+
+        if let Err(error) = start_result {
+            if attempt == EMBEDDED_POSTGRES_RETRY_COUNT {
+                panic!("PostgreSQL startup failed after {attempt} attempts: {error}");
+            }
+            drop(pg);
+            sleep(Duration::from_secs(attempt as u64)).await;
+            continue;
+        }
+
+        let settings = pg.settings();
+        let connect_options = PgConnectOptions::new()
+            .host(&settings.host)
+            .port(settings.port)
+            .username(&settings.username)
+            .password(&settings.password);
+
+        return SharedPostgres {
+            _postgresql: pg,
+            connect_options,
+        };
+    }
+
+    unreachable!("retry loop should return or panic")
+}
+
 async fn get_shared_postgres() -> &'static SharedPostgres {
     SHARED_PG
-        .get_or_init(|| async {
-            let mut pg = postgresql_embedded::PostgreSQL::default();
-            pg.setup().await.expect("PostgreSQL setup failed");
-            pg.start().await.expect("PostgreSQL start failed");
-
-            let settings = pg.settings();
-            let connect_options = PgConnectOptions::new()
-                .host(&settings.host)
-                .port(settings.port)
-                .username(&settings.username)
-                .password(&settings.password);
-
-            SharedPostgres {
-                _postgresql: pg,
-                connect_options,
-            }
-        })
+        .get_or_init(|| async { start_shared_postgres_with_retry().await })
         .await
 }
 
