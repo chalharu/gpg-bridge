@@ -1,17 +1,29 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use sqlx::{ColumnIndex, Database, Decode, Encode, Executor, FromRow, IntoArguments, Pool, Type};
 
-use super::SqliteRepository;
+use super::DbRepository;
 use crate::repository::{ClientPairingRepository, ClientPairingRow};
 
 #[async_trait]
-impl ClientPairingRepository for SqliteRepository {
+impl<T, DB> ClientPairingRepository for T
+where
+    T: DbRepository<Database = DB> + Send + Sync,
+    DB: Database,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'r> ClientPairingSqlRow: FromRow<'r, DB::Row>,
+    for<'r> T::Count: Decode<'r, DB> + Type<DB>,
+    usize: ColumnIndex<DB::Row>,
+{
     async fn get_client_pairings(&self, client_id: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
-        let rows = sqlx::query_as::<_, SqliteClientPairingRow>(
+        let rows = sqlx::query_as::<_, ClientPairingSqlRow>(
             "SELECT client_id, pairing_id, client_jwt_issued_at FROM client_pairings WHERE client_id = $1",
         )
         .bind(client_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("failed to get client pairings")?;
         Ok(rows.into_iter().map(Into::into).collect())
@@ -29,7 +41,7 @@ impl ClientPairingRepository for SqliteRepository {
         .bind(client_id)
         .bind(pairing_id)
         .bind(client_jwt_issued_at)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("failed to create client pairing")?;
         Ok(())
@@ -44,10 +56,10 @@ impl ClientPairingRepository for SqliteRepository {
             sqlx::query("DELETE FROM client_pairings WHERE client_id = $1 AND pairing_id = $2")
                 .bind(client_id)
                 .bind(pairing_id)
-                .execute(&self.pool)
+                .execute(self.pool())
                 .await
                 .context("failed to delete client pairing")?;
-        Ok(result.rows_affected() > 0)
+        Ok(T::rows_affected(&result) > 0)
     }
 
     async fn delete_client_pairing_and_cleanup(
@@ -56,7 +68,7 @@ impl ClientPairingRepository for SqliteRepository {
         pairing_id: &str,
     ) -> anyhow::Result<(bool, bool)> {
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("failed to begin transaction")?;
@@ -68,11 +80,11 @@ impl ClientPairingRepository for SqliteRepository {
                 .execute(&mut *tx)
                 .await
                 .context("failed to delete client pairing")?;
-        let pairing_deleted = del.rows_affected() > 0;
+        let pairing_deleted = T::rows_affected(&del) > 0;
 
         let mut client_deleted = false;
         if pairing_deleted {
-            let remaining = sqlx::query_scalar::<_, i32>(
+            let remaining = sqlx::query_scalar::<_, T::Count>(
                 "SELECT COUNT(*) FROM client_pairings WHERE client_id = $1",
             )
             .bind(client_id)
@@ -80,7 +92,7 @@ impl ClientPairingRepository for SqliteRepository {
             .await
             .context("failed to count remaining pairings")?;
 
-            if remaining == 0 {
+            if remaining.into() == 0 {
                 sqlx::query("DELETE FROM clients WHERE client_id = $1")
                     .bind(client_id)
                     .execute(&mut *tx)
@@ -106,26 +118,26 @@ impl ClientPairingRepository for SqliteRepository {
         .bind(issued_at)
         .bind(client_id)
         .bind(pairing_id)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("failed to update client_jwt_issued_at")?;
-        Ok(result.rows_affected() > 0)
+        Ok(T::rows_affected(&result) > 0)
     }
 }
 
 #[derive(sqlx::FromRow)]
-struct SqliteClientPairingRow {
+struct ClientPairingSqlRow {
     client_id: String,
     pairing_id: String,
     client_jwt_issued_at: String,
 }
 
-impl From<SqliteClientPairingRow> for ClientPairingRow {
-    fn from(r: SqliteClientPairingRow) -> Self {
+impl From<ClientPairingSqlRow> for ClientPairingRow {
+    fn from(row: ClientPairingSqlRow) -> Self {
         Self {
-            client_id: r.client_id,
-            pairing_id: r.pairing_id,
-            client_jwt_issued_at: r.client_jwt_issued_at,
+            client_id: row.client_id,
+            pairing_id: row.pairing_id,
+            client_jwt_issued_at: row.client_jwt_issued_at,
         }
     }
 }
