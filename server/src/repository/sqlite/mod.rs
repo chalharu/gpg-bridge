@@ -1,18 +1,29 @@
 use sqlx::SqlitePool;
 
-mod audit_log;
-mod cleanup;
-mod client;
-mod client_pairing;
-mod infrastructure;
-mod jti;
-mod pairing;
+use crate::repository::sql::DbRepository;
+
 mod request;
-mod signing_key;
 
 #[derive(Debug, Clone)]
 pub struct SqliteRepository {
     pub(crate) pool: SqlitePool,
+}
+
+impl DbRepository for SqliteRepository {
+    type Database = sqlx::Sqlite;
+    type Count = i32;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Database> {
+        &self.pool
+    }
+
+    fn database_backend_name(&self) -> &'static str {
+        "sqlite"
+    }
+
+    fn rows_affected(result: &<Self::Database as sqlx::Database>::QueryResult) -> u64 {
+        result.rows_affected()
+    }
 }
 
 #[cfg(test)]

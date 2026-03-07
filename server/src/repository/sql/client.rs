@@ -1,17 +1,28 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use sqlx::{ColumnIndex, Database, Decode, Encode, Executor, FromRow, IntoArguments, Pool, Type};
 
-use super::SqliteRepository;
+use super::DbRepository;
 use crate::repository::{ClientRepository, ClientRow};
 
 #[async_trait]
-impl ClientRepository for SqliteRepository {
+impl<T, DB> ClientRepository for T
+where
+    T: DbRepository<Database = DB> + Send + Sync,
+    DB: Database,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'r> ClientSqlRow: FromRow<'r, DB::Row>,
+    for<'r> T::Count: Decode<'r, DB> + Type<DB>,
+    usize: ColumnIndex<DB::Row>,
+{
     async fn get_client_by_id(&self, client_id: &str) -> anyhow::Result<Option<ClientRow>> {
-        let row = sqlx::query_as::<_, SqliteClientRow>(
+        let row = sqlx::query_as::<_, ClientSqlRow>(
             "SELECT client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys FROM clients WHERE client_id = $1",
         )
         .bind(client_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("failed to get client by id")?;
         Ok(row.map(Into::into))
@@ -21,15 +32,15 @@ impl ClientRepository for SqliteRepository {
         sqlx::query(
             "INSERT INTO clients (client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(&row.client_id)
-        .bind(&row.created_at)
-        .bind(&row.updated_at)
-        .bind(&row.device_token)
-        .bind(&row.device_jwt_issued_at)
-        .bind(&row.public_keys)
-        .bind(&row.default_kid)
-        .bind(&row.gpg_keys)
-        .execute(&self.pool)
+        .bind(row.client_id.as_str())
+        .bind(row.created_at.as_str())
+        .bind(row.updated_at.as_str())
+        .bind(row.device_token.as_str())
+        .bind(row.device_jwt_issued_at.as_str())
+        .bind(row.public_keys.as_str())
+        .bind(row.default_kid.as_str())
+        .bind(row.gpg_keys.as_str())
+        .execute(self.pool())
         .await
         .context("failed to create client")?;
         Ok(())
@@ -37,23 +48,23 @@ impl ClientRepository for SqliteRepository {
 
     async fn client_exists(&self, client_id: &str) -> anyhow::Result<bool> {
         let count =
-            sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM clients WHERE client_id = $1")
+            sqlx::query_scalar::<_, T::Count>("SELECT COUNT(*) FROM clients WHERE client_id = $1")
                 .bind(client_id)
-                .fetch_one(&self.pool)
+                .fetch_one(self.pool())
                 .await
                 .context("failed to check client existence")?;
-        Ok(count > 0)
+        Ok(count.into() > 0)
     }
 
     async fn client_by_device_token(
         &self,
         device_token: &str,
     ) -> anyhow::Result<Option<ClientRow>> {
-        let row = sqlx::query_as::<_, SqliteClientRow>(
+        let row = sqlx::query_as::<_, ClientSqlRow>(
             "SELECT client_id, created_at, updated_at, device_token, device_jwt_issued_at, public_keys, default_kid, gpg_keys FROM clients WHERE device_token = $1",
         )
         .bind(device_token)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("failed to get client by device_token")?;
         Ok(row.map(Into::into))
@@ -69,7 +80,7 @@ impl ClientRepository for SqliteRepository {
             .bind(device_token)
             .bind(updated_at)
             .bind(client_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .context("failed to update client device_token")?;
         Ok(())
@@ -85,7 +96,7 @@ impl ClientRepository for SqliteRepository {
             .bind(default_kid)
             .bind(updated_at)
             .bind(client_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .context("failed to update client default_kid")?;
         Ok(())
@@ -94,7 +105,7 @@ impl ClientRepository for SqliteRepository {
     async fn delete_client(&self, client_id: &str) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM clients WHERE client_id = $1")
             .bind(client_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .context("failed to delete client")?;
         Ok(())
@@ -112,7 +123,7 @@ impl ClientRepository for SqliteRepository {
         .bind(issued_at)
         .bind(updated_at)
         .bind(client_id)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("failed to update device_jwt_issued_at")?;
         Ok(())
@@ -134,10 +145,10 @@ impl ClientRepository for SqliteRepository {
         .bind(updated_at)
         .bind(client_id)
         .bind(expected_updated_at)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("failed to update client public_keys")?;
-        Ok(result.rows_affected() > 0)
+        Ok(T::rows_affected(&result) > 0)
     }
 
     async fn update_client_gpg_keys(
@@ -154,15 +165,15 @@ impl ClientRepository for SqliteRepository {
         .bind(updated_at)
         .bind(client_id)
         .bind(expected_updated_at)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("failed to update client gpg_keys")?;
-        Ok(result.rows_affected() > 0)
+        Ok(T::rows_affected(&result) > 0)
     }
 }
 
 #[derive(sqlx::FromRow)]
-struct SqliteClientRow {
+struct ClientSqlRow {
     client_id: String,
     created_at: String,
     updated_at: String,
@@ -173,17 +184,17 @@ struct SqliteClientRow {
     gpg_keys: String,
 }
 
-impl From<SqliteClientRow> for ClientRow {
-    fn from(r: SqliteClientRow) -> Self {
+impl From<ClientSqlRow> for ClientRow {
+    fn from(row: ClientSqlRow) -> Self {
         Self {
-            client_id: r.client_id,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-            device_token: r.device_token,
-            device_jwt_issued_at: r.device_jwt_issued_at,
-            public_keys: r.public_keys,
-            default_kid: r.default_kid,
-            gpg_keys: r.gpg_keys,
+            client_id: row.client_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            device_token: row.device_token,
+            device_jwt_issued_at: row.device_jwt_issued_at,
+            public_keys: row.public_keys,
+            default_kid: row.default_kid,
+            gpg_keys: row.gpg_keys,
         }
     }
 }
