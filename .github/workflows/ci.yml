@@ -706,7 +706,6 @@ jobs:
           cargo llvm-cov --workspace --lcov --output-path lcov-rust.info -- --include-ignored
 
       - name: Flutter pub get (for Sonar analysis)
-        if: needs.flutter-coverage.result != 'success'
         working-directory: mobile
         run: flutter pub get
 
