@@ -65,7 +65,7 @@ class KeystoreMethodCallHandler(
 							call.requireStringArg("alias"),
 						)
 
-						else -> throw IllegalStateException("unsupported method: ${call.method}")
+						else -> error("unsupported method: ${call.method}")
 					}
 
 					postToMainThread(Runnable { result.success(value) })
@@ -234,14 +234,14 @@ class AndroidKeystoreOperations : KeystoreOperations {
 	}
 
 	private fun requireKnownAlias(alias: String) {
-		if (alias != DEVICE_KEY_ALIAS && alias != E2E_KEY_ALIAS) {
-			throw IllegalArgumentException("unsupported alias: $alias")
+		require(alias == DEVICE_KEY_ALIAS || alias == E2E_KEY_ALIAS) {
+			"unsupported alias: $alias"
 		}
 	}
 
 	private fun requireSignAlias(alias: String) {
-		if (alias != DEVICE_KEY_ALIAS) {
-			throw IllegalArgumentException("alias does not support sign/verify: $alias")
+		require(alias == DEVICE_KEY_ALIAS) {
+			"alias does not support sign/verify: $alias"
 		}
 	}
 }
