@@ -7,11 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pull-requests: read
-  packages: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -492,6 +487,9 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs: [rust-lint, rust-coverage, changes]
     if: >-
       always()
