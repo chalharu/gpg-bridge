@@ -56,6 +56,35 @@ pub trait SignatureRepository:
     fn backend_name(&self) -> &'static str;
 }
 
+macro_rules! impl_signature_repository {
+    ($repo_ty:ty, $backend_name:literal, $migration_error:literal) => {
+        #[async_trait::async_trait]
+        impl crate::repository::SignatureRepository for $repo_ty {
+            async fn run_migrations(&self) -> anyhow::Result<()> {
+                crate::repository::MIGRATOR
+                    .run(&self.pool)
+                    .await
+                    .context($migration_error)
+            }
+
+            async fn health_check(&self) -> anyhow::Result<()> {
+                sqlx::query_scalar::<_, i32>("SELECT 1")
+                    .fetch_one(&self.pool)
+                    .await
+                    .context(concat!($backend_name, " health check failed"))?;
+
+                Ok(())
+            }
+
+            fn backend_name(&self) -> &'static str {
+                $backend_name
+            }
+        }
+    };
+}
+
+pub(crate) use impl_signature_repository;
+
 async fn build_postgres_repository(
     config: &AppConfig,
 ) -> anyhow::Result<Arc<dyn SignatureRepository>> {
