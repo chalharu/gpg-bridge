@@ -10,6 +10,14 @@ use sqlx::{
 
 use crate::config::{AppConfig, DatabaseKind, detect_database_kind};
 
+macro_rules! execute_query {
+    ($executor:expr, $sql:expr, $context:literal $(, $param:expr )* $(,)?) => {{
+        let query = sqlx::query($sql);
+        $(let query = query.bind($param);)*
+        query.execute($executor).await.context($context)
+    }};
+}
+
 mod audit_log;
 mod cleanup;
 mod client;

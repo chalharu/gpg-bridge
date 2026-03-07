@@ -7,22 +7,22 @@ use crate::repository::CleanupRepository;
 #[async_trait]
 impl CleanupRepository for PostgresRepository {
     async fn delete_unpaired_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query(
+        let result = execute_query!(
+            &self.pool,
             "DELETE FROM clients WHERE created_at < $1 AND NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id)",
-        )
-        .bind(cutoff)
-        .execute(&self.pool)
-        .await
-        .context("failed to delete unpaired clients")?;
+            "failed to delete unpaired clients",
+            cutoff,
+        )?;
         Ok(result.rows_affected())
     }
 
     async fn delete_expired_device_jwt_clients(&self, cutoff: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM clients WHERE device_jwt_issued_at < $1")
-            .bind(cutoff)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete expired device_jwt clients")?;
+        let result = execute_query!(
+            &self.pool,
+            "DELETE FROM clients WHERE device_jwt_issued_at < $1",
+            "failed to delete expired device_jwt clients",
+            cutoff,
+        )?;
         Ok(result.rows_affected())
     }
 
@@ -33,19 +33,19 @@ impl CleanupRepository for PostgresRepository {
             .await
             .context("failed to begin transaction")?;
 
-        let del = sqlx::query("DELETE FROM client_pairings WHERE client_jwt_issued_at < $1")
-            .bind(cutoff)
-            .execute(&mut *tx)
-            .await
-            .context("failed to delete expired client_jwt pairings")?;
+        let del = execute_query!(
+            &mut *tx,
+            "DELETE FROM client_pairings WHERE client_jwt_issued_at < $1",
+            "failed to delete expired client_jwt pairings",
+            cutoff,
+        )?;
         let removed = del.rows_affected();
 
-        sqlx::query(
+        execute_query!(
+            &mut *tx,
             "DELETE FROM clients WHERE NOT EXISTS (SELECT 1 FROM client_pairings WHERE client_pairings.client_id = clients.client_id) AND NOT EXISTS (SELECT 1 FROM pairings WHERE pairings.client_id = clients.client_id)",
-        )
-        .execute(&mut *tx)
-        .await
-        .context("failed to delete orphaned clients")?;
+            "failed to delete orphaned clients",
+        )?;
 
         tx.commit().await.context("failed to commit transaction")?;
         Ok(removed)
