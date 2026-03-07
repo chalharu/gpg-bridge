@@ -12,6 +12,9 @@ pub use device_assertion::DeviceAssertionAuth;
 pub use error::AuthError;
 pub use sign_jwt::SignJwtAuth;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use axum::http::{self, request::Parts};
 use josekit::jwk::Jwk;
 
