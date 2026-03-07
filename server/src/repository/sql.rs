@@ -66,6 +66,28 @@ mod jti;
 mod pairing;
 mod signing_key;
 
+trait DbRepository {
+    type Database: sqlx::Database;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Database>;
+}
+
+impl DbRepository for crate::repository::PostgresRepository {
+    type Database = sqlx::Postgres;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Database> {
+        &self.pool
+    }
+}
+
+impl DbRepository for crate::repository::SqliteRepository {
+    type Database = sqlx::Sqlite;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Database> {
+        &self.pool
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SqlRepository<DB: Database> {
     pub(crate) pool: Pool<DB>,

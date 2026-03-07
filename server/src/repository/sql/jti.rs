@@ -1,47 +1,58 @@
 use anyhow::Context;
-use async_trait::async_trait;
+use sqlx::{Database, Encode, Executor, IntoArguments, Pool, Type, any::AnyQueryResult};
 
+use super::DbRepository;
 use crate::repository::JtiRepository;
 
-#[async_trait]
-trait CommonJtiRepository: Send + Sync {
-    async fn store_jti_common(&self, jti: &str, expired: &str) -> anyhow::Result<bool>;
-    async fn delete_expired_jtis_common(&self, now: &str) -> anyhow::Result<u64>;
+async fn store_jti<Repository, DB>(
+    repository: &Repository,
+    jti: &str,
+    expired: &str,
+) -> anyhow::Result<bool>
+where
+    Repository: DbRepository<Database = DB> + Send + Sync,
+    DB: Database,
+    for<'q> DB::Arguments<'q>: IntoArguments<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c str: Type<DB> + Encode<'c, DB>,
+    AnyQueryResult: From<DB::QueryResult>,
+{
+    let result =
+        sqlx::query("INSERT INTO jtis (jti, expired) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING")
+            .bind(jti)
+            .bind(expired)
+            .execute(repository.pool())
+            .await
+            .context("failed to store jti")?;
+    Ok(AnyQueryResult::from(result).rows_affected() > 0)
 }
 
-#[async_trait]
-impl<T> JtiRepository for T
+async fn delete_expired_jtis<Repository, DB>(
+    repository: &Repository,
+    now: &str,
+) -> anyhow::Result<u64>
 where
-    T: CommonJtiRepository + Send + Sync,
+    Repository: DbRepository<Database = DB> + Send + Sync,
+    DB: Database,
+    for<'q> DB::Arguments<'q>: IntoArguments<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c str: Type<DB> + Encode<'c, DB>,
+    AnyQueryResult: From<DB::QueryResult>,
 {
+    let result = sqlx::query("DELETE FROM jtis WHERE expired < $1")
+        .bind(now)
+        .execute(repository.pool())
+        .await
+        .context("failed to delete expired jtis")?;
+    Ok(AnyQueryResult::from(result).rows_affected())
+}
+
+impl_for_sql_backends!(JtiRepository {
     async fn store_jti(&self, jti: &str, expired: &str) -> anyhow::Result<bool> {
-        self.store_jti_common(jti, expired).await
+        store_jti(self, jti, expired).await
     }
 
     async fn delete_expired_jtis(&self, now: &str) -> anyhow::Result<u64> {
-        self.delete_expired_jtis_common(now).await
-    }
-}
-
-impl_for_sql_backends!(CommonJtiRepository {
-    async fn store_jti_common(&self, jti: &str, expired: &str) -> anyhow::Result<bool> {
-        let result = execute_query!(
-            "INSERT INTO jtis (jti, expired) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING",
-            &self.pool,
-            "failed to store jti",
-            jti,
-            expired,
-        )?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn delete_expired_jtis_common(&self, now: &str) -> anyhow::Result<u64> {
-        let result = execute_query!(
-            "DELETE FROM jtis WHERE expired < $1",
-            &self.pool,
-            "failed to delete expired jtis",
-            now,
-        )?;
-        Ok(result.rows_affected())
+        delete_expired_jtis(self, now).await
     }
 });

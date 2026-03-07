@@ -1,5 +1,6 @@
 mod infrastructure;
 mod request;
+
 pub type SqliteRepository = super::sql::SqlRepository<sqlx::Sqlite>;
 
 #[cfg(test)]
