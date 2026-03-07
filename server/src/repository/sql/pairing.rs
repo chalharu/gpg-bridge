@@ -56,15 +56,15 @@ impl From<PairingRecord> for PairingRow {
     }
 }
 
-#[async_trait]
-impl CommonPairingRepository for crate::repository::PostgresRepository {
+impl_for_sql_backends!(CommonPairingRepository {
     async fn create_pairing_common(&self, pairing_id: &str, expired: &str) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO pairings (pairing_id, expired) VALUES ($1, $2)")
-            .bind(pairing_id)
-            .bind(expired)
-            .execute(&self.pool)
-            .await
-            .context("failed to create pairing")?;
+        execute_query!(
+            "INSERT INTO pairings (pairing_id, expired) VALUES ($1, $2)",
+            &self.pool,
+            "failed to create pairing",
+            pairing_id,
+            expired,
+        )?;
         Ok(())
     }
 
@@ -72,13 +72,13 @@ impl CommonPairingRepository for crate::repository::PostgresRepository {
         &self,
         pairing_id: &str,
     ) -> anyhow::Result<Option<PairingRow>> {
-        let row = sqlx::query_as::<_, PairingRecord>(
+        let row = fetch_optional_as!(
+            PairingRecord,
             "SELECT pairing_id, expired, client_id FROM pairings WHERE pairing_id = $1",
-        )
-        .bind(pairing_id)
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get pairing by id")?;
+            &self.pool,
+            "failed to get pairing by id",
+            pairing_id,
+        )?;
         Ok(row.map(Into::into))
     }
 
@@ -87,97 +87,34 @@ impl CommonPairingRepository for crate::repository::PostgresRepository {
         pairing_id: &str,
         client_id: &str,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query(
+        let result = execute_query!(
             "UPDATE pairings SET client_id = $1 WHERE pairing_id = $2 AND client_id IS NULL",
-        )
-        .bind(client_id)
-        .bind(pairing_id)
-        .execute(&self.pool)
-        .await
-        .context("failed to consume pairing")?;
+            &self.pool,
+            "failed to consume pairing",
+            client_id,
+            pairing_id,
+        )?;
         Ok(result.rows_affected() > 0)
     }
 
     async fn count_unconsumed_pairings_common(&self, now: &str) -> anyhow::Result<i64> {
-        let count = sqlx::query_scalar::<_, i64>(
+        let count = fetch_one_scalar!(
+            i64,
             "SELECT COUNT(*) FROM pairings WHERE client_id IS NULL AND expired > $1",
-        )
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await
-        .context("failed to count unconsumed pairings")?;
+            &self.pool,
+            "failed to count unconsumed pairings",
+            now,
+        )?;
         Ok(count)
     }
 
     async fn delete_expired_pairings_common(&self, now: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM pairings WHERE expired < $1")
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete expired pairings")?;
+        let result = execute_query!(
+            "DELETE FROM pairings WHERE expired < $1",
+            &self.pool,
+            "failed to delete expired pairings",
+            now,
+        )?;
         Ok(result.rows_affected())
     }
-}
-
-#[async_trait]
-impl CommonPairingRepository for crate::repository::SqliteRepository {
-    async fn create_pairing_common(&self, pairing_id: &str, expired: &str) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO pairings (pairing_id, expired) VALUES ($1, $2)")
-            .bind(pairing_id)
-            .bind(expired)
-            .execute(&self.pool)
-            .await
-            .context("failed to create pairing")?;
-        Ok(())
-    }
-
-    async fn get_pairing_by_id_common(
-        &self,
-        pairing_id: &str,
-    ) -> anyhow::Result<Option<PairingRow>> {
-        let row = sqlx::query_as::<_, PairingRecord>(
-            "SELECT pairing_id, expired, client_id FROM pairings WHERE pairing_id = $1",
-        )
-        .bind(pairing_id)
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get pairing by id")?;
-        Ok(row.map(Into::into))
-    }
-
-    async fn consume_pairing_common(
-        &self,
-        pairing_id: &str,
-        client_id: &str,
-    ) -> anyhow::Result<bool> {
-        let result = sqlx::query(
-            "UPDATE pairings SET client_id = $1 WHERE pairing_id = $2 AND client_id IS NULL",
-        )
-        .bind(client_id)
-        .bind(pairing_id)
-        .execute(&self.pool)
-        .await
-        .context("failed to consume pairing")?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn count_unconsumed_pairings_common(&self, now: &str) -> anyhow::Result<i64> {
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM pairings WHERE client_id IS NULL AND expired > $1",
-        )
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await
-        .context("failed to count unconsumed pairings")?;
-        Ok(count)
-    }
-
-    async fn delete_expired_pairings_common(&self, now: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM pairings WHERE expired < $1")
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete expired pairings")?;
-        Ok(result.rows_affected())
-    }
-}
+});

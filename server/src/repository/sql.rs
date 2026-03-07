@@ -1,5 +1,63 @@
 use sqlx::{Database, FromRow, Pool};
 
+macro_rules! execute_query {
+    ($sql:expr, $executor:expr, $context:literal $(, $param:expr )* $(,)?) => {{
+        let query = sqlx::query($sql);
+        $(let query = query.bind($param);)*
+        query
+            .execute($executor)
+            .await
+            .context($context)
+    }};
+}
+
+macro_rules! fetch_optional_as {
+    ($record:ty, $sql:expr, $executor:expr, $context:literal $(, $param:expr )* $(,)?) => {{
+        let query = sqlx::query_as::<_, $record>($sql);
+        $(let query = query.bind($param);)*
+        query
+            .fetch_optional($executor)
+            .await
+            .context($context)
+    }};
+}
+
+macro_rules! fetch_all_as {
+    ($record:ty, $sql:expr, $executor:expr, $context:literal $(, $param:expr )* $(,)?) => {{
+        let query = sqlx::query_as::<_, $record>($sql);
+        $(let query = query.bind($param);)*
+        query
+            .fetch_all($executor)
+            .await
+            .context($context)
+    }};
+}
+
+macro_rules! fetch_one_scalar {
+    ($record:ty, $sql:expr, $executor:expr, $context:literal $(, $param:expr )* $(,)?) => {{
+        let query = sqlx::query_scalar::<_, $record>($sql);
+        $(let query = query.bind($param);)*
+        query
+            .fetch_one($executor)
+            .await
+            .context($context)
+    }};
+}
+
+macro_rules! impl_for_sql_backends {
+    ($trait_name:ident { $($item:item)* }) => {
+        #[async_trait::async_trait]
+        impl $trait_name for crate::repository::PostgresRepository {
+            $($item)*
+        }
+
+        #[async_trait::async_trait]
+        impl $trait_name for crate::repository::SqliteRepository {
+            $($item)*
+        }
+    };
+}
+
 mod audit_log;
 mod cleanup;
 mod client;

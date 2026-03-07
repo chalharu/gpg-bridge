@@ -55,31 +55,29 @@ impl From<SigningKeyRecord> for SigningKeyRow {
     }
 }
 
-#[async_trait]
-impl CommonSigningKeyRepository for crate::repository::PostgresRepository {
+impl_for_sql_backends!(CommonSigningKeyRepository {
     async fn store_signing_key_common(&self, key: &SigningKeyRow) -> anyhow::Result<()> {
-        sqlx::query(
+        execute_query!(
             "INSERT INTO signing_keys (kid, private_key, public_key, created_at, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(&key.kid)
-        .bind(&key.private_key)
-        .bind(&key.public_key)
-        .bind(&key.created_at)
-        .bind(&key.expires_at)
-        .bind(key.is_active)
-        .execute(&self.pool)
-        .await
-        .context("failed to store signing key")?;
+            &self.pool,
+            "failed to store signing key",
+            &key.kid,
+            &key.private_key,
+            &key.public_key,
+            &key.created_at,
+            &key.expires_at,
+            key.is_active,
+        )?;
         Ok(())
     }
 
     async fn get_active_signing_key_common(&self) -> anyhow::Result<Option<SigningKeyRow>> {
-        let row = sqlx::query_as::<_, SigningKeyRecord>(
+        let row = fetch_optional_as!(
+            SigningKeyRecord,
             "SELECT kid, private_key, public_key, created_at, expires_at, is_active FROM signing_keys WHERE is_active = TRUE LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get active signing key")?;
+            &self.pool,
+            "failed to get active signing key",
+        )?;
         Ok(row.map(Into::into))
     }
 
@@ -87,92 +85,33 @@ impl CommonSigningKeyRepository for crate::repository::PostgresRepository {
         &self,
         kid: &str,
     ) -> anyhow::Result<Option<SigningKeyRow>> {
-        let row = sqlx::query_as::<_, SigningKeyRecord>(
+        let row = fetch_optional_as!(
+            SigningKeyRecord,
             "SELECT kid, private_key, public_key, created_at, expires_at, is_active FROM signing_keys WHERE kid = $1",
-        )
-        .bind(kid)
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get signing key by kid")?;
+            &self.pool,
+            "failed to get signing key by kid",
+            kid,
+        )?;
         Ok(row.map(Into::into))
     }
 
     async fn retire_signing_key_common(&self, kid: &str) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE signing_keys SET is_active = FALSE WHERE kid = $1")
-            .bind(kid)
-            .execute(&self.pool)
-            .await
-            .context("failed to retire signing key")?;
+        let result = execute_query!(
+            "UPDATE signing_keys SET is_active = FALSE WHERE kid = $1",
+            &self.pool,
+            "failed to retire signing key",
+            kid,
+        )?;
         Ok(result.rows_affected() > 0)
     }
 
     async fn delete_expired_signing_keys_common(&self, now: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM signing_keys WHERE expires_at < $1")
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete expired signing keys")?;
+        let result = execute_query!(
+            "DELETE FROM signing_keys WHERE expires_at < $1",
+            &self.pool,
+            "failed to delete expired signing keys",
+            now,
+        )?;
         Ok(result.rows_affected())
     }
-}
-
-#[async_trait]
-impl CommonSigningKeyRepository for crate::repository::SqliteRepository {
-    async fn store_signing_key_common(&self, key: &SigningKeyRow) -> anyhow::Result<()> {
-        sqlx::query(
-            "INSERT INTO signing_keys (kid, private_key, public_key, created_at, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(&key.kid)
-        .bind(&key.private_key)
-        .bind(&key.public_key)
-        .bind(&key.created_at)
-        .bind(&key.expires_at)
-        .bind(key.is_active)
-        .execute(&self.pool)
-        .await
-        .context("failed to store signing key")?;
-        Ok(())
-    }
-
-    async fn get_active_signing_key_common(&self) -> anyhow::Result<Option<SigningKeyRow>> {
-        let row = sqlx::query_as::<_, SigningKeyRecord>(
-            "SELECT kid, private_key, public_key, created_at, expires_at, is_active FROM signing_keys WHERE is_active = TRUE LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get active signing key")?;
-        Ok(row.map(Into::into))
-    }
-
-    async fn get_signing_key_by_kid_common(
-        &self,
-        kid: &str,
-    ) -> anyhow::Result<Option<SigningKeyRow>> {
-        let row = sqlx::query_as::<_, SigningKeyRecord>(
-            "SELECT kid, private_key, public_key, created_at, expires_at, is_active FROM signing_keys WHERE kid = $1",
-        )
-        .bind(kid)
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to get signing key by kid")?;
-        Ok(row.map(Into::into))
-    }
-
-    async fn retire_signing_key_common(&self, kid: &str) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE signing_keys SET is_active = FALSE WHERE kid = $1")
-            .bind(kid)
-            .execute(&self.pool)
-            .await
-            .context("failed to retire signing key")?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn delete_expired_signing_keys_common(&self, now: &str) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM signing_keys WHERE expires_at < $1")
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete expired signing keys")?;
-        Ok(result.rows_affected())
-    }
-}
+});
