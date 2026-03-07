@@ -623,11 +623,30 @@ jobs:
           path: mobile/coverage
         continue-on-error: true
 
+      - name: Setup Rust
+        if: needs.rust-coverage.result != 'success'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        if: needs.rust-coverage.result != 'success'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
+      - name: Generate fallback Rust coverage for Sonar
+        if: needs.rust-coverage.result != 'success'
+        run: |
+          # Sonar cannot carry forward the previous Rust lcov report by itself.
+          # When the dedicated rust-coverage job is skipped on Flutter-only PRs,
+          # generate a fresh report here so Rust coverage remains visible.
+          # This fallback is not the quality gate for Rust changes.
+          cargo llvm-cov --workspace --lcov --output-path lcov-rust.info -- --include-ignored
 
       - name: Flutter pub get (for Sonar analysis)
         working-directory: mobile
@@ -640,7 +659,10 @@ jobs:
           # Sonar cannot carry forward the previous Dart lcov report by itself.
           # When the dedicated flutter-coverage job is skipped on Rust-only PRs,
           # generate a fresh report here so mobile coverage remains visible.
+          # This fallback is not the quality gate for Flutter changes.
           flutter test --coverage
+          TOTAL=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf>0) printf "%.1f", lh/lf*100; else print "0.0"}' coverage/lcov.info)
+          echo "Flutter fallback coverage: ${TOTAL}%"
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
