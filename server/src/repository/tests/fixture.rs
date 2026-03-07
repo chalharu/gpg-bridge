@@ -7,11 +7,31 @@ use crate::repository::{MIGRATOR, SignatureRepository};
 #[async_trait]
 pub(crate) trait TestFixture: Send + Sync {
     fn repo(&self) -> &dyn SignatureRepository;
+    fn backend_name(&self) -> &'static str;
+    fn foreign_key_error_fragment(&self) -> &'static str;
 
     /// Count rows in the given table.  Useful for verifying side-effects
     /// that are not exposed through the repository trait (e.g. audit_log
     /// counts).
     async fn count_table_rows(&self, table: &str) -> i64;
+
+    async fn close_pool(&self);
+    async fn execute_sql(&self, sql: &str) -> anyhow::Result<()>;
+}
+
+fn allowed_table_name(table: &str) -> &'static str {
+    match table {
+        "audit_log" => "audit_log",
+        "client_pairings" => "client_pairings",
+        "clients" => "clients",
+        "jtis" => "jtis",
+        "pairings" => "pairings",
+        "requests" => "requests",
+        "signing_keys" => "signing_keys",
+        other => panic!(
+            "unexpected table name in test fixture: {other}; allowed: audit_log, client_pairings, clients, jtis, pairings, requests, signing_keys"
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -38,13 +58,30 @@ impl TestFixture for SqliteTestFixture {
         &self.repo
     }
 
+    fn backend_name(&self) -> &'static str {
+        "sqlite"
+    }
+
+    fn foreign_key_error_fragment(&self) -> &'static str {
+        "FOREIGN KEY constraint failed"
+    }
+
     async fn count_table_rows(&self, table: &str) -> i64 {
-        let query = format!("SELECT COUNT(*) FROM {table}");
+        let query = format!("SELECT COUNT(*) FROM [{}]", allowed_table_name(table));
         let count: i32 = sqlx::query_scalar(&query)
             .fetch_one(&self.pool)
             .await
             .unwrap();
         i64::from(count)
+    }
+
+    async fn close_pool(&self) {
+        self.pool.close().await;
+    }
+
+    async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
+        sqlx::query(sql).execute(&self.pool).await?;
+        Ok(())
     }
 }
 
@@ -174,11 +211,28 @@ impl TestFixture for PostgresTestFixture {
         &self.repo
     }
 
+    fn backend_name(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn foreign_key_error_fragment(&self) -> &'static str {
+        "violates foreign key constraint"
+    }
+
     async fn count_table_rows(&self, table: &str) -> i64 {
-        let query = format!("SELECT COUNT(*) FROM {table}");
+        let query = format!("SELECT COUNT(*) FROM \"{}\"", allowed_table_name(table));
         sqlx::query_scalar::<_, i64>(&query)
             .fetch_one(&self.pool)
             .await
             .unwrap()
+    }
+
+    async fn close_pool(&self) {
+        self.pool.close().await;
+    }
+
+    async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
+        sqlx::query(sql).execute(&self.pool).await?;
+        Ok(())
     }
 }
