@@ -7,9 +7,9 @@ use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
-    DaemonAuthClaims, PayloadType, RequestClaims, generate_signing_key_pair, sign_jws,
+    DaemonAuthClaims, PayloadType, RequestClaims, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
-use crate::repository::{ClientPairingRow, ClientRow};
+use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow};
 use crate::test_support::{MockRepository, make_signing_key_row};
 
 use super::post_sign_request;
@@ -73,6 +73,62 @@ fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/sign-request", post(post_sign_request))
         .with_state(state)
+}
+
+fn make_signing_repo() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRepository) {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
+    (priv_jwk, pub_jwk, kid, MockRepository::new(key_row))
+}
+
+fn add_signing_client(repo: &MockRepository, client_id: &str) -> (josekit::jwk::Jwk, String) {
+    let (client_priv, client_pub, client_kid) = generate_signing_key_pair().unwrap();
+    let pub_json = jwk_to_json(&client_pub).unwrap();
+    repo.clients.lock().unwrap().push(ClientRow {
+        client_id: client_id.into(),
+        created_at: "2026-01-01T00:00:00+00:00".into(),
+        updated_at: "2026-01-01T00:00:00+00:00".into(),
+        device_token: "tok".into(),
+        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
+        public_keys: format!("[{pub_json}]"),
+        default_kid: client_kid.clone(),
+        gpg_keys: "[]".into(),
+    });
+    (client_priv, client_kid)
+}
+
+fn add_signing_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) {
+    repo.client_pairings_data
+        .lock()
+        .unwrap()
+        .push(ClientPairingRow {
+            client_id: client_id.into(),
+            pairing_id: pairing_id.into(),
+            client_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
+        });
+}
+
+fn make_pending_request(
+    request_id: &str,
+    client_id: &str,
+    pairing_id: &str,
+    encrypted_payload: Option<&str>,
+) -> FullRequestRow {
+    FullRequestRow {
+        request_id: request_id.into(),
+        status: "pending".into(),
+        expired: "2027-01-01T00:00:00Z".into(),
+        signature: None,
+        client_ids: format!(r#"["{client_id}"]"#),
+        daemon_public_key: "{}".into(),
+        daemon_enc_public_key: r#"{"kty":"EC","crv":"P-256"}"#.into(),
+        pairing_ids: format!(r#"{{"{client_id}":"{pairing_id}"}}"#),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: encrypted_payload.map(|payload| {
+            format!(r#"[{{"client_id":"{client_id}","encrypted_data":"{payload}"}}]"#)
+        }),
+        unavailable_client_ids: "[]".into(),
+    }
 }
 
 fn valid_request_body(client_jwts: Vec<String>) -> serde_json::Value {

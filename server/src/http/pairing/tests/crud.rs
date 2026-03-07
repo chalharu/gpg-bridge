@@ -4,13 +4,15 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
-use crate::repository::{ClientPairingRow, PairingRow};
+use crate::repository::ClientPairingRow;
 use crate::test_support::{
     MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
 };
 
 use super::{
-    build_app, make_client_with_public_key, make_device_assertion_token, make_pairing_token,
+    add_client_pairing, add_client_with_assertion_key, add_pairing, build_app,
+    delete_pairing_by_phone_request, get_pairing_token_request, make_device_assertion_token,
+    make_pairing_repo, make_pairing_token, pair_device_request,
 };
 
 // ===========================================================================
@@ -19,16 +21,11 @@ use super::{
 
 #[tokio::test]
 async fn get_pairing_token_returns_200_with_token() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
     let state = make_test_app_state(repo);
     let app = build_app(state);
 
-    let response = app
-        .oneshot(Request::get("/pairing-token").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let resp_body = body::to_bytes(response.into_body(), usize::MAX)
@@ -41,17 +38,12 @@ async fn get_pairing_token_returns_200_with_token() {
 
 #[tokio::test]
 async fn get_pairing_token_returns_429_when_limit_reached() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let mut repo = MockRepository::new(sk);
+    let (_priv_server, _pub_server, _server_kid, mut repo) = make_pairing_repo();
     repo.forced_unconsumed_count = Some(100); // matches unconsumed_pairing_limit
     let state = make_test_app_state(repo);
     let app = build_app(state);
 
-    let response = app
-        .oneshot(Request::get("/pairing-token").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
@@ -62,22 +54,13 @@ async fn get_pairing_token_returns_429_when_limit_reached() {
 
 #[tokio::test]
 async fn pair_device_returns_200_with_pairing_id() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-test-1";
     let future_expired = "2099-01-01T00:00:00+00:00";
 
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: future_expired.to_owned(),
-        client_id: None,
-    });
+    add_pairing(&repo, pairing_id, future_expired, None);
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
@@ -85,16 +68,8 @@ async fn pair_device_returns_200_with_pairing_id() {
     let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
     let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(pair_device_request(&pairing_token, &device_assertion))
         .await
         .unwrap();
 
@@ -110,22 +85,13 @@ async fn pair_device_returns_200_with_pairing_id() {
 
 #[tokio::test]
 async fn pair_device_expired_pairing_returns_410() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-expired";
     let past_expired = "2020-01-01T00:00:00+00:00";
 
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: past_expired.to_owned(),
-        client_id: None,
-    });
+    add_pairing(&repo, pairing_id, past_expired, None);
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
@@ -133,16 +99,8 @@ async fn pair_device_expired_pairing_returns_410() {
     let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
     let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(pair_device_request(&pairing_token, &device_assertion))
         .await
         .unwrap();
 
@@ -151,22 +109,13 @@ async fn pair_device_expired_pairing_returns_410() {
 
 #[tokio::test]
 async fn pair_device_already_consumed_returns_409() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-consumed";
     let future_expired = "2099-01-01T00:00:00+00:00";
 
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: future_expired.to_owned(),
-        client_id: Some("other-client".to_owned()), // already consumed
-    });
+    add_pairing(&repo, pairing_id, future_expired, Some("other-client"));
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
@@ -174,16 +123,8 @@ async fn pair_device_already_consumed_returns_409() {
     let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
     let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(pair_device_request(&pairing_token, &device_assertion))
         .await
         .unwrap();
 
@@ -196,22 +137,9 @@ async fn pair_device_already_consumed_returns_409() {
 
 #[tokio::test]
 async fn delete_by_phone_returns_204() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-del".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
+    add_client_pairing(&repo, "fid-1", "pair-del");
 
     let state = make_test_app_state(repo);
     let app = build_app(state);
@@ -220,12 +148,10 @@ async fn delete_by_phone_returns_204() {
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/pair-del");
 
     let response = app
-        .oneshot(
-            Request::delete("/pairing/pair-del")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_phone_request(
+            "pair-del",
+            &device_assertion,
+        ))
         .await
         .unwrap();
 
@@ -234,14 +160,8 @@ async fn delete_by_phone_returns_204() {
 
 #[tokio::test]
 async fn delete_by_phone_not_found_returns_404() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     // No client_pairings → not found
 
     let state = make_test_app_state(repo);
@@ -251,12 +171,10 @@ async fn delete_by_phone_not_found_returns_404() {
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/nonexistent");
 
     let response = app
-        .oneshot(
-            Request::delete("/pairing/nonexistent")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_phone_request(
+            "nonexistent",
+            &device_assertion,
+        ))
         .await
         .unwrap();
 
