@@ -124,6 +124,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -159,6 +160,14 @@ jobs:
           cache-on-failure: true
           cache-all-crates: true
           prefix-key: v0-rust-coverage
+
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.theseus/postgresql
+          key: embedded-postgres-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            embedded-postgres-${{ runner.os }}-
 
       - name: Clean stale cache on lockfile change
         if: steps.cargo-lock-check.outputs.cache-hit != 'true'
