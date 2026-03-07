@@ -7,11 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pull-requests: read
-  packages: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -486,6 +481,9 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs: [rust-lint, rust-coverage, changes]
     if: >-
       always()
@@ -553,6 +551,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Flutter
+        if: needs.flutter-coverage.result != 'success'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -649,6 +648,7 @@ jobs:
           cargo llvm-cov --workspace --lcov --output-path lcov-rust.info -- --include-ignored
 
       - name: Flutter pub get (for Sonar analysis)
+        if: needs.flutter-coverage.result != 'success'
         working-directory: mobile
         run: flutter pub get
 
