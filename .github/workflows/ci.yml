@@ -7,11 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pull-requests: read
-  packages: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -486,6 +481,9 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs: [rust-lint, rust-coverage, changes]
     if: >-
       always()
@@ -544,7 +542,7 @@ jobs:
     needs: [android-native-test, flutter-lint, flutter-coverage, changes]
     if: >-
       always()
-      && startsWith(github.ref, 'refs/tags/v')
+      && (needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true')
       && (needs.android-native-test.result == 'success' || needs.android-native-test.result == 'skipped')
       && (needs.flutter-lint.result == 'success' || needs.flutter-lint.result == 'skipped')
       && (needs.flutter-coverage.result == 'success' || needs.flutter-coverage.result == 'skipped')
@@ -578,14 +576,63 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
+      - name: Compute Android build version
+        id: apk_version
+        run: |
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            BUILD_NAME="${GITHUB_REF_NAME#v}"
+          else
+            BUILD_NAME="0.0.0-sha.${SHORT_SHA}"
+          fi
+          BUILD_NUMBER="$((16#${SHORT_SHA}))"
+          APK_NAME="gpg-bridge-${BUILD_NAME}.apk"
+          {
+            echo "build_name=${BUILD_NAME}"
+            echo "build_number=${BUILD_NUMBER}"
+            echo "apk_name=${APK_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure Android release signing
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+        working-directory: mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release-keystore.jks
+          cat > key.properties <<EOF
+          storeFile=release-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
       - name: Build APK (release)
         working-directory: mobile
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release \
+            --build-name "${{ steps.apk_version.outputs.build_name }}" \
+            --build-number "${{ steps.apk_version.outputs.build_number }}"
+
+      - name: Rename APK output
+        run: |
+          mv mobile/build/app/outputs/flutter-apk/app-release.apk \
+            "mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}
 
       - name: Upload APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: mobile/build/app/outputs/flutter-apk/app-release.apk
+          files: mobile/build/app/outputs/flutter-apk/${{ steps.apk_version.outputs.apk_name }}
 
   # ---------------------------------------------------------------------------
   # SonarCloud analysis
