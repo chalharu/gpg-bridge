@@ -174,10 +174,7 @@ class _GpgKeyImportPageState extends ConsumerState<GpgKeyImportPage> {
               }
             });
           },
-          title: Text(
-            _keyTitle(key),
-            style: textTheme.titleSmall,
-          ),
+          title: Text(_keyTitle(key), style: textTheme.titleSmall),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

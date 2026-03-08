@@ -35,7 +35,9 @@ Uint8List decodeAsciiArmor(String armored) {
   final startIdx = _findArmorHeader(lines);
   final endIdx = _findArmorFooter(lines, startIdx);
   final bodyStart = _findArmorBodyStart(lines, startIdx, endIdx);
-  final (base64Lines, crcLine) = _splitArmorBody(lines.sublist(bodyStart, endIdx));
+  final (base64Lines, crcLine) = _splitArmorBody(
+    lines.sublist(bodyStart, endIdx),
+  );
 
   final payload = base64.decode(base64Lines.join());
   final result = Uint8List.fromList(payload);
