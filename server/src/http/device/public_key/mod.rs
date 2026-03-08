@@ -80,3 +80,31 @@ pub(super) async fn save_public_keys(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{body, http::StatusCode, response::IntoResponse};
+
+    use super::deserialize_public_keys;
+
+    #[tokio::test]
+    async fn deserialize_public_keys_maps_invalid_json_to_internal_error() {
+        let error = deserialize_public_keys("{").unwrap_err();
+        let response = error.into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(problem["title"], "Internal server error");
+        assert!(
+            problem["detail"]
+                .as_str()
+                .unwrap()
+                .starts_with("invalid public_keys JSON:")
+        );
+    }
+}
