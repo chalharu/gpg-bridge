@@ -22,24 +22,24 @@ updated: 2026-03-09
 flowchart TD
     A[App launch] --> B{deviceJwt present?}
 
-    B -- No --> R[/register\nRegisterPage]
+    B -- No --> R[/register<br/>RegisterPage]
     B -- Yes --> M[MainShell]
 
-    R -- Complete registration success --> H[/\nHomePage]
+    R -- Complete registration success --> H[/<br/>HomePage]
 
     M --> H
-    M --> K[/keys\nKeysPage]
-    M --> P[/pairing\nPairingPage]
-    M --> S[/settings\nSettingsPage]
+    M --> K[/keys<br/>KeysPage]
+    M --> P[/pairing<br/>PairingPage]
+    M --> S[/settings<br/>SettingsPage]
 
     H -- Reset registration success --> R
 
-    P -- FAB tap --> Q[/pairing/scan\nQrScanPage]
+    P -- FAB tap --> Q[/pairing/scan<br/>QrScanPage]
     Q -- Pairing success --> P
     Q -- Invalid QR or pairing error --> Q
     Q -- Back --> P
 
-    F[FCM sign request\nonMessage / onMessageOpenedApp] --> SR[/sign-request/:requestId\nSignRequestPage]
+    F[FCM sign request<br/>onMessage / onMessageOpenedApp] --> SR[/sign-request/:requestId<br/>SignRequestPage]
     SR -- Approve --> PREV[Return to previous screen]
     SR -- Deny --> PREV
     SR -- Ignore --> PREV
