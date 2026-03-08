@@ -3,13 +3,21 @@ package com.example.gpg_bridge_mobile
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.PrivateKey
 import java.security.ProviderException
+import java.security.PublicKey
+import java.security.spec.ECFieldFp
+import java.security.spec.ECParameterSpec
+import java.security.spec.ECPoint
+import java.security.spec.EllipticCurve
+import java.math.BigInteger
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 
@@ -397,12 +405,323 @@ class KeystoreMethodCallHandlerTest {
 	}
 
 	@Test
+	fun generateKeyPairSkipsGenerationWhenAliasAlreadyExists() {
+		val keyStore = RecordingKeyStoreAccess(existingAliases = setOf("device_key"))
+		val generator = RecordingKeyPairGeneratorAccess()
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { keyStore },
+				keyPairGeneratorAccess = { generator },
+			),
+		)
+
+		operations.generateKeyPair("device_key")
+
+		assertNull(generator.initializedWith)
+		assertEquals(0, generator.generateCalls)
+	}
+
+	@Test
+	fun generateKeyPairBuildsSigningRequestForDeviceAlias() {
+		val generator = RecordingKeyPairGeneratorAccess()
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { RecordingKeyStoreAccess() },
+				keyPairGeneratorAccess = { generator },
+			),
+		)
+
+		operations.generateKeyPair("device_key")
+
+		assertEquals(
+			KeystoreKeyGenRequest(
+				alias = "device_key",
+				purposes = android.security.keystore.KeyProperties.PURPOSE_SIGN or android.security.keystore.KeyProperties.PURPOSE_VERIFY,
+				includeSha256Digest = true,
+			),
+			generator.initializedWith,
+		)
+		assertEquals(1, generator.generateCalls)
+	}
+
+	@Test
+	fun generateKeyPairBuildsAgreementRequestForEncryptionAlias() {
+		val generator = RecordingKeyPairGeneratorAccess()
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { RecordingKeyStoreAccess() },
+				keyPairGeneratorAccess = { generator },
+			),
+		)
+
+		operations.generateKeyPair("e2e_key")
+
+		assertEquals(
+			KeystoreKeyGenRequest(
+				alias = "e2e_key",
+				purposes = android.security.keystore.KeyProperties.PURPOSE_AGREE_KEY,
+				includeSha256Digest = false,
+			),
+			generator.initializedWith,
+		)
+		assertEquals(1, generator.generateCalls)
+	}
+
+	@Test
+	fun signUsesInjectedCryptoAndBase64Codec() {
+		val privateKey = FakePrivateKey()
+		val keyStore = RecordingKeyStoreAccess(privateKeys = mapOf("device_key" to privateKey))
+		val signatureAccess = RecordingSignatureAccess(signResult = byteArrayOf(9, 8, 7))
+		val base64Codec = RecordingBase64Codec(decodedValues = mapOf("payload" to byteArrayOf(1, 2, 3)))
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { keyStore },
+				signatureAccess = signatureAccess,
+				base64Codec = base64Codec,
+			),
+		)
+
+		val signature = operations.sign("device_key", "payload")
+
+		assertEquals("encoded:9,8,7", signature)
+		assertEquals(privateKey, signatureAccess.lastPrivateKey)
+		assertEquals(byteArrayOf(1, 2, 3).toList(), signatureAccess.lastSignedData?.toList())
+	}
+
+	@Test
+	fun signRejectsMissingPrivateKey() {
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(keyStoreAccess = { RecordingKeyStoreAccess() }),
+		)
+
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			operations.sign("device_key", "payload")
+		}
+
+		assertEquals("key alias not found: device_key", error.message)
+	}
+
+	@Test
+	fun verifyUsesInjectedCryptoAndDecodedInputs() {
+		val publicKey = FakeECPublicKey(x = BigInteger.valueOf(10), y = BigInteger.valueOf(20))
+		val keyStore = RecordingKeyStoreAccess(publicKeys = mapOf("device_key" to publicKey))
+		val signatureAccess = RecordingSignatureAccess(verifyResult = false)
+		val base64Codec = RecordingBase64Codec(
+			decodedValues = mapOf(
+				"payload" to byteArrayOf(4, 5),
+				"signature" to byteArrayOf(6, 7),
+			),
+		)
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { keyStore },
+				signatureAccess = signatureAccess,
+				base64Codec = base64Codec,
+			),
+		)
+
+		val verified = operations.verify("device_key", "payload", "signature")
+
+		assertFalse(verified)
+		assertEquals(publicKey, signatureAccess.lastPublicKey)
+		assertEquals(byteArrayOf(4, 5).toList(), signatureAccess.lastVerifiedData?.toList())
+		assertEquals(byteArrayOf(6, 7).toList(), signatureAccess.lastVerifiedSignature?.toList())
+	}
+
+	@Test
+	fun verifyRejectsMissingCertificate() {
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(keyStoreAccess = { RecordingKeyStoreAccess() }),
+		)
+
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			operations.verify("device_key", "payload", "signature")
+		}
+
+		assertEquals("certificate not found for alias: device_key", error.message)
+	}
+
+	@Test
+	fun verifyRejectsNonEcPublicKey() {
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = {
+					RecordingKeyStoreAccess(publicKeys = mapOf("device_key" to FakePublicKey()))
+				},
+			),
+		)
+
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			operations.verify("device_key", "payload", "signature")
+		}
+
+		assertEquals("public key is not EC for alias: device_key", error.message)
+	}
+
+	@Test
+	fun getPublicKeyJwkBuildsDeviceKeyMetadata() {
+		val publicKey = FakeECPublicKey(x = BigInteger.valueOf(10), y = BigInteger.valueOf(20))
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { RecordingKeyStoreAccess(publicKeys = mapOf("device_key" to publicKey)) },
+				base64Codec = RecordingBase64Codec(),
+			),
+		)
+
+		val jwk = operations.getPublicKeyJwk("device_key")
+
+		assertEquals(
+			mapOf(
+				"kty" to "EC",
+				"use" to "sig",
+				"crv" to "P-256",
+				"x" to "url:32:10",
+				"y" to "url:32:20",
+				"alg" to "ES256",
+			),
+			jwk,
+		)
+	}
+
+	@Test
+	fun getPublicKeyJwkBuildsEncryptionKeyMetadata() {
+		val publicKey = FakeECPublicKey(x = BigInteger.ONE, y = BigInteger.TWO)
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = { RecordingKeyStoreAccess(publicKeys = mapOf("e2e_key" to publicKey)) },
+				base64Codec = RecordingBase64Codec(),
+			),
+		)
+
+		val jwk = operations.getPublicKeyJwk("e2e_key")
+
+		assertEquals("enc", jwk["use"])
+		assertEquals("ECDH-ES+A256KW", jwk["alg"])
+	}
+
+	@Test
+	fun getPublicKeyJwkRejectsNonEcPublicKey() {
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(
+				keyStoreAccess = {
+					RecordingKeyStoreAccess(publicKeys = mapOf("device_key" to FakePublicKey()))
+				},
+			),
+		)
+
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			operations.getPublicKeyJwk("device_key")
+		}
+
+		assertEquals("public key is not EC for alias: device_key", error.message)
+	}
+
+	@Test
 	fun requireSignAliasRejectsEncryptionOnlyAlias() {
 		val error = assertThrows(IllegalArgumentException::class.java) {
 			requireSignAlias("e2e_key")
 		}
 
 		assertEquals("alias does not support sign/verify: e2e_key", error.message)
+	}
+
+	private class RecordingKeyStoreAccess(
+		private val existingAliases: Set<String> = emptySet(),
+		private val privateKeys: Map<String, PrivateKey> = emptyMap(),
+		private val publicKeys: Map<String, PublicKey> = emptyMap(),
+	) : KeyStoreAccess {
+		override fun containsAlias(alias: String): Boolean = alias in existingAliases
+
+		override fun getPrivateKey(alias: String): PrivateKey? = privateKeys[alias]
+
+		override fun getPublicKey(alias: String): PublicKey? = publicKeys[alias]
+	}
+
+	private class RecordingKeyPairGeneratorAccess : KeyPairGeneratorAccess {
+		var initializedWith: KeystoreKeyGenRequest? = null
+		var generateCalls = 0
+
+		override fun initialize(request: KeystoreKeyGenRequest) {
+			initializedWith = request
+		}
+
+		override fun generateKeyPair() {
+			generateCalls += 1
+		}
+	}
+
+	private class RecordingSignatureAccess(
+		private val signResult: ByteArray = byteArrayOf(1, 2, 3),
+		private val verifyResult: Boolean = true,
+	) : SignatureAccess {
+		var lastPrivateKey: PrivateKey? = null
+		var lastPublicKey: FakeECPublicKey? = null
+		var lastSignedData: ByteArray? = null
+		var lastVerifiedData: ByteArray? = null
+		var lastVerifiedSignature: ByteArray? = null
+
+		override fun sign(privateKey: PrivateKey, data: ByteArray): ByteArray {
+			lastPrivateKey = privateKey
+			lastSignedData = data
+			return signResult
+		}
+
+		override fun verify(publicKey: java.security.interfaces.ECPublicKey, data: ByteArray, signature: ByteArray): Boolean {
+			lastPublicKey = publicKey as FakeECPublicKey
+			lastVerifiedData = data
+			lastVerifiedSignature = signature
+			return verifyResult
+		}
+	}
+
+	private class RecordingBase64Codec(
+		private val decodedValues: Map<String, ByteArray> = emptyMap(),
+	) : Base64Codec {
+		override fun decode(value: String): ByteArray {
+			return decodedValues[value] ?: value.encodeToByteArray()
+		}
+
+		override fun encode(value: ByteArray): String {
+			return "encoded:${value.joinToString(",")}" 
+		}
+
+		override fun encodeUrl(value: ByteArray): String {
+			return "url:${value.size}:${value.last().toInt() and 0xff}"
+		}
+	}
+
+	private class FakePrivateKey : PrivateKey {
+		override fun getAlgorithm(): String = "EC"
+
+		override fun getFormat(): String = "PKCS#8"
+
+		override fun getEncoded(): ByteArray = byteArrayOf()
+	}
+
+	private class FakePublicKey : PublicKey {
+		override fun getAlgorithm(): String = "RSA"
+
+		override fun getFormat(): String = "X.509"
+
+		override fun getEncoded(): ByteArray = byteArrayOf()
+	}
+
+	private class FakeECPublicKey(
+		private val x: BigInteger,
+		private val y: BigInteger,
+	) : java.security.interfaces.ECPublicKey {
+		override fun getW(): ECPoint = ECPoint(x, y)
+
+		override fun getParams(): ECParameterSpec {
+			val curve = EllipticCurve(ECFieldFp(BigInteger.valueOf(23)), BigInteger.ONE, BigInteger.ONE)
+			return ECParameterSpec(curve, ECPoint(BigInteger.ONE, BigInteger.ONE), BigInteger.valueOf(19), 1)
+		}
+
+		override fun getAlgorithm(): String = "EC"
+
+		override fun getFormat(): String = "X.509"
+
+		override fun getEncoded(): ByteArray = byteArrayOf()
 	}
 
 	private class FakeKeystoreOperations(
