@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 860" role="img" aria-labelledby="title desc">
+  <title id="title">GPG key import screen mockup</title>
+  <desc id="desc">GPG armored key import screen with parsing, selection, and import action.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="100%" stop-color="#fefce8"/>
+    </linearGradient>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #0f172a; }
+      .eyebrow { font-size: 14px; letter-spacing: 1.4px; fill: #9a3412; }
+      .heading { font-size: 28px; font-weight: 700; }
+      .screen-title { font-size: 20px; font-weight: 700; }
+      .body { font-size: 13px; fill: #7c2d12; }
+      .small { font-size: 12px; fill: #9a3412; }
+      .tiny { font-size: 11px; fill: #c2410c; }
+      .button { font-size: 14px; font-weight: 700; fill: #ffffff; }
+    </style>
+  </defs>
+  <rect width="420" height="860" fill="url(#bg)"/>
+  <text x="34" y="54" class="eyebrow">PUSHED FROM GPG TAB</text>
+  <text x="34" y="88" class="heading">GPG Key Import</text>
+  <text x="34" y="114" class="body">Presentation: Navigator.push</text>
+  <rect x="62" y="146" width="296" height="622" rx="38" fill="#0f172a"/>
+  <rect x="76" y="160" width="268" height="594" rx="30" fill="#ffffff"/>
+  <rect x="178" y="170" width="64" height="8" rx="4" fill="#94a3b8"/>
+  <text x="96" y="212" class="screen-title">GPG鍵インポート</text>
+  <text x="96" y="246" class="small">アーマードキーを貼り付けてください</text>
+  <rect x="94" y="262" width="232" height="136" rx="18" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="110" y="292" class="tiny">-----BEGIN PGP PUBLIC KEY BLOCK-----</text>
+  <text x="110" y="314" class="tiny">Version: GnuPG v2</text>
+  <text x="110" y="336" class="tiny">mQENBG...</text>
+  <text x="110" y="358" class="tiny">-----END PGP PUBLIC KEY BLOCK-----</text>
+  <rect x="94" y="416" width="110" height="44" rx="22" fill="#2563eb"/>
+  <text x="149" y="443" class="button" text-anchor="middle">解析</text>
+  <rect x="94" y="482" width="232" height="120" rx="18" fill="#fffbeb" stroke="#fdba74" stroke-width="2"/>
+  <text x="112" y="512" class="body">検出された鍵</text>
+  <rect x="112" y="528" width="196" height="56" rx="14" fill="#ffffff"/>
+  <rect x="126" y="544" width="16" height="16" rx="3" fill="#2563eb"/>
+  <path d="M130 552l4 4 7-9" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="152" y="548" class="tiny">Ed25519 (主キー)</text>
+  <text x="152" y="566" class="tiny">Key ID / Keygrip / 秘密鍵あり</text>
+  <rect x="94" y="628" width="232" height="46" rx="23" fill="#0f766e"/>
+  <text x="210" y="656" class="button" text-anchor="middle">インポート (1件)</text>
+  <text x="210" y="700" class="small" text-anchor="middle">API 失敗時は private key material を best-effort cleanup</text>
+</svg>

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 860" role="img" aria-labelledby="title desc">
+  <title id="title">Register screen mockup</title>
+  <desc id="desc">Unregistered device entry screen with a complete registration button and startup notes.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#e0f2fe"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #0f172a; }
+      .eyebrow { font-size: 14px; letter-spacing: 1.4px; fill: #475569; }
+      .heading { font-size: 28px; font-weight: 700; }
+      .screen-title { font-size: 20px; font-weight: 700; }
+      .body { font-size: 13px; fill: #334155; }
+      .small { font-size: 12px; fill: #475569; }
+      .button { font-size: 15px; font-weight: 700; fill: #ffffff; }
+    </style>
+  </defs>
+  <rect width="420" height="860" fill="url(#bg)"/>
+  <text x="34" y="54" class="eyebrow">UNREGISTERED FLOW</text>
+  <text x="34" y="88" class="heading">Register</text>
+  <text x="34" y="114" class="body">Route: /register</text>
+  <rect x="62" y="146" width="296" height="622" rx="38" fill="#0f172a"/>
+  <rect x="76" y="160" width="268" height="594" rx="30" fill="#f8fafc"/>
+  <rect x="178" y="170" width="64" height="8" rx="4" fill="#94a3b8"/>
+  <text x="96" y="212" class="screen-title">Register</text>
+  <rect x="96" y="236" width="228" height="160" rx="24" fill="url(#hero)"/>
+  <text x="118" y="286" class="small" fill="#dbeafe">Device registration</text>
+  <text x="118" y="322" class="heading" fill="#ffffff">Initial</text>
+  <text x="118" y="352" class="heading" fill="#ffffff">device setup</text>
+  <text x="118" y="382" class="body" fill="#e0f2fe">Other routes stay blocked until registration succeeds.</text>
+  <circle cx="210" cy="466" r="54" fill="#dbeafe"/>
+  <path d="M188 467l15 15 29-36" fill="none" stroke="#2563eb" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
+  <text x="210" y="555" class="body" text-anchor="middle">未登録端末の初期到達先</text>
+  <rect x="112" y="594" width="196" height="54" rx="27" fill="#2563eb"/>
+  <text x="210" y="627" class="button" text-anchor="middle">Complete registration</text>
+  <rect x="102" y="670" width="216" height="56" rx="18" fill="#ffffff" stroke="#93c5fd" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="210" y="697" class="small" text-anchor="middle">Success path</text>
+  <text x="210" y="717" class="body" text-anchor="middle">Start token refresh listener</text>
+</svg>
