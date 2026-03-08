@@ -89,6 +89,11 @@ tasks.register<JacocoReport>("jacocoTestReport") {
     )
 }
 
+tasks.withType<Test>().configureEach {
+	jvmArgs("-Dnet.bytebuddy.experimental=true")
+}
+
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-inline:5.2.0")
 }
