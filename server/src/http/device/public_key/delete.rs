@@ -1,8 +1,10 @@
-use axum::{extract::Path, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{extract::Path, extract::State, response::IntoResponse};
 
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::DeviceAssertionAuth;
+
+use super::{load_client_public_keys, save_public_keys};
 
 // ---------------------------------------------------------------------------
 // DELETE /device/public_key/{kid}
@@ -13,15 +15,7 @@ pub async fn delete_public_key(
     auth: DeviceAssertionAuth,
     Path(kid): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let client = state
-        .repository
-        .get_client_by_id(&auth.client_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::not_found("client not found"))?;
-
-    let mut keys: Vec<serde_json::Value> = serde_json::from_str(&client.public_keys)
-        .map_err(|e| AppError::internal(format!("invalid public_keys JSON: {e}")))?;
+    let (client, mut keys) = load_client_public_keys(&state, &auth.client_id).await?;
 
     let idx = find_key_index(&keys, &kid)?;
     check_last_key_constraints(&keys, &kid)?;
@@ -29,27 +23,14 @@ pub async fn delete_public_key(
 
     keys.remove(idx);
     let default_kid = reassign_default_kid(&keys, &client.default_kid, &kid)?;
-    let keys_json = serde_json::to_string(&keys)
-        .map_err(|e| AppError::internal(format!("failed to serialize keys: {e}")))?;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let updated = state
-        .repository
-        .update_client_public_keys(
-            &auth.client_id,
-            &keys_json,
-            &default_kid,
-            &now,
-            &client.updated_at,
-        )
-        .await
-        .map_err(AppError::from)?;
-
-    if !updated {
-        return Err(AppError::conflict("concurrent modification, please retry"));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
+    save_public_keys(
+        &state,
+        &auth.client_id,
+        &keys,
+        &default_kid,
+        &client.updated_at,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

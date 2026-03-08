@@ -1,11 +1,11 @@
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, extract::State, response::IntoResponse};
 
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::DeviceAssertionAuth;
 
 use super::super::validation::{validate_enc_key, validate_sig_key};
-use super::AddPublicKeyRequest;
+use super::{AddPublicKeyRequest, load_client_public_keys, save_public_keys};
 
 // ---------------------------------------------------------------------------
 // POST /device/public_key
@@ -20,15 +20,7 @@ pub async fn add_public_key(
         return Err(AppError::validation("keys must not be empty"));
     }
 
-    let client = state
-        .repository
-        .get_client_by_id(&auth.client_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::not_found("client not found"))?;
-
-    let existing: Vec<serde_json::Value> = serde_json::from_str(&client.public_keys)
-        .map_err(|e| AppError::internal(format!("invalid public_keys JSON: {e}")))?;
+    let (client, existing) = load_client_public_keys(&state, &auth.client_id).await?;
 
     validate_and_assign_kids(&mut body.keys)?;
     check_duplicate_kids(&body.keys, &existing)?;
@@ -37,7 +29,7 @@ pub async fn add_public_key(
     merged.extend(body.keys);
     let default_kid = resolve_default_kid(&body.default_kid, &merged, &client.default_kid)?;
 
-    merge_and_save(
+    save_public_keys(
         &state,
         &auth.client_id,
         &merged,
@@ -129,35 +121,4 @@ fn resolve_default_kid(
         ));
     }
     Ok(kid)
-}
-
-/// Serialize keys and persist via optimistic locking (FINDING-4 + FINDING-7).
-async fn merge_and_save(
-    state: &AppState,
-    client_id: &str,
-    keys: &[serde_json::Value],
-    default_kid: &str,
-    expected_updated_at: &str,
-) -> Result<StatusCode, AppError> {
-    let keys_json = serde_json::to_string(keys)
-        .map_err(|e| AppError::internal(format!("failed to serialize keys: {e}")))?;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let updated = state
-        .repository
-        .update_client_public_keys(
-            client_id,
-            &keys_json,
-            default_kid,
-            &now,
-            expected_updated_at,
-        )
-        .await
-        .map_err(AppError::from)?;
-
-    if !updated {
-        return Err(AppError::conflict("concurrent modification, please retry"));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
 }

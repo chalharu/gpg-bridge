@@ -18,6 +18,8 @@ pub(crate) mod test_support;
 use axum::http::{self, request::Parts};
 use josekit::jwk::Jwk;
 
+use crate::error::AppError;
+use crate::http::AppState;
 use crate::jwt::jwk_from_json;
 use crate::repository::SigningKeyRow;
 
@@ -65,6 +67,23 @@ pub(crate) fn timestamp_to_rfc3339(ts: i64) -> Result<String, AuthError> {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|dt| dt.to_rfc3339())
         .ok_or_else(|| AuthError::InvalidToken("invalid timestamp".into()))
+}
+
+pub(crate) async fn store_jti_with_expiration(
+    state: &AppState,
+    jti: &str,
+    exp: i64,
+) -> Result<(), AppError> {
+    let expired = timestamp_to_rfc3339(exp)?;
+    let stored = state
+        .repository
+        .store_jti(jti, &expired)
+        .await
+        .map_err(AppError::from)?;
+    if !stored {
+        return Err(AuthError::InvalidToken("jti replay detected".into()).into());
+    }
+    Ok(())
 }
 
 /// Verify that a signing key has not expired.

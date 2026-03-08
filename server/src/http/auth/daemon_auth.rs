@@ -10,7 +10,8 @@ use crate::jwt::{
 
 use super::error::AuthError;
 use super::{
-    build_expected_aud, check_signing_key_not_expired, extract_bearer_token, timestamp_to_rfc3339,
+    build_expected_aud, check_signing_key_not_expired, extract_bearer_token,
+    store_jti_with_expiration,
 };
 
 /// Authenticated request identity from daemon `Authorization: Bearer`.
@@ -48,7 +49,7 @@ impl FromRequestParts<AppState> for DaemonAuthJws {
         validate_aud(&verified, &expected_aud)?;
 
         // Step 7: Check jti replay
-        store_jti(state, &verified.jti, verified.exp).await?;
+        store_jti_with_expiration(state, &verified.jti, verified.exp).await?;
 
         Ok(Self {
             request_id: request_id.clone(),
@@ -98,19 +99,6 @@ async fn fetch_daemon_key(
 fn validate_aud(claims: &DaemonAuthClaims, expected: &str) -> Result<(), AuthError> {
     if claims.aud != expected {
         return Err(AuthError::InvalidToken("aud mismatch".into()));
-    }
-    Ok(())
-}
-
-async fn store_jti(state: &AppState, jti: &str, exp: i64) -> Result<(), AppError> {
-    let expired = timestamp_to_rfc3339(exp)?;
-    let stored = state
-        .repository
-        .store_jti(jti, &expired)
-        .await
-        .map_err(AppError::from)?;
-    if !stored {
-        return Err(AuthError::InvalidToken("jti replay detected".into()).into());
     }
     Ok(())
 }
