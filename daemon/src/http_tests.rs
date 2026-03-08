@@ -70,6 +70,31 @@ async fn send_post_json_with_retry_sends_bearer_and_json_body() {
     assert!(request.contains(r#""jwt-abc""#));
 }
 
+#[tokio::test]
+async fn send_get_with_retry_wraps_transport_errors_with_request_label() {
+    let client = build_http_client(Duration::from_millis(200), "test").unwrap();
+    let url = unused_local_url();
+
+    let error = send_get_with_retry(&client, &url, None).await.unwrap_err();
+
+    assert!(error.to_string().contains("failed to send request"));
+    assert!(error.to_string().contains(&url));
+}
+
+#[tokio::test]
+async fn send_post_json_with_retry_wraps_transport_errors_with_request_label() {
+    let client = build_http_client(Duration::from_millis(200), "test").unwrap();
+    let body = serde_json::json!({});
+    let url = unused_local_url();
+
+    let error = send_post_json_with_retry(&client, &url, None, &body)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("failed to send request"));
+    assert!(error.to_string().contains(&url));
+}
+
 #[test]
 fn map_status_error_returns_authentication_failed_for_401() {
     let error = map_status_error(StatusCode::UNAUTHORIZED, "http://example.com");
