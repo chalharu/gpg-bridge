@@ -1,16 +1,11 @@
-use axum::body;
 use axum::http::StatusCode;
 use tower::ServiceExt;
 
-use crate::jwt::generate_signing_key_pair;
-use crate::repository::ClientPairingRow;
-use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
-
 use super::{
-    add_client_pairing, add_client_with_assertion_key, add_pairing, build_app, build_test_app,
+    add_client_pairing, add_client_with_assertion_key, add_pairing, build_test_app,
     delete_pairing_by_daemon_request_for, delete_pairing_by_phone_request,
     get_pairing_token_request, make_device_assertion_token, make_pairing_repo, make_pairing_token,
-    pair_device_request, pair_device_status_for, refresh_pairing_request_for,
+    pair_device_request, pair_device_status_for, refresh_pairing_request_for, response_json,
 };
 
 // ===========================================================================
@@ -20,16 +15,12 @@ use super::{
 #[tokio::test]
 async fn get_pairing_token_returns_200_with_token() {
     let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    let json = response_json(response).await;
     assert!(json["pairing_token"].as_str().is_some());
     assert_eq!(json["expires_in"], 300);
 }
@@ -38,8 +29,7 @@ async fn get_pairing_token_returns_200_with_token() {
 async fn get_pairing_token_returns_429_when_limit_reached() {
     let (_priv_server, _pub_server, _server_kid, mut repo) = make_pairing_repo();
     repo.forced_unconsumed_count = Some(100); // matches unconsumed_pairing_limit
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
@@ -60,8 +50,7 @@ async fn pair_device_returns_200_with_pairing_id() {
 
     add_pairing(&repo, pairing_id, future_expired, None);
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
     let device_assertion =
@@ -72,10 +61,7 @@ async fn pair_device_returns_200_with_pairing_id() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    let json = response_json(response).await;
     assert_eq!(json["pairing_id"], pairing_id);
     assert_eq!(json["ok"], true);
     assert_eq!(json["client_id"], "fid-1");
@@ -140,8 +126,7 @@ async fn delete_by_phone_returns_204() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     add_client_pairing(&repo, "fid-1", "pair-del");
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/pair-del");
@@ -163,8 +148,7 @@ async fn delete_by_phone_not_found_returns_404() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     // No client_pairings → not found
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/nonexistent");
@@ -186,18 +170,8 @@ async fn delete_by_phone_not_found_returns_404() {
 
 #[tokio::test]
 async fn delete_by_daemon_returns_204() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-daemon-del".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
+    add_client_pairing(&repo, "fid-1", "pair-daemon-del");
 
     let app = build_test_app(repo);
 
@@ -221,18 +195,8 @@ async fn delete_by_daemon_returns_204() {
 
 #[tokio::test]
 async fn refresh_returns_200_with_new_jwt() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-refresh".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
+    add_client_pairing(&repo, "fid-1", "pair-refresh");
 
     let app = build_test_app(repo);
 
@@ -248,19 +212,13 @@ async fn refresh_returns_200_with_new_jwt() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    let json = response_json(response).await;
     assert!(json["client_jwt"].as_str().is_some());
 }
 
 #[tokio::test]
 async fn refresh_pairing_not_found_returns_404() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let repo = MockRepository::new(sk);
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
     // No client_pairings → not found after JWT verification
 
     let app = build_test_app(repo);

@@ -1,6 +1,7 @@
 use axum::Router;
-use axum::body::Body;
+use axum::body::{self, Body};
 use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
 use axum::routing::{delete, get, post};
 use serde_json::json;
 use tower::ServiceExt;
@@ -289,4 +290,11 @@ fn make_pairing_token(priv_jwk: &josekit::jwk::Jwk, kid: &str, pairing_id: &str)
 
 async fn response_status(app: Router, request: Request<Body>) -> StatusCode {
     app.oneshot(request).await.unwrap().status()
+}
+
+async fn response_json(response: Response) -> serde_json::Value {
+    let body = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
 }
