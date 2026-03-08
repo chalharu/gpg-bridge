@@ -4,6 +4,13 @@ use crate::test_http_server::{
     text_response,
 };
 
+fn unused_local_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{addr}")
+}
+
 #[test]
 fn build_bearer_header_adds_scheme() {
     let value = build_bearer_header("token-123").unwrap();
@@ -170,6 +177,18 @@ async fn send_patch_json_with_retry_returns_409_on_conflict() {
 }
 
 #[tokio::test]
+async fn send_patch_json_with_retry_wraps_transport_errors_with_patch_label() {
+    let client = build_http_client(Duration::from_millis(200), "test").unwrap();
+    let body = serde_json::json!({});
+
+    let error = send_patch_json_with_retry(&client, &unused_local_url(), None, &body)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("failed to send PATCH"));
+}
+
+#[tokio::test]
 async fn send_delete_with_retry_returns_status_on_204() {
     let (addr, server) =
         spawn_single_response_server_with_request(empty_response("HTTP/1.1 204 No Content")).await;
@@ -210,6 +229,17 @@ async fn send_delete_with_retry_returns_409() {
         .await
         .unwrap();
     assert_eq!(status, 409);
+}
+
+#[tokio::test]
+async fn send_delete_with_retry_wraps_transport_errors_with_delete_label() {
+    let client = build_http_client(Duration::from_millis(200), "test").unwrap();
+
+    let error = send_delete_with_retry(&client, &unused_local_url(), None)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("failed to send DELETE"));
 }
 
 // Uses std::thread + std::net::TcpListener (blocking I/O) and a client
