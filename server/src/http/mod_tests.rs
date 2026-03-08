@@ -1,5 +1,6 @@
 use super::*;
 use axum::{
+    Router,
     body::{self, Body},
     http::{Request, StatusCode, header::HeaderName},
     response::IntoResponse,
@@ -7,8 +8,9 @@ use axum::{
 use tower::ServiceExt;
 
 use super::accept::ACCEPT_VERSION_V1;
-use crate::test_support::MockRepository;
-use crate::{config::AppConfig, repository::build_repository};
+use crate::config::AppConfig;
+use crate::repository::build_repository;
+use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
 
 use super::rate_limit::config::{SseConnectionConfig, TierConfig};
 
@@ -29,87 +31,35 @@ fn test_rate_limit_config() -> RateLimitConfig {
     }
 }
 
+fn test_app_config() -> AppConfig {
+    AppConfig::from_lookup(&|key| match key {
+        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
+        "SERVER_BASE_URL" => Some("http://localhost:3000".to_owned()),
+        _ => None,
+    })
+    .unwrap()
+}
+
 #[tokio::test]
 async fn health_returns_ok_status() {
-    let config = AppConfig {
-        server_host: "127.0.0.1".to_owned(),
-        server_port: 3000,
-        database_url: "sqlite::memory:".to_owned(),
-        db_max_connections: 4,
-        db_min_connections: 1,
-        db_acquire_timeout_seconds: 5,
-        log_level: "info".to_owned(),
-        log_format: "plain".to_owned(),
-        signing_key_secret: "test-secret-key!".to_owned(),
-        base_url: "http://localhost:3000".to_owned(),
-        rate_limit_strict_quota: 10,
-        rate_limit_strict_window_seconds: 60,
-        rate_limit_standard_quota: 60,
-        rate_limit_standard_window_seconds: 60,
-        rate_limit_sse_max_per_ip: 20,
-        rate_limit_sse_max_per_key: 1,
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_service_account_key_path: None,
-        fcm_project_id: None,
-        cleanup_interval_seconds: 60,
-        unpaired_client_max_age_hours: 24,
-        audit_log_approved_retention_seconds: 31_536_000,
-        audit_log_denied_retention_seconds: 15_768_000,
-        audit_log_conflict_retention_seconds: 7_884_000,
-    };
+    let config = test_app_config();
 
     let repository = build_repository(&config).await.unwrap();
     repository.run_migrations().await.unwrap();
 
-    let state = AppState {
-        repository,
-        base_url: "http://localhost:3000".to_owned(),
-        signing_key_secret: "test-secret-key!".to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: SignEventNotifier::new(),
-    };
-    let Json(response) = health(axum::extract::State(state)).await.unwrap();
+    let Json(response) = health(axum::extract::State(make_test_app_state_arc(repository)))
+        .await
+        .unwrap();
 
     assert_eq!(response.status, "ok");
 }
 
 #[tokio::test]
 async fn health_returns_problem_details_when_repository_unavailable() {
-    let state = AppState {
-        repository: Arc::new(failing_mock()),
-        base_url: "http://localhost:3000".to_owned(),
-        signing_key_secret: "test-secret-key!".to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: SignEventNotifier::new(),
-    };
-
-    let error = health(axum::extract::State(state)).await.unwrap_err();
+    let error = health(axum::extract::State(make_test_app_state(failing_mock())))
+        .await
+        .unwrap_err();
     let response = error.into_response();
 
     assert_eq!(
@@ -150,42 +100,29 @@ fn failing_mock() -> MockRepository {
     }
 }
 
-fn test_state(repo: impl SignatureRepository + 'static) -> AppState {
-    AppState {
-        repository: Arc::new(repo),
-        base_url: "http://localhost:3000".to_owned(),
-        signing_key_secret: "test-secret-key!".to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(rate_limit::config::SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: SignEventNotifier::new(),
-    }
+fn test_app() -> Router {
+    build_router(
+        make_test_app_state(healthy_mock()),
+        test_rate_limit_config(),
+    )
+}
+
+async fn get_health_response(app: Router, accept_header: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .header(header::ACCEPT, accept_header)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
 async fn router_rejects_unsupported_accept_with_406() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/vnd.gpg-bridge.v2+json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/vnd.gpg-bridge.v2+json").await;
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
     assert_eq!(
@@ -217,19 +154,7 @@ async fn router_rejects_unsupported_accept_with_406() {
 
 #[tokio::test]
 async fn router_accepts_v1_media_type_and_adds_security_headers() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, ACCEPT_VERSION_V1)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), ACCEPT_VERSION_V1).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -260,19 +185,7 @@ async fn router_accepts_v1_media_type_and_adds_security_headers() {
 
 #[tokio::test]
 async fn router_accepts_application_json_and_returns_versioned_content_type() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -283,19 +196,7 @@ async fn router_accepts_application_json_and_returns_versioned_content_type() {
 
 #[tokio::test]
 async fn router_accepts_mixed_case_media_type() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "Application/Vnd.Gpg-Sign.V1+Json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "Application/Vnd.Gpg-Sign.V1+Json").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -306,38 +207,14 @@ async fn router_accepts_mixed_case_media_type() {
 
 #[tokio::test]
 async fn router_rejects_accept_media_type_with_zero_quality() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json;q=0, text/plain")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json;q=0, text/plain").await;
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 }
 
 #[tokio::test]
 async fn router_accepts_application_wildcard() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/*")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/*").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -348,7 +225,10 @@ async fn router_accepts_application_wildcard() {
 
 #[tokio::test]
 async fn router_handles_cors_preflight_options() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
+    let app = build_router(
+        make_test_app_state(healthy_mock()),
+        test_rate_limit_config(),
+    );
 
     let response = app
         .oneshot(
@@ -384,7 +264,10 @@ async fn router_handles_cors_preflight_options() {
 
 #[tokio::test]
 async fn router_cors_preflight_allows_authorization_header() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
+    let app = build_router(
+        make_test_app_state(healthy_mock()),
+        test_rate_limit_config(),
+    );
 
     let response = app
         .oneshot(
@@ -418,7 +301,10 @@ async fn router_cors_preflight_allows_authorization_header() {
 
 #[tokio::test]
 async fn router_cors_preflight_allows_patch_and_delete_methods() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
+    let app = build_router(
+        make_test_app_state(healthy_mock()),
+        test_rate_limit_config(),
+    );
 
     for request_method in [Method::PATCH, Method::DELETE] {
         let response = app
@@ -453,19 +339,7 @@ async fn router_cors_preflight_allows_patch_and_delete_methods() {
 
 #[tokio::test]
 async fn router_accepts_uppercase_q_parameter_name() {
-    let app = build_router(test_state(healthy_mock()), test_rate_limit_config());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json;Q=0.8")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json;Q=0.8").await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }
@@ -487,7 +361,7 @@ async fn router_returns_429_when_rate_limit_exceeded() {
         },
     };
 
-    let app = build_router(test_state(healthy_mock()), rl_config);
+    let app = build_router(make_test_app_state(healthy_mock()), rl_config);
 
     // Exhaust the standard quota (2 requests).
     for _ in 0..2 {

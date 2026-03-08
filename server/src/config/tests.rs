@@ -1,13 +1,37 @@
+use std::collections::HashMap;
+
 use super::*;
+
+const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/gpg_bridge";
+const SQLITE_MEMORY_DATABASE_URL: &str = "sqlite::memory:";
+const DEFAULT_SIGNING_KEY_SECRET: &str = "test-secret-key!";
+
+fn config_from_env(entries: &[(&str, &str)]) -> anyhow::Result<AppConfig> {
+    let env = entries.iter().copied().collect::<HashMap<_, _>>();
+    AppConfig::from_lookup(&|key| env.get(key).map(|value| (*value).to_owned()))
+}
+
+fn config_with_required_env(overrides: &[(&str, &str)]) -> anyhow::Result<AppConfig> {
+    let mut env = HashMap::from([
+        ("SERVER_DATABASE_URL", DEFAULT_DATABASE_URL),
+        ("SERVER_SIGNING_KEY_SECRET", DEFAULT_SIGNING_KEY_SECRET),
+    ]);
+    env.extend(overrides.iter().copied());
+
+    AppConfig::from_lookup(&|key| env.get(key).map(|value| (*value).to_owned()))
+}
+
+fn assert_invalid_config(overrides: &[(&str, &str)], expected_message: &str) {
+    let error = config_with_required_env(overrides).unwrap_err();
+    assert!(
+        error.to_string().contains(expected_message),
+        "expected error message to mention {expected_message}, got {error}"
+    );
+}
 
 #[test]
 fn config_uses_defaults_and_required_values() {
-    let config = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("postgres://localhost:5432/gpg_bridge".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        _ => None,
-    })
-    .unwrap();
+    let config = config_with_required_env(&[]).unwrap();
 
     assert_eq!(config.server_host, "127.0.0.1");
     assert_eq!(config.server_port, 3000);
@@ -37,7 +61,7 @@ fn config_uses_defaults_and_required_values() {
 
 #[test]
 fn config_returns_error_when_required_env_is_missing() {
-    let result = AppConfig::from_lookup(&|_| None);
+    let result = config_from_env(&[]);
 
     assert!(result.is_err());
     assert!(
@@ -68,46 +92,30 @@ fn detect_database_kind_rejects_unknown_scheme() {
 
 #[test]
 fn config_rejects_min_connections_larger_than_max() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_DB_MAX_CONNECTIONS" => Some("2".to_owned()),
-        "SERVER_DB_MIN_CONNECTIONS" => Some("3".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_DB_MIN_CONNECTIONS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_DB_MAX_CONNECTIONS", "2"),
+            ("SERVER_DB_MIN_CONNECTIONS", "3"),
+        ],
+        "SERVER_DB_MIN_CONNECTIONS",
     );
 }
 
 #[test]
 fn config_rejects_short_signing_key_secret() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("short".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("at least 16 bytes")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_SIGNING_KEY_SECRET", "short"),
+        ],
+        "at least 16 bytes",
     );
 }
 
 #[test]
 fn config_rejects_missing_signing_key_secret() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        _ => None,
-    });
+    let result = config_from_env(&[("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL)]);
 
     assert!(result.is_err());
     assert!(
@@ -120,170 +128,110 @@ fn config_rejects_missing_signing_key_secret() {
 
 #[test]
 fn config_rejects_zero_acquire_timeout() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS", "0"),
+        ],
+        "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS",
     );
 }
 
 #[test]
 fn config_rejects_zero_strict_quota() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_RATE_LIMIT_STRICT_QUOTA" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_RATE_LIMIT_STRICT_QUOTA")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_RATE_LIMIT_STRICT_QUOTA", "0"),
+        ],
+        "SERVER_RATE_LIMIT_STRICT_QUOTA",
     );
 }
 
 #[test]
 fn config_rejects_zero_standard_window() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS", "0"),
+        ],
+        "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS",
     );
 }
 
 #[test]
 fn config_rejects_zero_cleanup_interval() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_CLEANUP_INTERVAL_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_CLEANUP_INTERVAL_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_CLEANUP_INTERVAL_SECONDS", "0"),
+        ],
+        "SERVER_CLEANUP_INTERVAL_SECONDS",
     );
 }
 
 #[test]
 fn config_rejects_duration_exceeding_upper_bound() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_DEVICE_JWT_VALIDITY_SECONDS" => Some("9999999999999".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_DEVICE_JWT_VALIDITY_SECONDS", "9999999999999"),
+        ],
+        "exceeds maximum",
+    );
 }
 
 #[test]
 fn config_rejects_zero_unpaired_client_max_age() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "0"),
+        ],
+        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS",
     );
 }
 
 #[test]
 fn config_rejects_zero_audit_log_approved_retention() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS", "0"),
+        ],
+        "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS",
     );
 }
 
 #[test]
 fn config_rejects_zero_audit_log_denied_retention() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS", "0"),
+        ],
+        "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS",
     );
 }
 
 #[test]
 fn config_rejects_zero_audit_log_conflict_retention() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS" => Some("0".to_owned()),
-        _ => None,
-    });
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS")
+    assert_invalid_config(
+        &[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            ("SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS", "0"),
+        ],
+        "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS",
     );
 }
 
 #[test]
 fn config_accepts_min_connections_equal_to_max() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_DB_MAX_CONNECTIONS" => Some("5".to_owned()),
-        "SERVER_DB_MIN_CONNECTIONS" => Some("5".to_owned()),
-        _ => None,
-    });
+    let result = config_with_required_env(&[
+        ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+        ("SERVER_DB_MAX_CONNECTIONS", "5"),
+        ("SERVER_DB_MIN_CONNECTIONS", "5"),
+    ]);
 
     assert!(result.is_ok(), "min == max should be accepted");
     let config = result.unwrap();
@@ -293,12 +241,10 @@ fn config_accepts_min_connections_equal_to_max() {
 
 #[test]
 fn config_accepts_strict_quota_of_one() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_RATE_LIMIT_STRICT_QUOTA" => Some("1".to_owned()),
-        _ => None,
-    });
+    let result = config_with_required_env(&[
+        ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+        ("SERVER_RATE_LIMIT_STRICT_QUOTA", "1"),
+    ]);
 
     assert!(result.is_ok(), "quota == 1 should be accepted");
     let config = result.unwrap();
@@ -307,12 +253,10 @@ fn config_accepts_strict_quota_of_one() {
 
 #[test]
 fn config_accepts_standard_quota_of_one() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_RATE_LIMIT_STANDARD_QUOTA" => Some("1".to_owned()),
-        _ => None,
-    });
+    let result = config_with_required_env(&[
+        ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+        ("SERVER_RATE_LIMIT_STANDARD_QUOTA", "1"),
+    ]);
 
     assert!(result.is_ok(), "standard quota == 1 should be accepted");
     let config = result.unwrap();
@@ -353,12 +297,10 @@ fn config_rejects_zero_values_for_remaining_validation_guards() {
     ];
 
     for (env_key, expected_message) in cases {
-        let result = AppConfig::from_lookup(&|key| match key {
-            "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-            "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-            k if k == env_key => Some("0".to_owned()),
-            _ => None,
-        });
+        let result = config_with_required_env(&[
+            ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+            (env_key, "0"),
+        ]);
 
         assert!(result.is_err(), "{env_key} should be rejected when zero");
         assert!(
@@ -370,12 +312,11 @@ fn config_rejects_zero_values_for_remaining_validation_guards() {
 
 #[test]
 fn config_rejects_unpaired_client_max_age_overflow() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some(u64::MAX.to_string()),
-        _ => None,
-    });
+    let overflow = u64::MAX.to_string();
+    let result = config_with_required_env(&[
+        ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+        ("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", overflow.as_str()),
+    ]);
 
     assert!(result.is_err());
     assert!(
@@ -388,12 +329,10 @@ fn config_rejects_unpaired_client_max_age_overflow() {
 
 #[test]
 fn config_rejects_unpaired_client_max_age_exceeding_upper_bound() {
-    let result = AppConfig::from_lookup(&|key| match key {
-        "SERVER_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
-        "SERVER_SIGNING_KEY_SECRET" => Some("test-secret-key!".to_owned()),
-        "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS" => Some("876001".to_owned()),
-        _ => None,
-    });
+    let result = config_with_required_env(&[
+        ("SERVER_DATABASE_URL", SQLITE_MEMORY_DATABASE_URL),
+        ("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "876001"),
+    ]);
 
     assert!(result.is_err());
     assert!(
