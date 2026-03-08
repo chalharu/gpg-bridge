@@ -1,337 +1,160 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::json;
-use tower::ServiceExt;
 
 use crate::jwt::{encrypt_private_key, generate_signing_key_pair, jwk_to_json};
-use crate::repository::{PairingRow, SigningKeyRow};
-use crate::test_support::{MockRepository, TEST_SECRET, make_signing_key_row, make_test_app_state};
+use crate::repository::SigningKeyRow;
+use crate::test_support::{MockRepository, TEST_SECRET};
 
 use super::{
-    build_app, make_client_with_public_key, make_device_assertion_token, make_pairing_token,
+    add_client_with_assertion_key, add_unconsumed_pairing, build_test_app,
+    make_device_assertion_token, make_pairing_repo, pair_device_status_for_default_client,
+    response_status,
 };
+
+fn make_server_signing_key_row(
+    private_key: String,
+    public_key: String,
+    server_kid: &str,
+    created_at: &str,
+    expires_at: &str,
+) -> SigningKeyRow {
+    SigningKeyRow {
+        kid: server_kid.to_owned(),
+        private_key,
+        public_key,
+        created_at: created_at.into(),
+        expires_at: expires_at.into(),
+        is_active: true,
+    }
+}
 
 // ===========================================================================
 // pair.rs – additional error path tests
 // ===========================================================================
 
-// -- POST /pairing: malformed body (missing field) ----------------------------
-
 #[tokio::test]
 async fn pair_device_missing_field_returns_400() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
+    let app = build_test_app(repo);
 
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    // Body with wrong field name
-    let body_json = json!({ "wrong_field": "value" });
+    let status = response_status(
+        app,
+        Request::post("/pairing")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "wrong_field": "value" })).unwrap(),
+            ))
+            .unwrap(),
+    )
+    .await;
 
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
-
-// -- POST /pairing: invalid public JWK in signing key row ---------------------
 
 #[tokio::test]
 async fn pair_device_corrupt_public_key_returns_500() {
-    let (priv_server, _, server_kid) = generate_signing_key_pair().unwrap();
-    // Create a signing key row with valid private key but invalid public_key
+    let (priv_server, _pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let private_json = jwk_to_json(&priv_server).unwrap();
     let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    let bad_sk = SigningKeyRow {
-        kid: server_kid.clone(),
-        private_key: encrypted,
-        public_key: "not-a-valid-jwk".into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        expires_at: "2027-01-01T00:00:00Z".into(),
-        is_active: true,
-    };
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let bad_sk = make_server_signing_key_row(
+        encrypted,
+        "not-a-valid-jwk".into(),
+        &server_kid,
+        "2026-01-01T00:00:00Z",
+        "2027-01-01T00:00:00Z",
+    );
 
     let repo = MockRepository::new(bad_sk);
-    repo.clients.lock().unwrap().push(client);
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
-    // Sign pairing token with the REAL private key but repo returns bad public_key
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-test");
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
-
-// -- POST /pairing: invalid expired timestamp in pairing record ---------------
 
 #[tokio::test]
 async fn pair_device_invalid_expired_format_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
 
     let pairing_id = "pair-bad-ts";
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: "not-a-valid-timestamp".to_owned(),
-        client_id: None,
-    });
+    super::add_pairing(&repo, pairing_id, "not-a-valid-timestamp", None);
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
-
-// -- POST /pairing: consume_pairing DB error ----------------------------------
 
 #[tokio::test]
 async fn pair_device_consume_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
 
     let pairing_id = "pair-consume-err";
-    let future_expired = "2099-01-01T00:00:00+00:00";
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: future_expired.to_owned(),
-        client_id: None,
-    });
+    add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("consume_pairing");
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
-
-// -- POST /pairing: create_client_pairing DB error ----------------------------
 
 #[tokio::test]
 async fn pair_device_create_link_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
 
     let pairing_id = "pair-link-err";
-    let future_expired = "2099-01-01T00:00:00+00:00";
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: future_expired.to_owned(),
-        client_id: None,
-    });
+    add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("create_client_pairing");
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
-
-// -- POST /pairing: expired signing key returns 401 ---------------------------
 
 #[tokio::test]
 async fn pair_device_expired_signing_key_returns_401() {
     let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let private_json = jwk_to_json(&priv_server).unwrap();
     let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    let expired_sk = SigningKeyRow {
-        kid: server_kid.clone(),
-        private_key: encrypted,
-        public_key: jwk_to_json(&pub_server).unwrap(),
-        created_at: "2020-01-01T00:00:00Z".into(),
-        expires_at: "2020-06-01T00:00:00Z".into(), // already expired
-        is_active: true,
-    };
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
+    let expired_sk = make_server_signing_key_row(
+        encrypted,
+        jwk_to_json(&pub_server).unwrap(),
+        &server_kid,
+        "2020-01-01T00:00:00Z",
+        "2020-06-01T00:00:00Z",
+    );
 
     let repo = MockRepository::new(expired_sk);
-    repo.clients.lock().unwrap().push(client);
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-test");
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
-
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
-
-// -- POST /pairing: get_signing_key_by_kid DB error ---------------------------
 
 #[tokio::test]
 async fn pair_device_signing_key_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
     repo.force_error("get_signing_key_by_kid");
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-test");
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
-
-// -- POST /pairing: get_pairing_by_id DB error --------------------------------
 
 #[tokio::test]
 async fn pair_device_get_pairing_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
     repo.force_error("get_pairing_by_id");
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
 
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-test");
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let body_json = json!({ "pairing_jwt": pairing_token });
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
-    let response = app
-        .oneshot(
-            Request::post("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

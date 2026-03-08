@@ -1,8 +1,10 @@
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, header};
+use axum::body::{self, Body};
+use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
 use axum::routing::{delete, get, post};
 use serde_json::json;
+use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
@@ -10,7 +12,9 @@ use crate::jwt::{
     sign_jws,
 };
 use crate::repository::{ClientPairingRow, ClientRow, PairingRow};
-use crate::test_support::{MockRepository, make_signing_key_row};
+use crate::test_support::{
+    MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
+};
 
 use super::{
     delete_pairing_by_daemon, delete_pairing_by_phone, get_pairing_token, pair_device,
@@ -53,6 +57,10 @@ fn build_app(state: AppState) -> Router {
         .with_state(state)
 }
 
+fn build_test_app(repo: MockRepository) -> Router {
+    build_app(make_test_app_state(repo))
+}
+
 fn make_pairing_repo() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRepository) {
     let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
@@ -75,12 +83,35 @@ fn add_client_with_assertion_key(
     (priv_client, client_kid)
 }
 
+async fn pair_device_status_for_default_client(
+    repo: MockRepository,
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    pairing_id: &str,
+) -> StatusCode {
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
+    pair_device_status_for(
+        repo,
+        server_priv,
+        server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
+    )
+    .await
+}
+
 fn add_pairing(repo: &MockRepository, pairing_id: &str, expired: &str, client_id: Option<&str>) {
     repo.pairings.lock().unwrap().push(PairingRow {
         pairing_id: pairing_id.to_owned(),
         expired: expired.to_owned(),
         client_id: client_id.map(str::to_owned),
     });
+}
+
+fn add_unconsumed_pairing(repo: &MockRepository, pairing_id: &str) {
+    add_pairing(repo, pairing_id, "2099-01-01T00:00:00+00:00", None);
 }
 
 fn add_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) {
@@ -107,6 +138,43 @@ fn pair_device_request(pairing_jwt: &str, device_assertion: &str) -> Request<Bod
         .unwrap()
 }
 
+fn pair_device_request_for(
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    pairing_id: &str,
+    client_priv: &josekit::jwk::Jwk,
+    client_kid: &str,
+    client_id: &str,
+) -> Request<Body> {
+    let pairing_token = make_pairing_token(server_priv, server_kid, pairing_id);
+    let device_assertion =
+        make_device_assertion_token(client_priv, client_kid, client_id, "/pairing");
+    pair_device_request(&pairing_token, &device_assertion)
+}
+
+async fn pair_device_status_for(
+    repo: MockRepository,
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    pairing_id: &str,
+    client_priv: &josekit::jwk::Jwk,
+    client_kid: &str,
+    client_id: &str,
+) -> StatusCode {
+    response_status(
+        build_test_app(repo),
+        pair_device_request_for(
+            server_priv,
+            server_kid,
+            pairing_id,
+            client_priv,
+            client_kid,
+            client_id,
+        ),
+    )
+    .await
+}
+
 #[allow(dead_code)]
 fn pair_device_json_request(body_json: serde_json::Value, device_assertion: &str) -> Request<Body> {
     Request::post("/pairing")
@@ -123,12 +191,34 @@ fn delete_pairing_by_phone_request(pairing_id: &str, device_assertion: &str) -> 
         .unwrap()
 }
 
+fn delete_pairing_by_phone_request_for(
+    pairing_id: &str,
+    client_priv: &josekit::jwk::Jwk,
+    client_kid: &str,
+    client_id: &str,
+) -> Request<Body> {
+    let path = format!("/pairing/{pairing_id}");
+    let device_assertion = make_device_assertion_token(client_priv, client_kid, client_id, &path);
+    delete_pairing_by_phone_request(pairing_id, &device_assertion)
+}
+
 fn delete_pairing_by_daemon_request(client_jwt: &str) -> Request<Body> {
     let body_json = json!({ "client_jwt": client_jwt });
     Request::delete("/pairing")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
         .unwrap()
+}
+
+fn delete_pairing_by_daemon_request_for(
+    server_priv: &josekit::jwk::Jwk,
+    server_pub: &josekit::jwk::Jwk,
+    server_kid: &str,
+    client_id: &str,
+    pairing_id: &str,
+) -> Request<Body> {
+    let client_jwt = make_client_jwt(server_priv, server_pub, server_kid, client_id, pairing_id);
+    delete_pairing_by_daemon_request(&client_jwt)
 }
 
 #[allow(dead_code)]
@@ -138,6 +228,17 @@ fn refresh_pairing_request(client_jwt: &str) -> Request<Body> {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
         .unwrap()
+}
+
+fn refresh_pairing_request_for(
+    server_priv: &josekit::jwk::Jwk,
+    server_pub: &josekit::jwk::Jwk,
+    server_kid: &str,
+    client_id: &str,
+    pairing_id: &str,
+) -> Request<Body> {
+    let client_jwt = make_client_jwt(server_priv, server_pub, server_kid, client_id, pairing_id);
+    refresh_pairing_request(&client_jwt)
 }
 
 #[allow(dead_code)]
@@ -204,4 +305,15 @@ fn make_pairing_token(priv_jwk: &josekit::jwk::Jwk, kid: &str, pairing_id: &str)
         exp: 1_900_000_000,
     };
     sign_jws(&claims, priv_jwk, kid).unwrap()
+}
+
+async fn response_status(app: Router, request: Request<Body>) -> StatusCode {
+    app.oneshot(request).await.unwrap().status()
+}
+
+async fn response_json(response: Response) -> serde_json::Value {
+    let body = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
 }
