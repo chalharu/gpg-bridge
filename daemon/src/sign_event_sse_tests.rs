@@ -3,8 +3,8 @@ use crate::e2e_crypto;
 use crate::http::build_http_client;
 use crate::sign_flow::SignFlowState;
 use crate::test_http_server::{
-    empty_response, sse_event, sse_headers, sse_response, spawn_response_sequence,
-    spawn_single_response_server, spawn_single_response_server_with_request,
+    empty_response, spawn_response_sequence, spawn_single_response_server,
+    spawn_single_response_server_with_request, sse_event, sse_headers, sse_response,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -63,7 +63,11 @@ async fn approved_returns_decrypted_signature() {
     let (mut flow_state, enc_pub) = flow_state_with_url("http://placeholder");
     let jwe = approved_jwe(&enc_pub, &[0xDE, 0xAD, 0xBE, 0xEF]);
     let event_data = serde_json::json!({"status": "approved", "signature": jwe});
-    let addr = spawn_single_response_server(sse_response(&sse_event("signature", &event_data.to_string()))).await;
+    let addr = spawn_single_response_server(sse_response(&sse_event(
+        "signature",
+        &event_data.to_string(),
+    )))
+    .await;
     flow_state.server_url = format!("http://{addr}");
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
@@ -183,7 +187,11 @@ async fn reconnects_on_server_error_then_succeeds() {
 
 #[tokio::test]
 async fn reconnects_on_stream_close_then_succeeds() {
-    let addr = spawn_response_sequence(vec![sse_headers().to_owned(), signature_status_response("denied")]).await;
+    let addr = spawn_response_sequence(vec![
+        sse_headers().to_owned(),
+        signature_status_response("denied"),
+    ])
+    .await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();

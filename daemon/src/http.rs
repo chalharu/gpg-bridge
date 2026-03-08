@@ -1,6 +1,5 @@
 use reqwest::{
-    RequestBuilder,
-    Client, StatusCode,
+    Client, RequestBuilder, StatusCode,
     header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER},
 };
 use std::time::Duration;
@@ -63,10 +62,7 @@ pub(crate) fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
     }
 }
 
-fn apply_bearer(
-    request: RequestBuilder,
-    bearer: Option<&HeaderValue>,
-) -> RequestBuilder {
+fn apply_bearer(request: RequestBuilder, bearer: Option<&HeaderValue>) -> RequestBuilder {
     match bearer {
         Some(value) => request.header(AUTHORIZATION, value),
         None => request,
@@ -119,7 +115,7 @@ pub(crate) async fn send_get_with_retry(
         url,
         "request",
         || apply_bearer(client.get(url), bearer),
-        StatusCode::is_success,
+        |status| status.is_success(),
         |response| async move {
             response.text().await.map_err(|error| {
                 anyhow::anyhow!("failed to read response body from {url}: {error}")
@@ -139,7 +135,7 @@ pub(crate) async fn send_post_json_with_retry(
         url,
         "request",
         || apply_bearer(client.post(url).json(body), bearer),
-        StatusCode::is_success,
+        |status| status.is_success(),
         |response| async move {
             response.text().await.map_err(|error| {
                 anyhow::anyhow!("failed to read response body from {url}: {error}")
