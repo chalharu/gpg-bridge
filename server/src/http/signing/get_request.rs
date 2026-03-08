@@ -3,7 +3,8 @@ use axum::{Json, extract::State, response::IntoResponse};
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::DeviceAssertionAuth;
-use crate::jwt::{PayloadType, SignClaims, decrypt_private_key, jwk_from_json, sign_jws};
+use crate::http::auth::{load_active_signing_key, load_private_signing_jwk};
+use crate::jwt::{PayloadType, SignClaims, sign_jws};
 
 use super::types::{GetSignRequestItem, GetSignRequestResponse};
 
@@ -40,17 +41,13 @@ pub async fn get_sign_request(
     }
 
     // Prepare signing key for issuing sign_jwts
-    let signing_key = state
-        .repository
-        .get_active_signing_key()
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::internal("no active signing key"))?;
-
-    let private_json = decrypt_private_key(&signing_key.private_key, &state.signing_key_secret)
-        .map_err(|e| AppError::internal(format!("key decrypt failed: {e}")))?;
-    let private_jwk = jwk_from_json(&private_json)
-        .map_err(|e| AppError::internal(format!("invalid JWK: {e}")))?;
+    let signing_key = load_active_signing_key(&state).await?;
+    let private_jwk = load_private_signing_jwk(
+        &signing_key,
+        &state.signing_key_secret,
+        "key decrypt failed",
+        "invalid JWK",
+    )?;
 
     let mut result_items = Vec::new();
 

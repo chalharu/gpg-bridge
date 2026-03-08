@@ -1,6 +1,7 @@
 use axum::Router;
 use axum::body::{self, Body};
 use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceExt;
 
@@ -22,6 +23,13 @@ fn build_sse_app(state: AppState) -> Router {
         .with_state(state)
 }
 
+async fn response_json(response: Response) -> serde_json::Value {
+    let bytes = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
 #[tokio::test]
 async fn session_missing_auth_returns_401() {
     let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
@@ -41,6 +49,9 @@ async fn session_missing_auth_returns_401() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "missing authorization token");
+    assert_eq!(body["instance"], "/pairing-session");
 }
 
 #[tokio::test]
@@ -63,6 +74,37 @@ async fn session_invalid_bearer_scheme_returns_401() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "missing Bearer scheme");
+    assert_eq!(body["instance"], "/pairing-session");
+}
+
+#[tokio::test]
+async fn session_invalid_authorization_header_returns_401() {
+    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
+    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    let repo = MockRepository::new(sk);
+    let state = make_test_app_state(repo);
+    let app = build_sse_app(state);
+
+    let response = app
+        .oneshot(
+            Request::get("/pairing-session")
+                .header(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_bytes(b"\xff").unwrap(),
+                )
+                .header("X-Forwarded-For", "10.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "invalid authorization header");
+    assert_eq!(body["instance"], "/pairing-session");
 }
 
 #[tokio::test]

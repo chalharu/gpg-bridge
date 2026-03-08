@@ -161,8 +161,57 @@ async fn sign_events_missing_auth_returns_401() {
         .header("X-Forwarded-For", "10.0.0.1")
         .body(Body::empty())
         .unwrap();
-    let status = response_status(app, req).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let body = super::body_json(response).await;
+    assert_eq!(body["detail"], "missing authorization token");
+    assert_eq!(body["instance"], "/sign-events");
+}
+
+#[tokio::test]
+async fn sign_events_wrong_aud_returns_401_with_route_instance() {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+
+    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+    let repo = MockRepository::new(sk);
+    *repo.request.lock().unwrap() = Some(RequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+    });
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: "created".into(),
+        expired: "2099-01-01T00:00:00Z".into(),
+        signature: None,
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        "https://api.example.com/wrong",
+    );
+
+    let state = make_test_app_state(repo);
+    let app = build_sign_events_app(state);
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = super::body_json(response).await;
+    assert_eq!(body["detail"], "invalid token: aud mismatch");
+    assert_eq!(body["instance"], "/sign-events");
 }
 
 #[tokio::test]

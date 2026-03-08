@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{Request, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
@@ -11,13 +11,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::auth::check_signing_key_not_expired;
-use crate::http::rate_limit::ip_extractor::extract_client_ip;
-use crate::http::rate_limit::sse_tracker::SseRejection;
-use crate::jwt::{
-    DaemonAuthClaims, PayloadType, RequestClaims, decode_jws_unverified, extract_kid,
-    jwk_from_json, verify_jws, verify_jws_with_key,
-};
+use crate::http::auth::authenticate_daemon_request;
+use crate::http::rate_limit::{acquire_sse_slot, resolve_client_ip};
 use crate::repository::AuditLogRow;
 
 use super::notifier::SignEventData;
@@ -33,102 +28,36 @@ pub async fn get_sign_events(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let token = extract_bearer(request.headers())?;
+    let client_ip = resolve_client_ip(&request, INSTANCE)?;
+    let (mut parts, _body) = request.into_parts();
+    let auth = authenticate_daemon_request(&mut parts, &state, INSTANCE).await?;
+    let request_id = auth.request_id;
 
-    // Step 1: Decode outer JWS (unverified) to get request_jwt
-    let outer: DaemonAuthClaims =
-        decode_jws_unverified(&token).map_err(|e| auth_error(&format!("invalid token: {e}")))?;
+    let guard = acquire_sse_slot(
+        &state,
+        client_ip,
+        &request_id,
+        "SSE connection already active for this request",
+        INSTANCE,
+    )?;
 
-    // Steps 2-3: Verify inner request_jwt with server signing key
-    let request_claims = verify_request_jwt(&outer.request_jwt, &state).await?;
-    let request_id = &request_claims.sub;
+    let rx = state.sign_event_notifier.subscribe(&request_id);
 
-    // Step 4: Fetch daemon_public_key from DB
-    let daemon_pub_jwk = fetch_daemon_key(&state, request_id).await?;
-
-    // Step 5: Verify outer JWS with daemon_public_key
-    let verified: DaemonAuthClaims = verify_jws_with_key(&token, &daemon_pub_jwk)
-        .map_err(|e| auth_error(&format!("invalid token: {e}")))?;
-
-    // Step 6: Check aud
-    let expected_aud = build_expected_aud(&state.base_url, request.uri().path());
-    validate_aud(&verified, &expected_aud)?;
-
-    // Step 7: Check jti replay
-    store_jti(&state, &verified.jti, verified.exp).await?;
-
-    // Step 8: Extract client IP for SSE rate limiting
-    let client_ip = resolve_client_ip(&request)?;
-
-    // Step 9: Acquire SSE slot (request_id as key)
-    let guard = acquire_sse_slot(&state, client_ip, request_id)?;
-
-    // Step 10: Subscribe to sign_event_notifier (before DB check to avoid TOCTOU)
-    let rx = state.sign_event_notifier.subscribe(request_id);
-
-    // Step 11: Check if result already exists in DB
     let full_request = state
         .repository
-        .get_full_request_by_id(request_id)
+        .get_full_request_by_id(&request_id)
         .await
         .map_err(|e| AppError::from(e).with_instance(INSTANCE))?
         .ok_or_else(|| AppError::not_found("request not found").with_instance(INSTANCE))?;
 
-    let expiry = parse_expiry(&full_request.expired)?;
+    let expiry = parse_expiry(&full_request.expired).map_err(|e| e.with_instance(INSTANCE))?;
 
-    // If request is already completed, send immediate response
-    match full_request.status.as_str() {
-        "approved" => {
-            state.sign_event_notifier.unsubscribe(request_id);
-            return Ok(build_immediate_response(
-                SignEventData {
-                    signature: full_request.signature.clone(),
-                    status: "approved".to_owned(),
-                },
-                guard,
-            ));
-        }
-        "denied" => {
-            state.sign_event_notifier.unsubscribe(request_id);
-            return Ok(build_immediate_response(
-                SignEventData {
-                    signature: None,
-                    status: "denied".to_owned(),
-                },
-                guard,
-            ));
-        }
-        "unavailable" => {
-            state.sign_event_notifier.unsubscribe(request_id);
-            return Ok(build_immediate_response(
-                SignEventData {
-                    signature: None,
-                    status: "unavailable".to_owned(),
-                },
-                guard,
-            ));
-        }
-        "cancelled" => {
-            state.sign_event_notifier.unsubscribe(request_id);
-            return Ok(build_immediate_response(
-                SignEventData {
-                    signature: None,
-                    status: "cancelled".to_owned(),
-                },
-                guard,
-            ));
-        }
-        _ => {} // created/pending → wait for SSE event
+    if let Some(data) = completed_event_data(&full_request.status, full_request.signature.clone()) {
+        state.sign_event_notifier.unsubscribe(&request_id);
+        return Ok(build_immediate_response(data, guard));
     }
 
-    // Step 12: Wait for SSE event with heartbeat + expiry timeout
-    Ok(build_waiting_response(
-        state,
-        request_id.clone(),
-        guard,
-        rx,
-        expiry,
-    ))
+    Ok(build_waiting_response(state, request_id, guard, rx, expiry))
 }
 
 // ---------------------------------------------------------------------------
@@ -219,48 +148,44 @@ impl StreamState {
             return None;
         }
 
-        let remaining = (self.expiry - Utc::now()).to_std().unwrap_or_default();
+        let remaining = self.remaining_duration();
         if remaining.is_zero() {
-            self.done = true;
-            self.write_expired_audit_log().await;
-            let data = SignEventData {
-                signature: None,
-                status: "expired".to_owned(),
-            };
-            return Some(Ok(signature_event(&data)));
+            return Some(Ok(self.expire_request().await));
         }
 
         tokio::select! {
             biased;
-            item = self.watch.next() => match item {
-                Some(Some(data)) => {
-                    self.done = true;
-                    Some(Ok(signature_event(&data)))
-                }
-                Some(None) => {
-                    // Initial None from watch channel — keep stream alive.
-                    Some(Ok(Event::default().comment("")))
-                }
-                None => {
-                    // Channel closed. Check DB as fallback.
-                    self.done = true;
-                    let event = self
-                        .check_db_fallback()
-                        .await
-                        .map(|data| signature_event(&data))
-                        .unwrap_or_else(|| Event::default().comment("closed"));
-                    Some(Ok(event))
-                }
-            },
-            () = tokio::time::sleep(remaining) => {
-                // Request expired — send expired event and terminate.
+            item = self.watch.next() => Some(Ok(self.handle_watch_item(item).await)),
+            () = tokio::time::sleep(remaining) => Some(Ok(self.expire_request().await)),
+        }
+    }
+
+    fn remaining_duration(&self) -> Duration {
+        (self.expiry - Utc::now()).to_std().unwrap_or_default()
+    }
+
+    async fn expire_request(&mut self) -> Event {
+        self.done = true;
+        self.write_expired_audit_log().await;
+        signature_event(&SignEventData {
+            signature: None,
+            status: "expired".to_owned(),
+        })
+    }
+
+    async fn handle_watch_item(&mut self, item: Option<Option<SignEventData>>) -> Event {
+        match item {
+            Some(Some(data)) => {
                 self.done = true;
-                self.write_expired_audit_log().await;
-                let data = SignEventData {
-                    signature: None,
-                    status: "expired".to_owned(),
-                };
-                Some(Ok(signature_event(&data)))
+                signature_event(&data)
+            }
+            Some(None) => Event::default().comment(""),
+            None => {
+                self.done = true;
+                self.check_db_fallback()
+                    .await
+                    .map(|data| signature_event(&data))
+                    .unwrap_or_else(|| Event::default().comment("closed"))
             }
         }
     }
@@ -273,25 +198,7 @@ impl StreamState {
             .await
             .ok()??;
 
-        match request.status.as_str() {
-            "approved" => Some(SignEventData {
-                signature: request.signature,
-                status: "approved".to_owned(),
-            }),
-            "denied" => Some(SignEventData {
-                signature: None,
-                status: "denied".to_owned(),
-            }),
-            "unavailable" => Some(SignEventData {
-                signature: None,
-                status: "unavailable".to_owned(),
-            }),
-            "cancelled" => Some(SignEventData {
-                signature: None,
-                status: "cancelled".to_owned(),
-            }),
-            _ => None,
-        }
+        completed_event_data(&request.status, request.signature)
     }
 
     async fn write_expired_audit_log(&self) {
@@ -327,135 +234,26 @@ impl Drop for StreamState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bearer token extraction
-// ---------------------------------------------------------------------------
-
-fn extract_bearer(headers: &axum::http::HeaderMap) -> Result<String, AppError> {
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .ok_or_else(|| {
-            AppError::unauthorized("missing authorization token").with_instance(INSTANCE)
-        })?
-        .to_str()
-        .map_err(|_| {
-            AppError::unauthorized("invalid authorization header").with_instance(INSTANCE)
-        })?;
-
-    value
-        .strip_prefix("Bearer ")
-        .map(|t| t.to_owned())
-        .ok_or_else(|| AppError::unauthorized("missing Bearer scheme").with_instance(INSTANCE))
-}
-
-// ---------------------------------------------------------------------------
-// Auth helpers (mirrors daemon_auth.rs logic for SSE context)
-// ---------------------------------------------------------------------------
-
-fn auth_error(msg: &str) -> AppError {
-    AppError::unauthorized(msg.to_owned()).with_instance(INSTANCE)
-}
-
-/// Build expected `aud` value: `{base_url}{path}`.
-fn build_expected_aud(base_url: &str, path: &str) -> String {
-    format!("{}{}", base_url.trim_end_matches('/'), path)
-}
-
-async fn verify_request_jwt(
-    request_jwt: &str,
-    state: &AppState,
-) -> Result<RequestClaims, AppError> {
-    let kid =
-        extract_kid(request_jwt).map_err(|e| auth_error(&format!("invalid request_jwt: {e}")))?;
-
-    let signing_key = state
-        .repository
-        .get_signing_key_by_kid(&kid)
-        .await
-        .map_err(|e| AppError::from(e).with_instance(INSTANCE))?
-        .ok_or_else(|| auth_error("unknown signing key in request_jwt"))?;
-
-    check_signing_key_not_expired(&signing_key)?;
-
-    let public_jwk = jwk_from_json(&signing_key.public_key).map_err(|e| {
-        tracing::error!("invalid public JWK: {e}");
-        AppError::internal("internal server error")
-    })?;
-
-    verify_jws(request_jwt, &public_jwk, PayloadType::Request)
-        .map_err(|e| auth_error(&format!("invalid request_jwt: {e}")))
-}
-
-async fn fetch_daemon_key(
-    state: &AppState,
-    request_id: &str,
-) -> Result<josekit::jwk::Jwk, AppError> {
-    let request = state
-        .repository
-        .get_request_by_id(request_id)
-        .await
-        .map_err(|e| AppError::from(e).with_instance(INSTANCE))?
-        .ok_or_else(|| auth_error("request not found"))?;
-
-    jwk_from_json(&request.daemon_public_key)
-        .map_err(|e| auth_error(&format!("invalid daemon_public_key: {e}")))
-}
-
-fn validate_aud(claims: &DaemonAuthClaims, expected: &str) -> Result<(), AppError> {
-    if claims.aud != expected {
-        return Err(auth_error("aud mismatch"));
+fn completed_event_data(status: &str, signature: Option<String>) -> Option<SignEventData> {
+    match status {
+        "approved" => Some(SignEventData {
+            signature,
+            status: "approved".to_owned(),
+        }),
+        "denied" => Some(SignEventData {
+            signature: None,
+            status: "denied".to_owned(),
+        }),
+        "unavailable" => Some(SignEventData {
+            signature: None,
+            status: "unavailable".to_owned(),
+        }),
+        "cancelled" => Some(SignEventData {
+            signature: None,
+            status: "cancelled".to_owned(),
+        }),
+        _ => None,
     }
-    Ok(())
-}
-
-async fn store_jti(state: &AppState, jti: &str, exp: i64) -> Result<(), AppError> {
-    let expired = crate::http::auth::timestamp_to_rfc3339(exp)?;
-    let stored = state
-        .repository
-        .store_jti(jti, &expired)
-        .await
-        .map_err(|e| AppError::from(e).with_instance(INSTANCE))?;
-    if !stored {
-        return Err(auth_error("jti replay detected"));
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// SSE connection limit
-// ---------------------------------------------------------------------------
-
-fn acquire_sse_slot(
-    state: &AppState,
-    ip: std::net::IpAddr,
-    request_id: &str,
-) -> Result<crate::http::rate_limit::SseConnectionGuard, AppError> {
-    state
-        .sse_tracker
-        .try_acquire(ip, request_id.to_owned())
-        .map_err(|rejection| match rejection {
-            SseRejection::IpLimitExceeded { .. } => {
-                AppError::too_many_requests("SSE connection limit per IP exceeded")
-                    .with_instance(INSTANCE)
-            }
-            SseRejection::KeyLimitExceeded { .. } => {
-                AppError::too_many_requests("SSE connection already active for this request")
-                    .with_instance(INSTANCE)
-            }
-        })
-}
-
-// ---------------------------------------------------------------------------
-// IP extraction
-// ---------------------------------------------------------------------------
-
-fn resolve_client_ip(request: &Request) -> Result<std::net::IpAddr, AppError> {
-    let connect_info = request
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .cloned();
-    extract_client_ip(request.headers(), connect_info.as_ref())
-        .ok_or_else(|| AppError::internal("could not determine client IP").with_instance(INSTANCE))
 }
 
 // ---------------------------------------------------------------------------
