@@ -74,8 +74,19 @@ pub(crate) fn json_response(status_line: &str, body: &str) -> String {
     )
 }
 
-pub(crate) fn sse_response(body: &str) -> String {
-    format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n{body}"
+pub(crate) fn sse_headers() -> &'static str {
+    concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/event-stream\r\n",
+        "Cache-Control: no-cache\r\n",
+        "Connection: close\r\n\r\n",
     )
+}
+
+pub(crate) fn sse_event(event: &str, data: &str) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+
+pub(crate) fn sse_response(body: &str) -> String {
+    format!("{}{body}", sse_headers())
 }

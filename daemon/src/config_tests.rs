@@ -2,6 +2,18 @@ use super::*;
 use std::io::Write;
 use tempfile::Builder;
 
+fn load_temp_file_config(suffix: &str, contents: &str) -> FileConfig {
+    let mut file = Builder::new().suffix(suffix).tempfile().unwrap();
+    write!(file, "{contents}").unwrap();
+    load_file_config(Some(file.path())).unwrap()
+}
+
+fn assert_basic_file_config(config: FileConfig, log_level: &str) {
+    assert_eq!(config.server_url, Some("https://daemon.example".to_owned()));
+    assert_eq!(config.socket_path, Some("tmp/daemon.sock".to_owned()));
+    assert_eq!(config.log_level, Some(log_level.to_owned()));
+}
+
 #[test]
 fn cli_defaults_are_applied() {
     let cli = parse_cli_from(["gpg-bridge-daemon"]);
@@ -51,34 +63,22 @@ fn build_env_filter_rejects_invalid_log_level() {
 
 #[test]
 fn parse_toml_file_config() {
-    let mut file = Builder::new().suffix(".toml").tempfile().unwrap();
-    write!(
-        file,
-        "server_url = 'https://daemon.example'\nsocket_path = 'tmp/daemon.sock'\nlog_level = 'debug'\n"
-    )
-    .unwrap();
+    let config = load_temp_file_config(
+        ".toml",
+        "server_url = 'https://daemon.example'\nsocket_path = 'tmp/daemon.sock'\nlog_level = 'debug'\n",
+    );
 
-    let config = load_file_config(Some(file.path())).unwrap();
-
-    assert_eq!(config.server_url, Some("https://daemon.example".to_owned()));
-    assert_eq!(config.socket_path, Some("tmp/daemon.sock".to_owned()));
-    assert_eq!(config.log_level, Some("debug".to_owned()));
+    assert_basic_file_config(config, "debug");
 }
 
 #[test]
 fn parse_yaml_file_config() {
-    let mut file = Builder::new().suffix(".yaml").tempfile().unwrap();
-    write!(
-        file,
-        "server_url: https://daemon.example\nsocket_path: tmp/daemon.sock\nlog_level: warn\n"
-    )
-    .unwrap();
+    let config = load_temp_file_config(
+        ".yaml",
+        "server_url: https://daemon.example\nsocket_path: tmp/daemon.sock\nlog_level: warn\n",
+    );
 
-    let config = load_file_config(Some(file.path())).unwrap();
-
-    assert_eq!(config.server_url, Some("https://daemon.example".to_owned()));
-    assert_eq!(config.socket_path, Some("tmp/daemon.sock".to_owned()));
-    assert_eq!(config.log_level, Some("warn".to_owned()));
+    assert_basic_file_config(config, "warn");
 }
 
 #[test]
