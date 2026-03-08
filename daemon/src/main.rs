@@ -21,6 +21,9 @@ mod sexp;
 mod sign_event_sse;
 mod sign_flow;
 mod sse;
+#[cfg(test)]
+#[path = "test_http_server.rs"]
+mod test_http_server;
 #[allow(dead_code)]
 mod token_refresh;
 mod token_store;

@@ -1,5 +1,5 @@
 use super::*;
-use super::test_http_server::{
+use crate::test_http_server::{
     empty_response, spawn_single_response_server, spawn_single_response_server_with_request,
     text_response,
 };
@@ -42,11 +42,8 @@ async fn send_get_with_retry_sends_bearer_header() {
 
 #[tokio::test]
 async fn send_post_json_with_retry_sends_bearer_and_json_body() {
-    let (addr, server) = spawn_single_response_server_with_request(text_response(
-        "HTTP/1.1 200 OK",
-        "done",
-    ))
-    .await;
+    let (addr, server) =
+        spawn_single_response_server_with_request(text_response("HTTP/1.1 200 OK", "done")).await;
 
     let client = build_http_client(Duration::from_secs(2), "daemon-test/1.0").unwrap();
     let bearer = build_bearer_header("post-token").unwrap();

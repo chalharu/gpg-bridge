@@ -204,9 +204,5 @@ fn build_test_jwt(iat: u64, exp: u64) -> String {
 }
 
 #[cfg(test)]
-#[path = "test_http_server.rs"]
-mod test_http_server;
-
-#[cfg(test)]
 #[path = "token_refresh_tests.rs"]
 mod tests;

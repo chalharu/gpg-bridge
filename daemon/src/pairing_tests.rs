@@ -1,5 +1,5 @@
 use super::*;
-use super::test_http_server::{
+use crate::test_http_server::{
     empty_response, json_response, spawn_response_sequence, spawn_single_response_server,
     sse_response,
 };
@@ -48,8 +48,8 @@ async fn fetch_pairing_token_parses_response() {
 
 #[tokio::test]
 async fn fetch_pairing_token_returns_error_on_non_success() {
-    let addr = spawn_single_response_server(empty_response("HTTP/1.1 500 Internal Server Error"))
-        .await;
+    let addr =
+        spawn_single_response_server(empty_response("HTTP/1.1 500 Internal Server Error")).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -127,8 +127,7 @@ fn display_pairing_complete_writes_warning() {
 #[tokio::test]
 async fn run_pairing_flow_end_to_end() {
     let pairing_body = r#"{"pairing_token":"pt-1","expires_in":60}"#;
-    let sse_body =
-        "event: paired\ndata: {\"client_jwt\":\"jwt-1\",\"client_id\":\"cid-1\"}\n\n";
+    let sse_body = "event: paired\ndata: {\"client_jwt\":\"jwt-1\",\"client_id\":\"cid-1\"}\n\n";
     let addr = spawn_response_sequence(vec![
         json_response("HTTP/1.1 200 OK", pairing_body),
         sse_response(sse_body),

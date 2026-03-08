@@ -1,6 +1,6 @@
 use super::*;
-use super::test_http_server::{
-    empty_response, json_response, spawn_single_response_server, spawn_response_sequence,
+use crate::test_http_server::{
+    empty_response, json_response, spawn_response_sequence, spawn_single_response_server,
 };
 
 fn test_http_client(timeout: std::time::Duration) -> Client {
