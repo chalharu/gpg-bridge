@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -318,6 +319,21 @@ class KeystoreMethodCallHandlerTest {
 	}
 
 	@Test
+	fun requireKnownAliasAcceptsBothSupportedAliases() {
+		assertEquals(KeystoreAlias.DEVICE, requireKnownAlias("device_key"))
+		assertEquals(KeystoreAlias.E2E, requireKnownAlias("e2e_key"))
+	}
+
+	@Test
+	fun requireSignAliasAcceptsDeviceAlias() {
+		try {
+			requireSignAlias("device_key")
+		} catch (error: IllegalArgumentException) {
+			fail("device_key should pass sign alias validation: ${error.message}")
+		}
+	}
+
+	@Test
 	fun signRejectsEncryptionOnlyAlias() {
 		val operations = AndroidKeystoreOperations()
 
@@ -337,6 +353,15 @@ class KeystoreMethodCallHandlerTest {
 		}
 
 		assertEquals("alias does not support sign/verify: bad_alias", error.message)
+	}
+
+	@Test
+	fun requireSignAliasRejectsEncryptionOnlyAlias() {
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			requireSignAlias("e2e_key")
+		}
+
+		assertEquals("alias does not support sign/verify: e2e_key", error.message)
 	}
 
 	private class FakeKeystoreOperations(

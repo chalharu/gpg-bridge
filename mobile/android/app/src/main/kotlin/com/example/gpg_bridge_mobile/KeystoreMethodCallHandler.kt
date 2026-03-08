@@ -23,6 +23,44 @@ private const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
 private const val DEVICE_KEY_ALIAS = "device_key"
 private const val E2E_KEY_ALIAS = "e2e_key"
 
+private enum class SupportedMethod {
+	GENERATE_KEY_PAIR,
+	SIGN,
+	VERIFY,
+	GET_PUBLIC_KEY_JWK,
+}
+
+internal enum class KeystoreAlias {
+	DEVICE,
+	E2E,
+}
+
+private fun parseSupportedMethod(method: String): SupportedMethod? {
+	return when (method) {
+		"generateKeyPair" -> SupportedMethod.GENERATE_KEY_PAIR
+		"sign" -> SupportedMethod.SIGN
+		"verify" -> SupportedMethod.VERIFY
+		"getPublicKeyJwk" -> SupportedMethod.GET_PUBLIC_KEY_JWK
+		else -> null
+	}
+}
+
+internal fun requireKnownAlias(alias: String): KeystoreAlias {
+	return when (alias) {
+		DEVICE_KEY_ALIAS -> KeystoreAlias.DEVICE
+		E2E_KEY_ALIAS -> KeystoreAlias.E2E
+		else -> throw IllegalArgumentException("unsupported alias: $alias")
+	}
+}
+
+internal fun requireSignAlias(alias: String) {
+	if (alias == DEVICE_KEY_ALIAS) {
+		return
+	}
+
+	throw IllegalArgumentException("alias does not support sign/verify: $alias")
+}
+
 interface KeystoreOperations {
 	fun generateKeyPair(alias: String)
 	fun sign(alias: String, dataBase64: String): String
@@ -36,7 +74,8 @@ class KeystoreMethodCallHandler(
 	private val postToMainThread: (Runnable) -> Unit,
 ) {
 	fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-		if (!isSupportedMethod(call.method)) {
+		val method = parseSupportedMethod(call.method)
+		if (method == null) {
 			result.notImplemented()
 			return
 		}
@@ -44,28 +83,26 @@ class KeystoreMethodCallHandler(
 		try {
 			backgroundExecutor.execute {
 				try {
-					val value = when (call.method) {
-						"generateKeyPair" -> {
+					val value = when (method) {
+						SupportedMethod.GENERATE_KEY_PAIR -> {
 							operations.generateKeyPair(call.requireStringArg("alias"))
 							true
 						}
 
-						"sign" -> operations.sign(
+						SupportedMethod.SIGN -> operations.sign(
 							call.requireStringArg("alias"),
 							call.requireStringArg("dataBase64"),
 						)
 
-						"verify" -> operations.verify(
+						SupportedMethod.VERIFY -> operations.verify(
 							call.requireStringArg("alias"),
 							call.requireStringArg("dataBase64"),
 							call.requireStringArg("signatureBase64"),
 						)
 
-						"getPublicKeyJwk" -> operations.getPublicKeyJwk(
+						SupportedMethod.GET_PUBLIC_KEY_JWK -> operations.getPublicKeyJwk(
 							call.requireStringArg("alias"),
 						)
-
-						else -> error("unsupported method: ${call.method}")
 					}
 
 					postToMainThread(Runnable { result.success(value) })
@@ -86,10 +123,6 @@ class KeystoreMethodCallHandler(
 		}
 	}
 
-	private fun isSupportedMethod(method: String): Boolean {
-		return method == "generateKeyPair" || method == "sign" || method == "verify" || method == "getPublicKeyJwk"
-	}
-
 	private fun MethodCall.requireStringArg(name: String): String {
 		return argument<String>(name)
 			?: throw IllegalArgumentException("missing argument: $name")
@@ -98,23 +131,22 @@ class KeystoreMethodCallHandler(
 
 class AndroidKeystoreOperations : KeystoreOperations {
 	override fun generateKeyPair(alias: String) {
-		requireKnownAlias(alias)
+		val keyAlias = requireKnownAlias(alias)
 
 		val keyStore = getKeyStore()
 		if (keyStore.containsAlias(alias)) {
 			return
 		}
 
-		val purposes = when (alias) {
-			DEVICE_KEY_ALIAS -> KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-			E2E_KEY_ALIAS -> KeyProperties.PURPOSE_AGREE_KEY
-			else -> throw IllegalArgumentException("unsupported alias: $alias")
+		val purposes = when (keyAlias) {
+			KeystoreAlias.DEVICE -> KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+			KeystoreAlias.E2E -> KeyProperties.PURPOSE_AGREE_KEY
 		}
 
 		val parameterSpec = KeyGenParameterSpec.Builder(alias, purposes)
 			.setAlgorithmParameterSpec(ECGenParameterSpec(CURVE_NAME))
 			.apply {
-				if (alias == DEVICE_KEY_ALIAS) {
+				if (keyAlias == KeystoreAlias.DEVICE) {
 					setDigests(KeyProperties.DIGEST_SHA256)
 				}
 			}
@@ -156,34 +188,32 @@ class AndroidKeystoreOperations : KeystoreOperations {
 	}
 
 	override fun getPublicKeyJwk(alias: String): Map<String, String> {
-		requireKnownAlias(alias)
+		val keyAlias = requireKnownAlias(alias)
 		val publicKey = getEcPublicKey(alias)
 		val affineX = toUnsignedFixedLength(publicKey.w.affineX, 32)
 		val affineY = toUnsignedFixedLength(publicKey.w.affineY, 32)
 
 		return mapOf(
 			"kty" to "EC",
-			"use" to keyUse(alias),
+			"use" to keyUse(keyAlias),
 			"crv" to "P-256",
 			"x" to encodeBase64Url(affineX),
 			"y" to encodeBase64Url(affineY),
-			"alg" to keyAlg(alias),
+			"alg" to keyAlg(keyAlias),
 		)
 	}
 
-	private fun keyUse(alias: String): String {
+	private fun keyUse(alias: KeystoreAlias): String {
 		return when (alias) {
-			DEVICE_KEY_ALIAS -> "sig"
-			E2E_KEY_ALIAS -> "enc"
-			else -> throw IllegalArgumentException("unsupported alias for jwk: $alias")
+			KeystoreAlias.DEVICE -> "sig"
+			KeystoreAlias.E2E -> "enc"
 		}
 	}
 
-	private fun keyAlg(alias: String): String {
+	private fun keyAlg(alias: KeystoreAlias): String {
 		return when (alias) {
-			DEVICE_KEY_ALIAS -> "ES256"
-			E2E_KEY_ALIAS -> "ECDH-ES+A256KW"
-			else -> throw IllegalArgumentException("unsupported alias for jwk: $alias")
+			KeystoreAlias.DEVICE -> "ES256"
+			KeystoreAlias.E2E -> "ECDH-ES+A256KW"
 		}
 	}
 
@@ -230,18 +260,6 @@ class AndroidKeystoreOperations : KeystoreOperations {
 
 		return ByteArray(length).also { out ->
 			System.arraycopy(raw, 0, out, length - raw.size, raw.size)
-		}
-	}
-
-	private fun requireKnownAlias(alias: String) {
-		require(alias == DEVICE_KEY_ALIAS || alias == E2E_KEY_ALIAS) {
-			"unsupported alias: $alias"
-		}
-	}
-
-	private fun requireSignAlias(alias: String) {
-		require(alias == DEVICE_KEY_ALIAS) {
-			"alias does not support sign/verify: $alias"
 		}
 	}
 }
