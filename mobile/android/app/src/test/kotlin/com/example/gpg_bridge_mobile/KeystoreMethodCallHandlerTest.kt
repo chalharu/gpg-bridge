@@ -360,6 +360,12 @@ class KeystoreMethodCallHandlerTest {
 	}
 
 	@Test
+	fun requireKnownAliasAcceptsKnownAliases() {
+		assertEquals(Unit, requireKnownAlias("device_key"))
+		assertEquals(Unit, requireKnownAlias("e2e_key"))
+	}
+
+	@Test
 	fun requireKnownAliasRejectsUnknownAlias() {
 		val error = assertThrows(IllegalArgumentException::class.java) {
 			requireKnownAlias("bad_alias")
