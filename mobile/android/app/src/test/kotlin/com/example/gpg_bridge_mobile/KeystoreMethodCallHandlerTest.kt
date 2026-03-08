@@ -1,5 +1,6 @@
 package com.example.gpg_bridge_mobile
 
+import android.security.keystore.KeyProperties
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import org.junit.Assert.assertEquals
@@ -11,14 +12,19 @@ import org.junit.Test
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.Key
+import java.security.KeyPair
+import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.KeyStoreSpi
 import java.security.PrivateKey
 import java.security.Provider
 import java.security.ProviderException
 import java.security.PublicKey
+import java.security.SecureRandom
 import java.security.cert.Certificate
+import java.security.spec.AlgorithmParameterSpec
 import java.security.spec.ECFieldFp
+import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPoint
 import java.security.spec.EllipticCurve
@@ -679,10 +685,158 @@ class KeystoreMethodCallHandlerTest {
 		assertEquals("device_key", spi.lastContainsAliasAlias)
 	}
 
+	@Test
+	fun systemKeyPairGeneratorAccessInitializesSigningSpecWithSha256Digest() {
+		val delegate = RecordingKeyPairGeneratorDelegate()
+		val builder = RecordingKeyGenParameterSpecBuilder()
+		val access = SystemKeyPairGeneratorAccess(delegate) { alias, purposes ->
+			builder.apply {
+				this.alias = alias
+				this.purposes = purposes
+			}
+		}
+
+		access.initialize(
+			KeystoreKeyGenRequest(
+				alias = "device_key",
+				purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+				includeSha256Digest = true,
+			),
+		)
+
+		assertEquals("device_key", builder.alias)
+		assertEquals(KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY, builder.purposes)
+		assertEquals(CURVE_NAME, (builder.algorithmParameterSpec as ECGenParameterSpec).name)
+		assertEquals(listOf(KeyProperties.DIGEST_SHA256), builder.digests)
+		assertEquals(false, builder.userAuthenticationRequired)
+		assertEquals(builder.builtSpec, delegate.lastAlgorithmParameterSpec)
+	}
+
+	@Test
+	fun systemKeyPairGeneratorAccessInitializesAgreementSpecWithoutSha256Digest() {
+		val delegate = RecordingKeyPairGeneratorDelegate()
+		val builder = RecordingKeyGenParameterSpecBuilder()
+		val access = SystemKeyPairGeneratorAccess(delegate) { alias, purposes ->
+			builder.apply {
+				this.alias = alias
+				this.purposes = purposes
+			}
+		}
+
+		access.initialize(
+			KeystoreKeyGenRequest(
+				alias = "e2e_key",
+				purposes = KeyProperties.PURPOSE_AGREE_KEY,
+				includeSha256Digest = false,
+			),
+		)
+
+		assertEquals("e2e_key", builder.alias)
+		assertEquals(KeyProperties.PURPOSE_AGREE_KEY, builder.purposes)
+		assertEquals(CURVE_NAME, (builder.algorithmParameterSpec as ECGenParameterSpec).name)
+		assertEquals(emptyList<String>(), builder.digests)
+		assertEquals(false, builder.userAuthenticationRequired)
+		assertEquals(builder.builtSpec, delegate.lastAlgorithmParameterSpec)
+	}
+
+	@Test
+	fun systemKeyPairGeneratorAccessPropagatesInitializeFailure() {
+		val failure = ProviderException("initialize failed")
+		val delegate = RecordingKeyPairGeneratorDelegate(failOnInitialize = failure)
+		val builder = RecordingKeyGenParameterSpecBuilder()
+		val access = SystemKeyPairGeneratorAccess(delegate) { alias, purposes ->
+			builder.apply {
+				this.alias = alias
+				this.purposes = purposes
+			}
+		}
+
+		val thrown = assertThrows(ProviderException::class.java) {
+			access.initialize(
+				KeystoreKeyGenRequest(
+					alias = "device_key",
+					purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+					includeSha256Digest = true,
+				),
+			)
+		}
+
+		assertEquals(failure, thrown)
+	}
+
+	@Test
+	fun systemKeyPairGeneratorAccessDelegatesGenerateKeyPair() {
+		val delegate = RecordingKeyPairGeneratorDelegate()
+		val access = SystemKeyPairGeneratorAccess(delegate)
+
+		access.generateKeyPair()
+
+		assertEquals(1, delegate.generateCalls)
+	}
+
+	@Test
+	fun defaultKeyPairGeneratorAccessFactoryUsesInjectedSystemKeyPairGeneratorCreator() {
+		val delegate = RecordingKeyPairGeneratorDelegate()
+		val access = AndroidKeystoreDependencies(
+			createSystemKeyPairGenerator = { delegate },
+		).keyPairGeneratorAccess()
+
+		assertTrue(access is SystemKeyPairGeneratorAccess)
+		access.generateKeyPair()
+		assertEquals(1, delegate.generateCalls)
+	}
+
 	private fun createTestKeyStore(spi: KeyStoreSpi): KeyStore {
 		val provider = object : Provider("TestProvider", 1.0, "Test provider") {}
 		return object : KeyStore(spi, provider, "TestKeyStore") {}.apply { load(null, null) }
 	}
+
+	private class RecordingKeyPairGeneratorDelegate(
+		private val failOnInitialize: RuntimeException? = null,
+	) : KeyPairGenerator("EC") {
+		var lastAlgorithmParameterSpec: AlgorithmParameterSpec? = null
+		var generateCalls = 0
+
+		override fun initialize(keysize: Int, random: SecureRandom?) = Unit
+
+		override fun initialize(params: AlgorithmParameterSpec?, random: SecureRandom?) {
+			failOnInitialize?.let { throw it }
+			lastAlgorithmParameterSpec = params
+		}
+
+		override fun generateKeyPair(): KeyPair {
+			generateCalls += 1
+			return KeyPair(FakePublicKey(), FakePrivateKey())
+		}
+	}
+
+	private class RecordingKeyGenParameterSpecBuilder : KeyGenParameterSpecBuilderAccess {
+		var alias: String? = null
+		var purposes: Int? = null
+		var algorithmParameterSpec: AlgorithmParameterSpec? = null
+		var digests: List<String> = emptyList()
+		var userAuthenticationRequired: Boolean? = null
+		val builtSpec = FakeAlgorithmParameterSpec()
+
+		override fun setAlgorithmParameterSpec(spec: AlgorithmParameterSpec): KeyGenParameterSpecBuilderAccess {
+			algorithmParameterSpec = spec
+			return this
+		}
+
+		override fun setDigests(vararg digests: String): KeyGenParameterSpecBuilderAccess {
+			this.digests = digests.toList()
+			return this
+		}
+
+		override fun setUserAuthenticationRequired(required: Boolean): KeyGenParameterSpecBuilderAccess {
+			userAuthenticationRequired = required
+			return this
+		}
+
+		override fun build(): AlgorithmParameterSpec = builtSpec
+	}
+
+	private class FakeAlgorithmParameterSpec : AlgorithmParameterSpec
 
 	private class RecordingKeyStoreAccess(
 		private val existingAliases: Set<String> = emptySet(),

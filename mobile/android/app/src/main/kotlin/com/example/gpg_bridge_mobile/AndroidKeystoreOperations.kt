@@ -10,6 +10,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
+import java.security.spec.AlgorithmParameterSpec
 import java.security.spec.ECGenParameterSpec
 
 internal data class KeystoreKeyGenRequest(
@@ -29,6 +30,13 @@ internal interface KeyPairGeneratorAccess {
 	fun generateKeyPair()
 }
 
+internal interface KeyGenParameterSpecBuilderAccess {
+	fun setAlgorithmParameterSpec(spec: AlgorithmParameterSpec): KeyGenParameterSpecBuilderAccess
+	fun setDigests(vararg digests: String): KeyGenParameterSpecBuilderAccess
+	fun setUserAuthenticationRequired(required: Boolean): KeyGenParameterSpecBuilderAccess
+	fun build(): AlgorithmParameterSpec
+}
+
 internal interface SignatureAccess {
 	fun sign(privateKey: PrivateKey, data: ByteArray): ByteArray
 	fun verify(publicKey: ECPublicKey, data: ByteArray, signature: ByteArray): Boolean
@@ -44,10 +52,27 @@ internal fun loadSystemKeyStore(provider: String = KEYSTORE_PROVIDER): KeyStore 
 	return KeyStore.getInstance(provider).apply { load(null) }
 }
 
-internal data class AndroidKeystoreDependencies(
+internal fun loadSystemKeyPairGenerator(
+	algorithm: String = KeyProperties.KEY_ALGORITHM_EC,
+	provider: String = KEYSTORE_PROVIDER,
+): KeyPairGenerator {
+	return KeyPairGenerator.getInstance(algorithm, provider)
+}
+
+internal fun createSystemKeyGenParameterSpecBuilder(
+	alias: String,
+	purposes: Int,
+): KeyGenParameterSpecBuilderAccess {
+	return AndroidKeyGenParameterSpecBuilderAccess(KeyGenParameterSpec.Builder(alias, purposes))
+}
+
+internal class AndroidKeystoreDependencies(
 	val createSystemKeyStore: () -> KeyStore = ::loadSystemKeyStore,
+	val createSystemKeyPairGenerator: () -> KeyPairGenerator = ::loadSystemKeyPairGenerator,
 	val keyStoreAccess: () -> KeyStoreAccess = { SystemKeyStoreAccess(createSystemKeyStore()) },
-	val keyPairGeneratorAccess: () -> KeyPairGeneratorAccess = { SystemKeyPairGeneratorAccess() },
+	val keyPairGeneratorAccess: () -> KeyPairGeneratorAccess = {
+		SystemKeyPairGeneratorAccess(createSystemKeyPairGenerator())
+	},
 	val signatureAccess: SignatureAccess = SystemSignatureAccess,
 	val base64Codec: Base64Codec = AndroidBase64Codec,
 )
@@ -170,11 +195,14 @@ internal class SystemKeyStoreAccess(
 	}
 }
 
-private class SystemKeyPairGeneratorAccess : KeyPairGeneratorAccess {
-	private val delegate = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE_PROVIDER)
+internal class SystemKeyPairGeneratorAccess(
+	private val delegate: KeyPairGenerator,
+	private val createKeyGenParameterSpecBuilder: (String, Int) -> KeyGenParameterSpecBuilderAccess =
+		::createSystemKeyGenParameterSpecBuilder,
+) : KeyPairGeneratorAccess {
 
 	override fun initialize(request: KeystoreKeyGenRequest) {
-		val parameterSpec = KeyGenParameterSpec.Builder(request.alias, request.purposes)
+		val parameterSpec = createKeyGenParameterSpecBuilder(request.alias, request.purposes)
 			.setAlgorithmParameterSpec(ECGenParameterSpec(CURVE_NAME))
 			.apply {
 				if (request.includeSha256Digest) {
@@ -190,6 +218,27 @@ private class SystemKeyPairGeneratorAccess : KeyPairGeneratorAccess {
 	override fun generateKeyPair() {
 		delegate.generateKeyPair()
 	}
+}
+
+private class AndroidKeyGenParameterSpecBuilderAccess(
+	private val delegate: KeyGenParameterSpec.Builder,
+) : KeyGenParameterSpecBuilderAccess {
+	override fun setAlgorithmParameterSpec(spec: AlgorithmParameterSpec): KeyGenParameterSpecBuilderAccess {
+		delegate.setAlgorithmParameterSpec(spec)
+		return this
+	}
+
+	override fun setDigests(vararg digests: String): KeyGenParameterSpecBuilderAccess {
+		delegate.setDigests(*digests)
+		return this
+	}
+
+	override fun setUserAuthenticationRequired(required: Boolean): KeyGenParameterSpecBuilderAccess {
+		delegate.setUserAuthenticationRequired(required)
+		return this
+	}
+
+	override fun build(): AlgorithmParameterSpec = delegate.build()
 }
 
 private object SystemSignatureAccess : SignatureAccess {
