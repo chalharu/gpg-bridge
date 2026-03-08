@@ -232,7 +232,7 @@ jobs:
     name: Flutter coverage
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.flutter == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.flutter == 'true' || needs.changes.outputs.android == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -278,7 +278,7 @@ jobs:
     name: Android native tests
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.flutter == 'true' || needs.changes.outputs.android == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -749,16 +749,13 @@ jobs:
         if: needs.flutter-coverage.result != 'success'
         working-directory: mobile
         run: |
-          # Sonar cannot carry forward the previous Dart lcov report by itself.
-          # When the dedicated flutter-coverage job is skipped on Rust-only PRs,
-          # generate a fresh report here so mobile coverage remains visible.
-          # This fallback is not the quality gate for Flutter changes.
+          # Keep Sonar input available even if the upstream coverage job is skipped
+          # or its artifact cannot be reused in this job.
           flutter test --coverage
           TOTAL=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf>0) printf "%.1f", lh/lf*100; else print "0.0"}' coverage/lcov.info)
           echo "Flutter fallback coverage: ${TOTAL}%"
 
       - name: Ensure Android coverage report for Sonar
-        if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
         run: |
           mkdir -p mobile/build/app/reports/jacoco/test
           if [ -f .artifacts/android/jacocoTestReport.xml ]; then
@@ -767,6 +764,7 @@ jobs:
             exit 0
           fi
           if [ -f mobile/build/app/reports/jacoco/test/jacocoTestReport.xml ]; then
+            grep -q '<report' mobile/build/app/reports/jacoco/test/jacocoTestReport.xml
             exit 0
           fi
           cd mobile
@@ -783,7 +781,6 @@ jobs:
           grep -q '<report' "$REPORT"
 
       - name: Verify Android coverage report for Sonar
-        if: needs.changes.outputs.android == 'true' || needs.changes.outputs.flutter == 'true'
         run: |
           REPORT=mobile/build/app/reports/jacoco/test/jacocoTestReport.xml
           if [ ! -f "$REPORT" ]; then
