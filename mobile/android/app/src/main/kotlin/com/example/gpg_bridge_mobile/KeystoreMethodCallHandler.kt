@@ -23,6 +23,13 @@ private const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
 private const val DEVICE_KEY_ALIAS = "device_key"
 private const val E2E_KEY_ALIAS = "e2e_key"
 
+private val supportedMethods = mapOf(
+	"generateKeyPair" to SupportedMethod.GENERATE_KEY_PAIR,
+	"sign" to SupportedMethod.SIGN,
+	"verify" to SupportedMethod.VERIFY,
+	"getPublicKeyJwk" to SupportedMethod.GET_PUBLIC_KEY_JWK,
+)
+
 internal enum class SupportedMethod {
 	GENERATE_KEY_PAIR,
 	SIGN,
@@ -35,15 +42,7 @@ internal enum class KeystoreAlias {
 	E2E,
 }
 
-internal fun parseSupportedMethod(method: String): SupportedMethod? {
-	return when (method) {
-		"generateKeyPair" -> SupportedMethod.GENERATE_KEY_PAIR
-		"sign" -> SupportedMethod.SIGN
-		"verify" -> SupportedMethod.VERIFY
-		"getPublicKeyJwk" -> SupportedMethod.GET_PUBLIC_KEY_JWK
-		else -> null
-	}
-}
+internal fun parseSupportedMethod(method: String): SupportedMethod? = supportedMethods[method]
 
 internal fun requireKnownAlias(alias: String): KeystoreAlias {
 	return when (alias) {
@@ -129,46 +128,22 @@ class KeystoreMethodCallHandler(
 	}
 }
 
-class AndroidKeystoreOperations : KeystoreOperations {
+open class AndroidKeystoreOperations : KeystoreOperations {
 	override fun generateKeyPair(alias: String) {
 		val keyAlias = requireKnownAlias(alias)
 
-		val keyStore = getKeyStore()
-		if (keyStore.containsAlias(alias)) {
+		if (containsAlias(alias)) {
 			return
 		}
 
-		val purposes = when (keyAlias) {
-			KeystoreAlias.DEVICE -> KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-			KeystoreAlias.E2E -> KeyProperties.PURPOSE_AGREE_KEY
-		}
-
-		val parameterSpec = KeyGenParameterSpec.Builder(alias, purposes)
-			.setAlgorithmParameterSpec(ECGenParameterSpec(CURVE_NAME))
-			.apply {
-				if (keyAlias == KeystoreAlias.DEVICE) {
-					setDigests(KeyProperties.DIGEST_SHA256)
-				}
-			}
-			.setUserAuthenticationRequired(false)
-			.build()
-
-		KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE_PROVIDER)
-			.apply { initialize(parameterSpec) }
-			.generateKeyPair()
+		createKeyPair(alias, keyAlias == KeystoreAlias.DEVICE)
 	}
 
 	override fun sign(alias: String, dataBase64: String): String {
 		requireSignAlias(alias)
 		val privateKey = getPrivateKey(alias)
 		val data = decodeBase64(dataBase64)
-
-		val signatureBytes = Signature.getInstance(SIGNATURE_ALGORITHM)
-			.apply {
-				initSign(privateKey)
-				update(data)
-			}
-			.sign()
+		val signatureBytes = signBytes(privateKey, data)
 
 		return encodeBase64(signatureBytes)
 	}
@@ -179,12 +154,7 @@ class AndroidKeystoreOperations : KeystoreOperations {
 		val data = decodeBase64(dataBase64)
 		val signature = decodeBase64(signatureBase64)
 
-		return Signature.getInstance(SIGNATURE_ALGORITHM)
-			.apply {
-				initVerify(publicKey)
-				update(data)
-			}
-			.verify(signature)
+		return verifyBytes(publicKey, data, signature)
 	}
 
 	override fun getPublicKeyJwk(alias: String): Map<String, String> {
@@ -217,34 +187,78 @@ class AndroidKeystoreOperations : KeystoreOperations {
 		}
 	}
 
-	private fun getKeyStore(): KeyStore {
+	protected open fun containsAlias(alias: String): Boolean {
+		return getKeyStore().containsAlias(alias)
+	}
+
+	protected open fun createKeyPair(alias: String, supportsSignAndVerify: Boolean) {
+		val purposes = if (supportsSignAndVerify) {
+			KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+		} else {
+			KeyProperties.PURPOSE_AGREE_KEY
+		}
+
+		val parameterSpec = KeyGenParameterSpec.Builder(alias, purposes)
+			.setAlgorithmParameterSpec(ECGenParameterSpec(CURVE_NAME))
+			.apply {
+				if (supportsSignAndVerify) {
+					setDigests(KeyProperties.DIGEST_SHA256)
+				}
+			}
+			.setUserAuthenticationRequired(false)
+			.build()
+
+		KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE_PROVIDER)
+			.apply { initialize(parameterSpec) }
+			.generateKeyPair()
+	}
+
+	protected open fun getKeyStore(): KeyStore {
 		return KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
 	}
 
-	private fun getPrivateKey(alias: String): java.security.PrivateKey {
+	protected open fun getPrivateKey(alias: String): java.security.PrivateKey {
 		val key = getKeyStore().getKey(alias, null)
 			?: throw IllegalArgumentException("key alias not found: $alias")
 		return key as? java.security.PrivateKey
 			?: throw IllegalArgumentException("private key is not available for alias: $alias")
 	}
 
-	private fun getEcPublicKey(alias: String): ECPublicKey {
+	protected open fun getEcPublicKey(alias: String): ECPublicKey {
 		val certificate = getKeyStore().getCertificate(alias)
 			?: throw IllegalArgumentException("certificate not found for alias: $alias")
 		return certificate.publicKey as? ECPublicKey
 			?: throw IllegalArgumentException("public key is not EC for alias: $alias")
 	}
 
-	private fun decodeBase64(value: String): ByteArray {
+	protected open fun decodeBase64(value: String): ByteArray {
 		return Base64.decode(value, Base64.DEFAULT)
 	}
 
-	private fun encodeBase64(value: ByteArray): String {
+	protected open fun encodeBase64(value: ByteArray): String {
 		return Base64.encodeToString(value, Base64.NO_WRAP)
 	}
 
-	private fun encodeBase64Url(value: ByteArray): String {
+	protected open fun encodeBase64Url(value: ByteArray): String {
 		return Base64.encodeToString(value, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+	}
+
+	protected open fun signBytes(privateKey: java.security.PrivateKey, data: ByteArray): ByteArray {
+		return Signature.getInstance(SIGNATURE_ALGORITHM)
+			.apply {
+				initSign(privateKey)
+				update(data)
+			}
+			.sign()
+	}
+
+	protected open fun verifyBytes(publicKey: ECPublicKey, data: ByteArray, signature: ByteArray): Boolean {
+		return Signature.getInstance(SIGNATURE_ALGORITHM)
+			.apply {
+				initVerify(publicKey)
+				update(data)
+			}
+			.verify(signature)
 	}
 
 	private fun toUnsignedFixedLength(value: BigInteger, length: Int): ByteArray {
