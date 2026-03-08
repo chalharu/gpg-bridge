@@ -23,7 +23,7 @@ private const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
 private const val DEVICE_KEY_ALIAS = "device_key"
 private const val E2E_KEY_ALIAS = "e2e_key"
 
-private enum class SupportedMethod {
+internal enum class SupportedMethod {
 	GENERATE_KEY_PAIR,
 	SIGN,
 	VERIFY,
@@ -35,7 +35,7 @@ internal enum class KeystoreAlias {
 	E2E,
 }
 
-private fun parseSupportedMethod(method: String): SupportedMethod? {
+internal fun parseSupportedMethod(method: String): SupportedMethod? {
 	return when (method) {
 		"generateKeyPair" -> SupportedMethod.GENERATE_KEY_PAIR
 		"sign" -> SupportedMethod.SIGN

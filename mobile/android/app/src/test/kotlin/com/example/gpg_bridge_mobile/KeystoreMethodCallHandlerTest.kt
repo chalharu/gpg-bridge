@@ -6,7 +6,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -32,6 +31,19 @@ class KeystoreMethodCallHandlerTest {
 		assertTrue(result.notImplemented)
 		assertNull(result.successValue)
 		assertNull(result.errorCode)
+	}
+
+	@Test
+	fun parseSupportedMethodReturnsEnumForSupportedMethods() {
+		assertEquals(SupportedMethod.GENERATE_KEY_PAIR, parseSupportedMethod("generateKeyPair"))
+		assertEquals(SupportedMethod.SIGN, parseSupportedMethod("sign"))
+		assertEquals(SupportedMethod.VERIFY, parseSupportedMethod("verify"))
+		assertEquals(SupportedMethod.GET_PUBLIC_KEY_JWK, parseSupportedMethod("getPublicKeyJwk"))
+	}
+
+	@Test
+	fun parseSupportedMethodReturnsNullForUnsupportedMethod() {
+		assertNull(parseSupportedMethod("unknown"))
 	}
 
 	@Test
@@ -326,11 +338,7 @@ class KeystoreMethodCallHandlerTest {
 
 	@Test
 	fun requireSignAliasAcceptsDeviceAlias() {
-		try {
-			requireSignAlias("device_key")
-		} catch (error: IllegalArgumentException) {
-			fail("device_key should pass sign alias validation: ${error.message}")
-		}
+		requireSignAlias("device_key")
 	}
 
 	@Test
