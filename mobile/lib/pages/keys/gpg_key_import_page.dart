@@ -7,7 +7,7 @@ import '../../state/key_management_service.dart';
 /// GPG鍵インポートページ.
 ///
 /// テキスト貼り付けによるアーマードキーの読み込みに対応しています。
-/// TODO: file_picker パッケージ追加後にファイル読み込み機能を実装する。
+/// ファイル読み込みは file_picker 導入後に追加する想定です。
 class GpgKeyImportPage extends ConsumerStatefulWidget {
   const GpgKeyImportPage({super.key});
 
@@ -174,10 +174,7 @@ class _GpgKeyImportPageState extends ConsumerState<GpgKeyImportPage> {
               }
             });
           },
-          title: Text(
-            '${key.algorithm.name}  ${key.isSubkey ? "(サブキー)" : "(主キー)"}',
-            style: textTheme.titleSmall,
-          ),
+          title: Text(_keyTitle(key), style: textTheme.titleSmall),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -196,5 +193,10 @@ class _GpgKeyImportPageState extends ConsumerState<GpgKeyImportPage> {
         ),
       );
     });
+  }
+
+  String _keyTitle(GpgParsedKey key) {
+    final keyTypeLabel = key.isSubkey ? '(サブキー)' : '(主キー)';
+    return '${key.algorithm.name}  $keyTypeLabel';
   }
 }

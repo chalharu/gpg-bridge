@@ -7,6 +7,9 @@ import 'http_client_provider.dart';
 
 part 'device_api_service.g.dart';
 
+const _devicePath = '/device';
+const _deviceRefreshPath = '$_devicePath/refresh';
+
 class DeviceApiException implements Exception {
   DeviceApiException(this.message, {this.cause});
 
@@ -98,7 +101,7 @@ class DefaultDeviceApiService implements DeviceApiService {
       );
       // POST /device has no auth — use skipAuth flag.
       final response = await _dio.post<Map<String, dynamic>>(
-        '/device',
+        _devicePath,
         data: body,
         options: Options(extra: {skipAuthExtraKey: true}),
       );
@@ -118,7 +121,7 @@ class DefaultDeviceApiService implements DeviceApiService {
         'device_token': ?deviceToken,
         'default_kid': ?defaultKid,
       };
-      await _dio.patch<void>('/device', data: body);
+      await _dio.patch<void>(_devicePath, data: body);
     } catch (error) {
       _rethrowOrWrap(error, 'update device');
     }
@@ -127,7 +130,7 @@ class DefaultDeviceApiService implements DeviceApiService {
   @override
   Future<void> deleteDevice() async {
     try {
-      await _dio.delete<void>('/device');
+      await _dio.delete<void>(_devicePath);
     } catch (error) {
       _rethrowOrWrap(error, 'delete device');
     }
@@ -139,7 +142,7 @@ class DefaultDeviceApiService implements DeviceApiService {
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/device/refresh',
+        _deviceRefreshPath,
         data: {'device_jwt': currentDeviceJwt},
       );
       return DeviceRefreshResponse.fromJson(response.data!);

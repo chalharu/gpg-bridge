@@ -47,7 +47,7 @@ class DefaultPairingService implements PairingService {
   Future<PairingRecord> pair({required String pairingJwt}) async {
     try {
       final response = await _apiService.createPairing(pairingJwt: pairingJwt);
-      // TODO: Consider injecting a Clock abstraction for testability.
+      // A clock abstraction can be introduced later if timestamp control becomes necessary.
       final record = PairingRecord(
         pairingId: response.pairingId,
         clientId: response.clientId,

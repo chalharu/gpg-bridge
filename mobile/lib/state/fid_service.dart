@@ -20,7 +20,7 @@ FidService fidService(Ref ref) {
 /// In a production setup this would use `FirebaseInstallations.instance.getId()`.
 /// Since firebase_installations requires separate dependency, we delegate
 /// to a provider that can be overridden.
-// TODO: Replace with firebase_installations package when added as dependency.
+// Replace with firebase_installations once that dependency is introduced.
 class _DefaultFidService implements FidService {
   @override
   Future<String> getId() async {

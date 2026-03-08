@@ -32,60 +32,83 @@ int _crc24(Uint8List data) {
 /// Throws [FormatException] on invalid input.
 Uint8List decodeAsciiArmor(String armored) {
   final lines = armored.split(RegExp(r'\r?\n'));
+  final startIdx = _findArmorHeader(lines);
+  final endIdx = _findArmorFooter(lines, startIdx);
+  final bodyStart = _findArmorBodyStart(lines, startIdx, endIdx);
+  final (base64Lines, crcLine) = _splitArmorBody(
+    lines.sublist(bodyStart, endIdx),
+  );
 
+  final payload = base64.decode(base64Lines.join());
+  final result = Uint8List.fromList(payload);
+
+  _validateCrc24(result, crcLine);
+
+  return result;
+}
+
+int _findArmorHeader(List<String> lines) {
   final startIdx = lines.indexWhere(
-    (l) => l.startsWith('-----BEGIN PGP ') && l.endsWith('-----'),
+    (line) => line.startsWith('-----BEGIN PGP ') && line.endsWith('-----'),
   );
   if (startIdx < 0) {
     throw const FormatException('missing ASCII armor header');
   }
+  return startIdx;
+}
 
+int _findArmorFooter(List<String> lines, int startIdx) {
   final endIdx = lines.indexWhere(
-    (l) => l.startsWith('-----END PGP ') && l.endsWith('-----'),
+    (line) => line.startsWith('-----END PGP ') && line.endsWith('-----'),
     startIdx + 1,
   );
   if (endIdx < 0) {
     throw const FormatException('missing ASCII armor footer');
   }
+  return endIdx;
+}
 
-  // Skip header line, then skip metadata headers until blank line.
+int _findArmorBodyStart(List<String> lines, int startIdx, int endIdx) {
   var bodyStart = startIdx + 1;
   while (bodyStart < endIdx && lines[bodyStart].trim().isNotEmpty) {
-    if (!lines[bodyStart].contains(':')) break;
+    if (!lines[bodyStart].contains(':')) {
+      break;
+    }
     bodyStart++;
   }
-  // Skip the blank separator line.
   if (bodyStart < endIdx && lines[bodyStart].trim().isEmpty) {
     bodyStart++;
   }
+  return bodyStart;
+}
 
-  final bodyLines = lines.sublist(bodyStart, endIdx);
-
-  // Separate optional CRC line (starts with '=').
+(List<String>, String?) _splitArmorBody(List<String> bodyLines) {
   String? crcLine;
   final base64Lines = <String>[];
+
   for (final line in bodyLines) {
     if (line.startsWith('=') && line.length == 5) {
       crcLine = line;
-    } else {
-      base64Lines.add(line.trim());
+      continue;
     }
+    base64Lines.add(line.trim());
   }
 
-  final payload = base64.decode(base64Lines.join());
-  final result = Uint8List.fromList(payload);
+  return (base64Lines, crcLine);
+}
 
-  if (crcLine != null) {
-    final crcBytes = base64.decode(crcLine.substring(1));
-    final expected = (crcBytes[0] << 16) | (crcBytes[1] << 8) | crcBytes[2];
-    final actual = _crc24(result);
-    if (actual != expected) {
-      throw FormatException(
-        'CRC24 mismatch: expected ${expected.toRadixString(16)}, '
-        'got ${actual.toRadixString(16)}',
-      );
-    }
+void _validateCrc24(Uint8List payload, String? crcLine) {
+  if (crcLine == null) {
+    return;
   }
 
-  return result;
+  final crcBytes = base64.decode(crcLine.substring(1));
+  final expected = (crcBytes[0] << 16) | (crcBytes[1] << 8) | crcBytes[2];
+  final actual = _crc24(payload);
+  if (actual != expected) {
+    throw FormatException(
+      'CRC24 mismatch: expected ${expected.toRadixString(16)}, '
+      'got ${actual.toRadixString(16)}',
+    );
+  }
 }

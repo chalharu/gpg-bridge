@@ -15,13 +15,15 @@ import '../state/auth_state.dart';
 
 part 'app_router.g.dart';
 
+const _registerRoute = '/register';
+
 @Riverpod(keepAlive: true)
 GoRouter appRouter(Ref ref) {
   return GoRouter(
-    initialLocation: '/register',
+    initialLocation: _registerRoute,
     routes: [
       GoRoute(
-        path: '/register',
+        path: _registerRoute,
         builder: (context, state) => const RegisterPage(),
       ),
       GoRoute(
@@ -75,10 +77,10 @@ GoRouter appRouter(Ref ref) {
     redirect: (context, state) {
       final authAsync = ref.read(authStateProvider);
       final isRegistered = authAsync.value ?? false;
-      final inRegister = state.matchedLocation == '/register';
+      final inRegister = state.matchedLocation == _registerRoute;
 
       if (!isRegistered && !inRegister) {
-        return '/register';
+        return _registerRoute;
       }
 
       if (isRegistered && inRegister) {

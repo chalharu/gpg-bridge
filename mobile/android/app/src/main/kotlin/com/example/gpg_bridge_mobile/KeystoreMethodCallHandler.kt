@@ -23,6 +23,47 @@ private const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
 private const val DEVICE_KEY_ALIAS = "device_key"
 private const val E2E_KEY_ALIAS = "e2e_key"
 
+private val supportedMethods = mapOf(
+	"generateKeyPair" to SupportedMethod.GENERATE_KEY_PAIR,
+	"sign" to SupportedMethod.SIGN,
+	"verify" to SupportedMethod.VERIFY,
+	"getPublicKeyJwk" to SupportedMethod.GET_PUBLIC_KEY_JWK,
+)
+
+internal enum class SupportedMethod {
+	GENERATE_KEY_PAIR,
+	SIGN,
+	VERIFY,
+	GET_PUBLIC_KEY_JWK,
+}
+
+internal enum class KeystoreAlias {
+	DEVICE,
+	E2E,
+}
+
+internal fun parseSupportedMethod(method: String): SupportedMethod? = supportedMethods[method]
+
+internal fun parseKeystoreAlias(alias: String): KeystoreAlias {
+	return when (alias) {
+		DEVICE_KEY_ALIAS -> KeystoreAlias.DEVICE
+		E2E_KEY_ALIAS -> KeystoreAlias.E2E
+		else -> throw IllegalArgumentException("unsupported alias: $alias")
+	}
+}
+
+internal fun requireKnownAlias(alias: String) {
+	parseKeystoreAlias(alias)
+}
+
+internal fun requireSignAlias(alias: String) {
+	if (alias == DEVICE_KEY_ALIAS) {
+		return
+	}
+
+	throw IllegalArgumentException("alias does not support sign/verify: $alias")
+}
+
 interface KeystoreOperations {
 	fun generateKeyPair(alias: String)
 	fun sign(alias: String, dataBase64: String): String
@@ -36,7 +77,8 @@ class KeystoreMethodCallHandler(
 	private val postToMainThread: (Runnable) -> Unit,
 ) {
 	fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-		if (!isSupportedMethod(call.method)) {
+		val method = parseSupportedMethod(call.method)
+		if (method == null) {
 			result.notImplemented()
 			return
 		}
@@ -44,28 +86,26 @@ class KeystoreMethodCallHandler(
 		try {
 			backgroundExecutor.execute {
 				try {
-					val value = when (call.method) {
-						"generateKeyPair" -> {
+					val value = when (method) {
+						SupportedMethod.GENERATE_KEY_PAIR -> {
 							operations.generateKeyPair(call.requireStringArg("alias"))
 							true
 						}
 
-						"sign" -> operations.sign(
+						SupportedMethod.SIGN -> operations.sign(
 							call.requireStringArg("alias"),
 							call.requireStringArg("dataBase64"),
 						)
 
-						"verify" -> operations.verify(
+						SupportedMethod.VERIFY -> operations.verify(
 							call.requireStringArg("alias"),
 							call.requireStringArg("dataBase64"),
 							call.requireStringArg("signatureBase64"),
 						)
 
-						"getPublicKeyJwk" -> operations.getPublicKeyJwk(
+						SupportedMethod.GET_PUBLIC_KEY_JWK -> operations.getPublicKeyJwk(
 							call.requireStringArg("alias"),
 						)
-
-						else -> throw IllegalStateException("unsupported method: ${call.method}")
 					}
 
 					postToMainThread(Runnable { result.success(value) })
@@ -84,10 +124,6 @@ class KeystoreMethodCallHandler(
 		} catch (error: RejectedExecutionException) {
 			postToMainThread(Runnable { result.error("KEYSTORE_ERROR", "executor rejected task", null) })
 		}
-	}
-
-	private fun isSupportedMethod(method: String): Boolean {
-		return method == "generateKeyPair" || method == "sign" || method == "verify" || method == "getPublicKeyJwk"
 	}
 
 	private fun MethodCall.requireStringArg(name: String): String {

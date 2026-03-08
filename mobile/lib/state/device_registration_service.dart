@@ -81,9 +81,9 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     }
   }
 
-  // TODO: If a prior registration succeeded at the server but storage
-  // writes failed, the next call generates new keys and may receive 409.
-  // A future resilience ticket should add recovery for this scenario.
+  // If a prior registration succeeded at the server but storage writes failed,
+  // the next call generates new keys and may receive 409.
+  // Recovery for that partial-failure case should be added in a follow-up.
   Future<void> _registerInternal() async {
     // 1. Generate key pairs
     await _keystoreService.generateKeyPair(alias: KeystoreAliases.deviceKey);

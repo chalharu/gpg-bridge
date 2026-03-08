@@ -1,6 +1,8 @@
 import 'crypto_utils.dart' show base64UrlDecode;
 import 'jwe_exception.dart';
 
+const _p256Curve = 'P-256';
+
 /// EC P-256 public key in JWK format for JWE encryption.
 ///
 /// Coordinates are unpadded base64url-encoded big-endian byte strings.
@@ -13,7 +15,7 @@ class EcPublicJwk {
   factory EcPublicJwk.fromJson(Map<String, dynamic> json) {
     final kty = json['kty'] as String?;
     final crv = json['crv'] as String?;
-    if (kty != 'EC' || crv != 'P-256') {
+    if (kty != 'EC' || crv != _p256Curve) {
       throw JweException('unsupported key type or curve: kty=$kty, crv=$crv');
     }
     final x = json['x'] as String?;
@@ -25,7 +27,7 @@ class EcPublicJwk {
     final yBytes = base64UrlDecode(y);
     if (xBytes.length != 32 || yBytes.length != 32) {
       throw JweException(
-        'invalid P-256 coordinate length: x=${xBytes.length}, y=${yBytes.length}',
+        'invalid $_p256Curve coordinate length: x=${xBytes.length}, y=${yBytes.length}',
       );
     }
     return EcPublicJwk(x: x, y: y);
@@ -40,7 +42,7 @@ class EcPublicJwk {
   /// Returns the JWK JSON representation.
   Map<String, dynamic> toJson() => {
     'kty': 'EC',
-    'crv': 'P-256',
+    'crv': _p256Curve,
     'x': x,
     'y': y,
   };
@@ -59,7 +61,7 @@ class EcPrivateJwk {
   factory EcPrivateJwk.fromJson(Map<String, dynamic> json) {
     final kty = json['kty'] as String?;
     final crv = json['crv'] as String?;
-    if (kty != 'EC' || crv != 'P-256') {
+    if (kty != 'EC' || crv != _p256Curve) {
       throw JweException('unsupported key type or curve: kty=$kty, crv=$crv');
     }
     final x = json['x'] as String?;
@@ -86,7 +88,7 @@ class EcPrivateJwk {
   /// Returns the JWK JSON representation (includes private material).
   Map<String, dynamic> toJson() => {
     'kty': 'EC',
-    'crv': 'P-256',
+    'crv': _p256Curve,
     'x': x,
     'y': y,
     'd': d,
