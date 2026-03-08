@@ -10,9 +10,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.Key
+import java.security.KeyStore
+import java.security.KeyStoreSpi
 import java.security.PrivateKey
+import java.security.Provider
 import java.security.ProviderException
 import java.security.PublicKey
+import java.security.cert.Certificate
 import java.security.spec.ECFieldFp
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPoint
@@ -625,6 +630,60 @@ class KeystoreMethodCallHandlerTest {
 		assertEquals("alias does not support sign/verify: e2e_key", error.message)
 	}
 
+	@Test
+	fun systemKeyStoreAccessDelegatesContainsAlias() {
+		val spi = RecordingKeyStoreSpi(containsAliasResult = true)
+		val access = SystemKeyStoreAccess(createTestKeyStore(spi))
+
+		assertTrue(access.containsAlias("device_key"))
+		assertEquals("device_key", spi.lastContainsAliasAlias)
+	}
+
+	@Test
+	fun systemKeyStoreAccessDelegatesGetPrivateKeyAndNarrowsType() {
+		val privateKey = FakePrivateKey()
+		val privateKeySpi = RecordingKeyStoreSpi(keys = mapOf("device_key" to privateKey))
+		val privateKeyAccess = SystemKeyStoreAccess(createTestKeyStore(privateKeySpi))
+
+		assertEquals(privateKey, privateKeyAccess.getPrivateKey("device_key"))
+		assertEquals("device_key", privateKeySpi.lastGetKeyAlias)
+
+		val nonPrivateKeySpi = RecordingKeyStoreSpi(keys = mapOf("device_key" to FakeKey()))
+		val nonPrivateKeyAccess = SystemKeyStoreAccess(createTestKeyStore(nonPrivateKeySpi))
+
+		assertNull(nonPrivateKeyAccess.getPrivateKey("device_key"))
+		assertEquals("device_key", nonPrivateKeySpi.lastGetKeyAlias)
+	}
+
+	@Test
+	fun systemKeyStoreAccessDelegatesGetPublicKey() {
+		val publicKey = FakePublicKey()
+		val spi = RecordingKeyStoreSpi(
+			certificates = mapOf("device_key" to FakeCertificate(publicKey)),
+		)
+		val access = SystemKeyStoreAccess(createTestKeyStore(spi))
+
+		assertEquals(publicKey, access.getPublicKey("device_key"))
+		assertEquals("device_key", spi.lastGetCertificateAlias)
+	}
+
+	@Test
+	fun defaultKeyStoreAccessFactoryUsesInjectedSystemKeyStoreCreator() {
+		val spi = RecordingKeyStoreSpi(containsAliasResult = true)
+		val access = AndroidKeystoreDependencies(
+			createSystemKeyStore = { createTestKeyStore(spi) },
+		).keyStoreAccess()
+
+		assertTrue(access is SystemKeyStoreAccess)
+		assertTrue(access.containsAlias("device_key"))
+		assertEquals("device_key", spi.lastContainsAliasAlias)
+	}
+
+	private fun createTestKeyStore(spi: KeyStoreSpi): KeyStore {
+		val provider = object : Provider("TestProvider", 1.0, "Test provider") {}
+		return object : KeyStore(spi, provider, "TestKeyStore") {}.apply { load(null, null) }
+	}
+
 	private class RecordingKeyStoreAccess(
 		private val existingAliases: Set<String> = emptySet(),
 		private val privateKeys: Map<String, PrivateKey> = emptyMap(),
@@ -698,12 +757,34 @@ class KeystoreMethodCallHandlerTest {
 		override fun getEncoded(): ByteArray = byteArrayOf()
 	}
 
+	private class FakeKey : Key {
+		override fun getAlgorithm(): String = "RAW"
+
+		override fun getFormat(): String = "RAW"
+
+		override fun getEncoded(): ByteArray = byteArrayOf(1)
+	}
+
 	private class FakePublicKey : PublicKey {
 		override fun getAlgorithm(): String = "RSA"
 
 		override fun getFormat(): String = "X.509"
 
 		override fun getEncoded(): ByteArray = byteArrayOf()
+	}
+
+	private class FakeCertificate(
+		private val publicKey: PublicKey,
+	) : Certificate("X.509") {
+		override fun getEncoded(): ByteArray = byteArrayOf()
+
+		override fun verify(key: PublicKey) = Unit
+
+		override fun verify(key: PublicKey, sigProvider: String) = Unit
+
+		override fun toString(): String = "FakeCertificate"
+
+		override fun getPublicKey(): PublicKey = publicKey
 	}
 
 	private class FakeECPublicKey(
@@ -745,6 +826,59 @@ class KeystoreMethodCallHandlerTest {
 		override fun getPublicKeyJwk(alias: String): Map<String, String> {
 			return onGetPublicKeyJwk(alias)
 		}
+	}
+
+	private class RecordingKeyStoreSpi(
+		private val containsAliasResult: Boolean = false,
+		private val keys: Map<String, Key> = emptyMap(),
+		private val certificates: Map<String, Certificate> = emptyMap(),
+	) : KeyStoreSpi() {
+		var lastContainsAliasAlias: String? = null
+		var lastGetKeyAlias: String? = null
+		var lastGetCertificateAlias: String? = null
+
+		override fun engineContainsAlias(alias: String): Boolean {
+			lastContainsAliasAlias = alias
+			return containsAliasResult
+		}
+
+		override fun engineGetKey(alias: String, password: CharArray?): Key? {
+			lastGetKeyAlias = alias
+			return keys[alias]
+		}
+
+		override fun engineGetCertificate(alias: String): Certificate? {
+			lastGetCertificateAlias = alias
+			return certificates[alias]
+		}
+
+		override fun engineGetCertificateChain(alias: String): Array<Certificate>? = null
+
+		override fun engineGetCreationDate(alias: String) = java.util.Date(0)
+
+		override fun engineSetKeyEntry(alias: String, key: Key, password: CharArray?, chain: Array<Certificate>?) = Unit
+
+		override fun engineSetKeyEntry(alias: String, key: ByteArray, chain: Array<Certificate>?) = Unit
+
+		override fun engineSetCertificateEntry(alias: String, cert: Certificate) = Unit
+
+		override fun engineDeleteEntry(alias: String) = Unit
+
+		override fun engineAliases(): java.util.Enumeration<String> = java.util.Collections.enumeration(emptyList())
+
+		override fun engineSize(): Int = keys.size + certificates.size
+
+		override fun engineIsKeyEntry(alias: String): Boolean = keys.containsKey(alias)
+
+		override fun engineIsCertificateEntry(alias: String): Boolean = certificates.containsKey(alias)
+
+		override fun engineGetCertificateAlias(cert: Certificate): String? {
+			return certificates.entries.firstOrNull { it.value == cert }?.key
+		}
+
+		override fun engineStore(stream: java.io.OutputStream?, password: CharArray?) = Unit
+
+		override fun engineLoad(stream: java.io.InputStream?, password: CharArray?) = Unit
 	}
 
 	private class CapturingResult : MethodChannel.Result {

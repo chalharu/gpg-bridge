@@ -40,8 +40,13 @@ internal interface Base64Codec {
 	fun encodeUrl(value: ByteArray): String
 }
 
+internal fun loadSystemKeyStore(provider: String = KEYSTORE_PROVIDER): KeyStore {
+	return KeyStore.getInstance(provider).apply { load(null) }
+}
+
 internal data class AndroidKeystoreDependencies(
-	val keyStoreAccess: () -> KeyStoreAccess = { SystemKeyStoreAccess() },
+	val createSystemKeyStore: () -> KeyStore = ::loadSystemKeyStore,
+	val keyStoreAccess: () -> KeyStoreAccess = { SystemKeyStoreAccess(createSystemKeyStore()) },
 	val keyPairGeneratorAccess: () -> KeyPairGeneratorAccess = { SystemKeyPairGeneratorAccess() },
 	val signatureAccess: SignatureAccess = SystemSignatureAccess,
 	val base64Codec: Base64Codec = AndroidBase64Codec,
@@ -150,8 +155,9 @@ private data class JwkMetadata(
 	val alg: String,
 )
 
-private class SystemKeyStoreAccess : KeyStoreAccess {
-	private val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+internal class SystemKeyStoreAccess(
+	private val keyStore: KeyStore,
+) : KeyStoreAccess {
 
 	override fun containsAlias(alias: String): Boolean = keyStore.containsAlias(alias)
 
