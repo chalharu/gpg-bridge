@@ -1,12 +1,8 @@
+mod lookup;
 mod validation;
 
 use anyhow::anyhow;
-use validation::{
-    validate_audit_log_retention, validate_cleanup_interval, validate_db_pool,
-    validate_device_jwt_validity, validate_duration_upper_bounds, validate_pairing_config,
-    validate_rate_limit, validate_request_jwt_validity, validate_signing_key_secret,
-    validate_unpaired_client_max_age,
-};
+use lookup::{EnvLookup, validate_config};
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -88,61 +84,51 @@ impl AppConfig {
 
     // ci:max-method-lines 110
     pub fn from_lookup(lookup: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
-        let server_host = lookup("SERVER_HOST").unwrap_or_else(|| "127.0.0.1".to_owned());
-        let server_port: u16 = parse_env(lookup, "SERVER_PORT", "3000")?;
-        let database_url = require_env(lookup, "SERVER_DATABASE_URL")?;
-        let db_max_connections: u32 = parse_env(lookup, "SERVER_DB_MAX_CONNECTIONS", "20")?;
-        let db_min_connections: u32 = parse_env(lookup, "SERVER_DB_MIN_CONNECTIONS", "1")?;
+        let env = EnvLookup::new(lookup);
+        let server_host = env.string("SERVER_HOST", "127.0.0.1");
+        let server_port: u16 = env.parsed("SERVER_PORT", "3000")?;
+        let database_url = env.required("SERVER_DATABASE_URL")?;
+        let db_max_connections: u32 = env.parsed("SERVER_DB_MAX_CONNECTIONS", "20")?;
+        let db_min_connections: u32 = env.parsed("SERVER_DB_MIN_CONNECTIONS", "1")?;
         let db_acquire_timeout_seconds: u64 =
-            parse_env(lookup, "SERVER_DB_ACQUIRE_TIMEOUT_SECONDS", "5")?;
-        let log_level = lookup("SERVER_LOG_LEVEL").unwrap_or_else(|| "info".to_owned());
-        let log_format = lookup("SERVER_LOG_FORMAT").unwrap_or_else(|| "plain".to_owned());
-        let signing_key_secret = require_env(lookup, "SERVER_SIGNING_KEY_SECRET")?;
-        let base_url = lookup("SERVER_BASE_URL")
+            env.parsed("SERVER_DB_ACQUIRE_TIMEOUT_SECONDS", "5")?;
+        let log_level = env.string("SERVER_LOG_LEVEL", "info");
+        let log_format = env.string("SERVER_LOG_FORMAT", "plain");
+        let signing_key_secret = env.required("SERVER_SIGNING_KEY_SECRET")?;
+        let base_url = env
+            .value("SERVER_BASE_URL")
             .unwrap_or_else(|| format!("http://{server_host}:{server_port}"));
-        let rate_limit_strict_quota: u32 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_STRICT_QUOTA", "10")?;
+        let rate_limit_strict_quota: u32 = env.parsed("SERVER_RATE_LIMIT_STRICT_QUOTA", "10")?;
         let rate_limit_strict_window_seconds: u64 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS", "60")?;
+            env.parsed("SERVER_RATE_LIMIT_STRICT_WINDOW_SECONDS", "60")?;
         let rate_limit_standard_quota: u32 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_STANDARD_QUOTA", "60")?;
+            env.parsed("SERVER_RATE_LIMIT_STANDARD_QUOTA", "60")?;
         let rate_limit_standard_window_seconds: u64 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS", "60")?;
+            env.parsed("SERVER_RATE_LIMIT_STANDARD_WINDOW_SECONDS", "60")?;
         let rate_limit_sse_max_per_ip: u32 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_IP", "20")?;
+            env.parsed("SERVER_RATE_LIMIT_SSE_MAX_PER_IP", "20")?;
         let rate_limit_sse_max_per_key: u32 =
-            parse_env(lookup, "SERVER_RATE_LIMIT_SSE_MAX_PER_KEY", "1")?;
+            env.parsed("SERVER_RATE_LIMIT_SSE_MAX_PER_KEY", "1")?;
         let device_jwt_validity_seconds: u64 =
-            parse_env(lookup, "SERVER_DEVICE_JWT_VALIDITY_SECONDS", "31536000")?;
+            env.parsed("SERVER_DEVICE_JWT_VALIDITY_SECONDS", "31536000")?;
         let pairing_jwt_validity_seconds: u64 =
-            parse_env(lookup, "SERVER_PAIRING_JWT_VALIDITY_SECONDS", "300")?;
+            env.parsed("SERVER_PAIRING_JWT_VALIDITY_SECONDS", "300")?;
         let client_jwt_validity_seconds: u64 =
-            parse_env(lookup, "SERVER_CLIENT_JWT_VALIDITY_SECONDS", "31536000")?;
+            env.parsed("SERVER_CLIENT_JWT_VALIDITY_SECONDS", "31536000")?;
         let request_jwt_validity_seconds: u64 =
-            parse_env(lookup, "SERVER_REQUEST_JWT_VALIDITY_SECONDS", "300")?;
-        let unconsumed_pairing_limit: i64 =
-            parse_env(lookup, "SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
-        let fcm_service_account_key_path = lookup("SERVER_FCM_SERVICE_ACCOUNT_KEY_PATH");
-        let fcm_project_id = lookup("SERVER_FCM_PROJECT_ID");
-        let cleanup_interval_seconds: u64 =
-            parse_env(lookup, "SERVER_CLEANUP_INTERVAL_SECONDS", "60")?;
+            env.parsed("SERVER_REQUEST_JWT_VALIDITY_SECONDS", "300")?;
+        let unconsumed_pairing_limit: i64 = env.parsed("SERVER_UNCONSUMED_PAIRING_LIMIT", "100")?;
+        let fcm_service_account_key_path = env.value("SERVER_FCM_SERVICE_ACCOUNT_KEY_PATH");
+        let fcm_project_id = env.value("SERVER_FCM_PROJECT_ID");
+        let cleanup_interval_seconds: u64 = env.parsed("SERVER_CLEANUP_INTERVAL_SECONDS", "60")?;
         let unpaired_client_max_age_hours: u64 =
-            parse_env(lookup, "SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "24")?;
-        let audit_log_approved_retention_seconds: u64 = parse_env(
-            lookup,
-            "SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS",
-            "31536000",
-        )?;
-        let audit_log_denied_retention_seconds: u64 = parse_env(
-            lookup,
-            "SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS",
-            "15768000",
-        )?;
-        let audit_log_conflict_retention_seconds: u64 = parse_env(
-            lookup,
-            "SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS",
-            "7884000",
-        )?;
+            env.parsed("SERVER_UNPAIRED_CLIENT_MAX_AGE_HOURS", "24")?;
+        let audit_log_approved_retention_seconds: u64 =
+            env.parsed("SERVER_AUDIT_LOG_APPROVED_RETENTION_SECONDS", "31536000")?;
+        let audit_log_denied_retention_seconds: u64 =
+            env.parsed("SERVER_AUDIT_LOG_DENIED_RETENTION_SECONDS", "15768000")?;
+        let audit_log_conflict_retention_seconds: u64 =
+            env.parsed("SERVER_AUDIT_LOG_CONFLICT_RETENTION_SECONDS", "7884000")?;
 
         let config = Self {
             server_host,
@@ -175,16 +161,7 @@ impl AppConfig {
             audit_log_conflict_retention_seconds,
         };
 
-        validate_db_pool(&config)?;
-        validate_signing_key_secret(&config.signing_key_secret)?;
-        validate_rate_limit(&config)?;
-        validate_device_jwt_validity(&config)?;
-        validate_pairing_config(&config)?;
-        validate_request_jwt_validity(&config)?;
-        validate_cleanup_interval(&config)?;
-        validate_duration_upper_bounds(&config)?;
-        validate_unpaired_client_max_age(&config)?;
-        validate_audit_log_retention(&config)?;
+        validate_config(&config)?;
 
         Ok(config)
     }
