@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::{self, Body};
 use axum::http::{Request, StatusCode, header};
@@ -9,7 +11,9 @@ use crate::http::AppState;
 use crate::http::signing::get_sign_events;
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{FullRequestRow, RequestRow};
-use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
+use crate::test_support::{
+    MockRepository, make_signing_key_row, make_test_app_state, make_test_app_state_arc,
+};
 
 use super::{make_daemon_token, response_status};
 
@@ -35,6 +39,13 @@ fn sign_events_request(token: &str) -> Request<Body> {
 
 fn make_sign_events_aud() -> String {
     "https://api.example.com/sign-events".to_owned()
+}
+
+async fn response_body_string(response: axum::response::Response) -> String {
+    let bytes = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepository) {
@@ -146,6 +157,22 @@ async fn sign_events_unavailable_returns_immediate_sse() {
     assert!(
         body_str.contains("unavailable"),
         "expected unavailable status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_cancelled_returns_immediate_sse() {
+    let (token, repo) = setup_sign_events("cancelled", None);
+    let state = make_test_app_state(repo);
+    let app = build_sign_events_app(state);
+
+    let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_str = response_body_string(resp).await;
+    assert!(
+        body_str.contains("cancelled"),
+        "expected cancelled status in: {body_str}"
     );
 }
 
@@ -265,4 +292,121 @@ async fn sign_events_pending_returns_sse_stream() {
         ct.contains("text/event-stream"),
         "expected SSE content-type, got: {ct}"
     );
+}
+
+#[tokio::test]
+async fn sign_events_missing_client_ip_returns_500_with_instance() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let state = make_test_app_state(repo);
+    let app = build_sign_events_app(state);
+
+    let request = Request::builder()
+        .uri("/sign-events")
+        .method("GET")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = super::body_json(response).await;
+    assert_eq!(body["detail"], "could not determine client IP");
+    assert_eq!(body["instance"], "/sign-events");
+}
+
+#[tokio::test]
+async fn sign_events_duplicate_connection_returns_429_with_instance() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let state = make_test_app_state(repo);
+    let app = build_sign_events_app(state);
+
+    let first = app
+        .clone()
+        .oneshot(sign_events_request(&token))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let body = super::body_json(response).await;
+    assert_eq!(
+        body["detail"],
+        "SSE connection already active for this request"
+    );
+    assert_eq!(body["instance"], "/sign-events");
+
+    drop(first);
+}
+
+#[tokio::test]
+async fn sign_events_invalid_expiry_returns_500_with_instance() {
+    let (token, repo) = setup_sign_events("pending", None);
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: "pending".into(),
+        expired: "not-a-date".into(),
+        signature: None,
+        client_ids: r#"[\"client-1\"]"#.into(),
+        daemon_public_key: repo
+            .request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .daemon_public_key
+            .clone(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+    let state = make_test_app_state(repo);
+    let app = build_sign_events_app(state);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = super::body_json(response).await;
+    assert_eq!(body["instance"], "/sign-events");
+}
+
+#[tokio::test]
+async fn sign_events_expired_stream_emits_expired_event_and_writes_audit_log() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let repo = Arc::new(repo);
+    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
+        request_id: "req-1".into(),
+        status: "pending".into(),
+        expired: "2020-01-01T00:00:00Z".into(),
+        signature: None,
+        client_ids: r#"[\"client-1\"]"#.into(),
+        daemon_public_key: repo
+            .request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .daemon_public_key
+            .clone(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    });
+    let state = make_test_app_state_arc(repo.clone());
+    let app = build_sign_events_app(state);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_str = response_body_string(response).await;
+    assert!(
+        body_str.contains("expired"),
+        "expected expired event in: {body_str}"
+    );
+
+    let logs = repo.audit_logs.lock().unwrap();
+    assert!(logs.iter().any(|log| log.event_type == "sign_expired"));
 }

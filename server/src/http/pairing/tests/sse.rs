@@ -1,7 +1,6 @@
 use axum::Router;
 use axum::body::{self, Body};
 use axum::http::{Request, StatusCode, header};
-use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceExt;
 
@@ -11,7 +10,7 @@ use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRow, PairingRow};
 use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
 
-use super::make_pairing_token;
+use super::{make_pairing_token, response_json};
 
 // ===========================================================================
 // GET /pairing-session  (SSE)
@@ -21,13 +20,6 @@ fn build_sse_app(state: AppState) -> Router {
     Router::new()
         .route("/pairing-session", get(get_pairing_session))
         .with_state(state)
-}
-
-async fn response_json(response: Response) -> serde_json::Value {
-    let bytes = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
 
 #[tokio::test]
@@ -306,6 +298,118 @@ async fn session_pending_pairing_returns_200_sse_stream() {
         content_type.contains("text/event-stream"),
         "expected text/event-stream but got: {content_type}"
     );
+}
+
+#[tokio::test]
+async fn session_missing_client_ip_returns_500_with_instance() {
+    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
+    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-pending");
+
+    let repo = MockRepository::new(sk);
+    repo.pairings.lock().unwrap().push(PairingRow {
+        pairing_id: "pair-pending".to_owned(),
+        expired: "2099-01-01T00:00:00+00:00".to_owned(),
+        client_id: None,
+    });
+    let state = make_test_app_state(repo);
+    let app = build_sse_app(state);
+
+    let response = app
+        .oneshot(
+            Request::get("/pairing-session")
+                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "could not determine client IP");
+    assert_eq!(body["instance"], "/pairing-session");
+}
+
+#[tokio::test]
+async fn session_duplicate_connection_returns_429_with_instance() {
+    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
+    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-pending");
+
+    let repo = MockRepository::new(sk);
+    repo.pairings.lock().unwrap().push(PairingRow {
+        pairing_id: "pair-pending".to_owned(),
+        expired: "2099-01-01T00:00:00+00:00".to_owned(),
+        client_id: None,
+    });
+    let state = make_test_app_state(repo);
+    let app = build_sse_app(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::get("/pairing-session")
+                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
+                .header("X-Forwarded-For", "10.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::get("/pairing-session")
+                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
+                .header("X-Forwarded-For", "10.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["detail"],
+        "SSE connection already active for this pairing"
+    );
+    assert_eq!(body["instance"], "/pairing-session");
+
+    drop(first);
+}
+
+#[tokio::test]
+async fn session_invalid_pairing_expiry_returns_500_with_instance() {
+    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
+    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
+    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-invalid-expiry");
+
+    let repo = MockRepository::new(sk);
+    repo.pairings.lock().unwrap().push(PairingRow {
+        pairing_id: "pair-invalid-expiry".to_owned(),
+        expired: "not-a-date".to_owned(),
+        client_id: None,
+    });
+    let state = make_test_app_state(repo);
+    let app = build_sse_app(state);
+
+    let response = app
+        .oneshot(
+            Request::get("/pairing-session")
+                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
+                .header("X-Forwarded-For", "10.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response_json(response).await;
+    assert_eq!(body["instance"], "/pairing-session");
 }
 
 #[tokio::test]

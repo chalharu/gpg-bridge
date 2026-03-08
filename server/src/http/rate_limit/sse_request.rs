@@ -43,12 +43,13 @@ pub(crate) fn acquire_sse_slot(
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use axum::body::{self, Body};
+    use axum::body::Body;
     use axum::extract::ConnectInfo;
     use axum::response::IntoResponse;
-    use serde_json::Value;
 
-    use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
+    use crate::test_support::{
+        MockRepository, make_signing_key_row, make_test_app_state, response_json,
+    };
 
     use super::*;
 
@@ -56,13 +57,6 @@ mod tests {
         let (private_jwk, public_jwk, kid) = crate::jwt::generate_signing_key_pair().unwrap();
         let signing_key = make_signing_key_row(&private_jwk, &public_jwk, &kid);
         make_test_app_state(MockRepository::new(signing_key))
-    }
-
-    async fn response_json(response: axum::response::Response) -> Value {
-        let bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[test]
@@ -121,5 +115,42 @@ mod tests {
 
         assert_eq!(body["detail"], "custom key limit");
         assert_eq!(body["instance"], "/pairing");
+    }
+
+    #[tokio::test]
+    async fn acquire_sse_slot_reports_ip_limit_with_instance() {
+        let state = make_state();
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let mut guards = Vec::new();
+        for idx in 0..20 {
+            guards.push(
+                acquire_sse_slot(
+                    &state,
+                    ip,
+                    &format!("pair-{idx}"),
+                    "custom key limit",
+                    "/sign-events",
+                )
+                .unwrap(),
+            );
+        }
+
+        let error = match acquire_sse_slot(
+            &state,
+            ip,
+            "pair-overflow",
+            "custom key limit",
+            "/sign-events",
+        ) {
+            Ok(_) => panic!("expected IP SSE slot acquisition to fail"),
+            Err(error) => error,
+        };
+        let response = error.into_response();
+        let body = response_json(response).await;
+
+        assert_eq!(body["detail"], "SSE connection limit per IP exceeded");
+        assert_eq!(body["instance"], "/sign-events");
+
+        drop(guards);
     }
 }

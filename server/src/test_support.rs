@@ -762,6 +762,14 @@ pub fn make_client_jwt(
     sign_jws(&outer, priv_jwk, kid).unwrap()
 }
 
+/// Decode a JSON response body for HTTP handler tests.
+pub async fn response_json(response: axum::response::Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
 /// Build an in-memory [`SqliteRepository`] with migrations applied, wrapped
 /// in `Arc` for use in HTTP handler tests.
 pub async fn build_test_sqlite_repo() -> Arc<crate::repository::SqliteRepository> {
