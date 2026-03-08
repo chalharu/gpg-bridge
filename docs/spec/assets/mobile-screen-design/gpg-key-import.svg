@@ -42,5 +42,8 @@
   <text x="152" y="566" class="tiny">Key ID / Keygrip / 秘密鍵あり</text>
   <rect x="94" y="628" width="232" height="46" rx="23" fill="#0f766e"/>
   <text x="210" y="656" class="button" text-anchor="middle">インポート (1件)</text>
-  <text x="210" y="700" class="small" text-anchor="middle">API 失敗時は private key material を best-effort cleanup</text>
+  <text x="210" y="698" class="small" text-anchor="middle">
+    <tspan x="210" dy="0">API 失敗時は private key material を</tspan>
+    <tspan x="210" dy="16">best-effort cleanup</tspan>
+  </text>
 </svg>

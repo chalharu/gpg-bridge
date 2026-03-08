@@ -34,16 +34,22 @@
   <text x="116" y="274" class="small" fill="#dbeafe">On first frame</text>
   <text x="116" y="308" class="heading" fill="#ffffff">JWT / FCM</text>
   <text x="116" y="336" class="heading" fill="#ffffff">refresh check</text>
-  <text x="116" y="360" class="body" fill="#dbeafe">Listener startup happens from this tab after registration.</text>
+  <text x="116" y="360" class="body" fill="#dbeafe">
+    <tspan x="116" dy="0">Listener startup happens from</tspan>
+    <tspan x="116" dy="18">this tab after registration.</tspan>
+  </text>
   <rect x="94" y="396" width="232" height="82" rx="18" fill="#f8fafc" stroke="#bfdbfe" stroke-width="2"/>
-  <text x="116" y="428" class="body">checkAndRefreshDeviceJwt()</text>
-  <text x="116" y="452" class="body">checkAndRefreshFcmToken()</text>
+  <text x="108" y="428" class="small">checkAndRefreshDeviceJwt()</text>
+  <text x="108" y="452" class="small">checkAndRefreshFcmToken()</text>
   <rect x="112" y="546" width="196" height="54" rx="27" fill="#dc2626"/>
   <text x="210" y="579" class="button" text-anchor="middle">Reset registration</text>
   <text x="210" y="624" class="small" text-anchor="middle">Failure path shows SnackBar</text>
-  <rect x="88" y="674" width="244" height="56" rx="20" fill="#eef2ff"/>
+  <rect x="88" y="646" width="244" height="44" rx="20" fill="#eef2ff"/>
   <circle cx="122" cy="702" r="9" fill="#1d4ed8"/>
-  <text x="138" y="706" class="small">Home tab keeps the selected state inside NavigationBar.</text>
+  <text x="210" y="665" class="tiny" text-anchor="middle">
+    <tspan x="210" dy="0">Home tab keeps the selected state</tspan>
+    <tspan x="210" dy="14">inside NavigationBar.</tspan>
+  </text>
   <rect x="76" y="696" width="268" height="58" rx="0" fill="#f8fafc"/>
   <line x1="76" y1="696" x2="344" y2="696" stroke="#cbd5e1"/>
   <text x="109" y="730" class="nav-active">Home</text>

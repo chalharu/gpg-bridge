@@ -14,7 +14,7 @@ updated: 2026-03-09
 
 Asset: [assets/mobile-screen-design/register.svg](assets/mobile-screen-design/register.svg)
 
-![Register screen mockup](assets/mobile-screen-design/register.svg)
+<img src="assets/mobile-screen-design/register.svg" alt="Register screen mockup" width="360" />
 
 未登録端末の初期到達先です。中央の `Complete registration` ボタンと、成功後に token refresh listener を開始する流れを示しています。
 
@@ -22,7 +22,7 @@ Asset: [assets/mobile-screen-design/register.svg](assets/mobile-screen-design/re
 
 Asset: [assets/mobile-screen-design/home.svg](assets/mobile-screen-design/home.svg)
 
-![Home screen mockup](assets/mobile-screen-design/home.svg)
+<img src="assets/mobile-screen-design/home.svg" alt="Home screen mockup" width="360" />
 
 登録済み端末のホームです。初回表示時の JWT / FCM token 更新確認と、`Reset registration` アクションを表現しています。
 
@@ -30,7 +30,7 @@ Asset: [assets/mobile-screen-design/home.svg](assets/mobile-screen-design/home.s
 
 Asset: [assets/mobile-screen-design/keys.svg](assets/mobile-screen-design/keys.svg)
 
-![Keys screen mockup](assets/mobile-screen-design/keys.svg)
+<img src="assets/mobile-screen-design/keys.svg" alt="Keys screen mockup" width="360" />
 
 `/keys` は 1 route 内に `E2E公開鍵` と `GPG鍵` の 2 タブを持つため、モック内でも両方の状態が分かるように並記しています。E2E 鍵の star 表示と、GPG 鍵インポート導線を同一画面内で確認できます。
 
@@ -38,7 +38,7 @@ Asset: [assets/mobile-screen-design/keys.svg](assets/mobile-screen-design/keys.s
 
 Asset: [assets/mobile-screen-design/pairing.svg](assets/mobile-screen-design/pairing.svg)
 
-![Pairing screen mockup](assets/mobile-screen-design/pairing.svg)
+<img src="assets/mobile-screen-design/pairing.svg" alt="Pairing screen mockup" width="360" />
 
 ペアリング済みデバイス一覧、解除導線、`/pairing/scan` へ進む QR スキャン FAB を表現しています。
 
@@ -46,7 +46,7 @@ Asset: [assets/mobile-screen-design/pairing.svg](assets/mobile-screen-design/pai
 
 Asset: [assets/mobile-screen-design/qr-scan.svg](assets/mobile-screen-design/qr-scan.svg)
 
-![QR scan screen mockup](assets/mobile-screen-design/qr-scan.svg)
+<img src="assets/mobile-screen-design/qr-scan.svg" alt="QR scan screen mockup" width="360" />
 
 カメラスキャン、JWT 形式検証、成功時の復帰、無効な値への SnackBar を中心に整理しています。
 
@@ -54,7 +54,7 @@ Asset: [assets/mobile-screen-design/qr-scan.svg](assets/mobile-screen-design/qr-
 
 Asset: [assets/mobile-screen-design/settings.svg](assets/mobile-screen-design/settings.svg)
 
-![Settings screen mockup](assets/mobile-screen-design/settings.svg)
+<img src="assets/mobile-screen-design/settings.svg" alt="Settings screen mockup" width="360" />
 
 現行実装どおり、テーマ切替 3 選択肢のみを持つシンプルな設定画面です。
 
@@ -62,7 +62,7 @@ Asset: [assets/mobile-screen-design/settings.svg](assets/mobile-screen-design/se
 
 Asset: [assets/mobile-screen-design/gpg-key-import.svg](assets/mobile-screen-design/gpg-key-import.svg)
 
-![GPG key import screen mockup](assets/mobile-screen-design/gpg-key-import.svg)
+<img src="assets/mobile-screen-design/gpg-key-import.svg" alt="GPG key import screen mockup" width="360" />
 
 `Navigator.push` で開く補助画面です。アーマード鍵の貼り付け、解析、検出鍵の選択、インポート実行の 4 段階を 1 枚で把握できるようにしています。
 
@@ -70,7 +70,7 @@ Asset: [assets/mobile-screen-design/gpg-key-import.svg](assets/mobile-screen-des
 
 Asset: [assets/mobile-screen-design/sign-request.svg](assets/mobile-screen-design/sign-request.svg)
 
-![Sign request screen mockup](assets/mobile-screen-design/sign-request.svg)
+<img src="assets/mobile-screen-design/sign-request.svg" alt="Sign request screen mockup" width="360" />
 
 FCM 起点で一時的に表示される署名要求画面です。残り時間バナー、詳細カード、承認 / 拒否 / 無視の操作を明示しています。
 

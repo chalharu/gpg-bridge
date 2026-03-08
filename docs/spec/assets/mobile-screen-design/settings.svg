@@ -36,9 +36,15 @@
   <rect x="94" y="442" width="232" height="66" rx="18" fill="#0f172a"/>
   <circle cx="120" cy="475" r="11" fill="none" stroke="#cbd5e1" stroke-width="2"/>
   <text x="146" y="480" class="body" fill="#e2e8f0">ダーク</text>
-  <rect x="94" y="540" width="232" height="90" rx="20" fill="#f8fafc" stroke="#cbd5e1"/>
-  <text x="114" y="572" class="small">themeModeStateProvider 経由で永続化</text>
-  <text x="114" y="594" class="small">現時点の設定 UI はテーマ切替のみ</text>
+  <rect x="94" y="536" width="232" height="108" rx="20" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="114" y="566" class="small">
+    <tspan x="114" dy="0">themeModeStateProvider</tspan>
+    <tspan x="114" dy="16">経由で永続化</tspan>
+  </text>
+  <text x="114" y="606" class="small">
+    <tspan x="114" dy="0">現時点の設定 UI は</tspan>
+    <tspan x="114" dy="16">テーマ切替のみ</tspan>
+  </text>
   <rect x="76" y="696" width="268" height="58" fill="#f8fafc"/>
   <line x1="76" y1="696" x2="344" y2="696" stroke="#cbd5e1"/>
   <text x="109" y="730" class="nav">Home</text>

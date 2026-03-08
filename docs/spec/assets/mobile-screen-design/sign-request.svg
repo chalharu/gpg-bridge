@@ -29,18 +29,24 @@
   <rect x="94" y="240" width="232" height="64" rx="18" fill="#ffedd5" stroke="#fdba74" stroke-width="2"/>
   <text x="210" y="268" class="small" text-anchor="middle">CountdownBanner</text>
   <text x="210" y="288" class="body" text-anchor="middle">残り時間 00:52</text>
-  <rect x="94" y="326" width="232" height="194" rx="20" fill="#f8fafc" stroke="#cbd5e1"/>
+  <rect x="94" y="326" width="232" height="202" rx="20" fill="#f8fafc" stroke="#cbd5e1"/>
   <text x="114" y="360" class="body">hash</text>
   <text x="114" y="382" class="tiny">2fd4e1c67a2d28fced849ee1bb76e739...</text>
   <text x="114" y="418" class="body">algorithm</text>
-  <text x="114" y="440" class="tiny">openpgp detached signature</text>
-  <text x="114" y="476" class="body">key ID</text>
-  <text x="114" y="498" class="tiny">8C8A4A1F91EE</text>
+  <text x="114" y="440" class="tiny">
+    <tspan x="114" dy="0">openpgp detached</tspan>
+    <tspan x="114" dy="14">signature</tspan>
+  </text>
+  <text x="114" y="484" class="body">key ID</text>
+  <text x="114" y="506" class="tiny">8C8A4A1F91EE</text>
   <rect x="94" y="548" width="232" height="46" rx="23" fill="#15803d"/>
   <text x="210" y="576" class="button" text-anchor="middle">承認</text>
   <rect x="94" y="606" width="232" height="46" rx="23" fill="#b91c1c"/>
   <text x="210" y="634" class="button" text-anchor="middle">拒否</text>
   <rect x="94" y="664" width="232" height="46" rx="23" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
   <text x="210" y="692" class="button-dark" text-anchor="middle">無視</text>
-  <text x="210" y="730" class="tiny" text-anchor="middle">timeout shows SnackBar and auto closes the page</text>
+  <text x="210" y="726" class="tiny" text-anchor="middle">
+    <tspan x="210" dy="0">timeout shows SnackBar</tspan>
+    <tspan x="210" dy="14">and auto closes the page</tspan>
+  </text>
 </svg>
