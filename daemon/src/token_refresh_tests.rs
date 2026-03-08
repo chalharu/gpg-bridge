@@ -1,21 +1,7 @@
 use super::*;
-
-async fn spawn_single_response_server(response: String) -> std::net::SocketAddr {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await;
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    addr
-}
+use crate::test_http_server::{
+    empty_response, json_response, spawn_response_sequence, spawn_single_response_server,
+};
 
 fn test_http_client(timeout: std::time::Duration) -> Client {
     Client::builder().timeout(timeout).build().unwrap()
@@ -106,10 +92,7 @@ async fn refresh_token_handles_connection_error() {
 
 #[tokio::test]
 async fn refresh_token_returns_re_pairing_on_401() {
-    let addr = spawn_single_response_server(
-        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
-    )
-    .await;
+    let addr = spawn_single_response_server(empty_response("HTTP/1.1 401 Unauthorized")).await;
 
     let client = test_http_client(std::time::Duration::from_secs(2));
     let result = refresh_token(&client, &format!("http://{addr}"), "old-jwt").await;
@@ -121,10 +104,7 @@ async fn refresh_token_returns_re_pairing_on_401() {
 
 #[tokio::test]
 async fn refresh_token_returns_re_pairing_on_404() {
-    let addr = spawn_single_response_server(
-        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
-    )
-    .await;
+    let addr = spawn_single_response_server(empty_response("HTTP/1.1 404 Not Found")).await;
 
     let client = test_http_client(std::time::Duration::from_secs(2));
     let result = refresh_token(&client, &format!("http://{addr}"), "old-jwt").await;
@@ -137,12 +117,7 @@ async fn refresh_token_returns_re_pairing_on_404() {
 #[tokio::test]
 async fn refresh_token_parses_new_jwt() {
     let body = r#"{"client_jwt":"new-jwt-value"}"#;
-    let addr = spawn_single_response_server(format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body,
-    ))
-    .await;
+    let addr = spawn_single_response_server(json_response("HTTP/1.1 200 OK", body)).await;
 
     let client = test_http_client(std::time::Duration::from_secs(2));
     let new_jwt = refresh_token(&client, &format!("http://{addr}"), "old-jwt")
@@ -165,8 +140,6 @@ async fn check_and_refresh_all_skips_when_no_tokens() {
 #[tokio::test]
 async fn check_and_refresh_all_refreshes_expired_token() {
     use crate::token_store::{TokenEntry, save_tokens};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokens.json");
@@ -184,22 +157,8 @@ async fn check_and_refresh_all_refreshes_expired_token() {
     )
     .unwrap();
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await;
-        let body = r#"{"client_jwt":"refreshed-jwt"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body,
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let body = r#"{"client_jwt":"refreshed-jwt"}"#;
+    let addr = spawn_single_response_server(json_response("HTTP/1.1 200 OK", body)).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -218,8 +177,6 @@ async fn check_and_refresh_all_refreshes_expired_token() {
 #[tokio::test]
 async fn check_and_refresh_all_reports_re_pairing_needed() {
     use crate::token_store::{TokenEntry, save_tokens};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokens.json");
@@ -235,17 +192,7 @@ async fn check_and_refresh_all_reports_re_pairing_needed() {
     )
     .unwrap();
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 401 Unauthorized\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let addr = spawn_response_sequence(vec![empty_response("HTTP/1.1 401 Unauthorized")]).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))

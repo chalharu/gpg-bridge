@@ -1,4 +1,8 @@
 use super::*;
+use crate::test_http_server::{
+    empty_response, json_response, spawn_response_sequence, spawn_single_response_server,
+    sse_response,
+};
 
 #[test]
 fn display_qr_produces_qr_output() {
@@ -28,23 +32,8 @@ async fn fetch_pairing_token_handles_connection_error() {
 
 #[tokio::test]
 async fn fetch_pairing_token_parses_response() {
-    use tokio::io::AsyncWriteExt;
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let body = r#"{"pairing_token":"tok-abc","expires_in":300}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body,
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let body = r#"{"pairing_token":"tok-abc","expires_in":300}"#;
+    let addr = spawn_single_response_server(json_response("HTTP/1.1 200 OK", body)).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -59,20 +48,8 @@ async fn fetch_pairing_token_parses_response() {
 
 #[tokio::test]
 async fn fetch_pairing_token_returns_error_on_non_success() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 1024];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 500 Internal Server Error\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let addr =
+        spawn_single_response_server(empty_response("HTTP/1.1 500 Internal Server Error")).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -85,30 +62,12 @@ async fn fetch_pairing_token_returns_error_on_non_success() {
 
 #[tokio::test]
 async fn wait_for_paired_event_extracts_token() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let sse_body = concat!(
-            "event: heartbeat\ndata: \n\n",
-            "event: paired\n",
-            "data: {\"client_jwt\":\"jwt-xyz\",\"client_id\":\"cid-123\"}\n\n",
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/event-stream\r\n\
-             Cache-Control: no-cache\r\n\
-             Connection: close\r\n\r\n\
-             {sse_body}"
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let sse_body = concat!(
+        "event: heartbeat\ndata: \n\n",
+        "event: paired\n",
+        "data: {\"client_jwt\":\"jwt-xyz\",\"client_id\":\"cid-123\"}\n\n",
+    );
+    let addr = spawn_single_response_server(sse_response(sse_body)).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -123,20 +82,7 @@ async fn wait_for_paired_event_extracts_token() {
 
 #[tokio::test]
 async fn wait_for_paired_event_aborts_on_401() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 401 Unauthorized\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let addr = spawn_single_response_server(empty_response("HTTP/1.1 401 Unauthorized")).await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -149,37 +95,13 @@ async fn wait_for_paired_event_aborts_on_401() {
 
 #[tokio::test]
 async fn wait_for_paired_event_retries_on_503_then_succeeds() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        // First connection: transient 503
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 503 Service Unavailable\r\n\
-                        Content-Length: 0\r\nConnection: close\r\n\r\n";
-        socket.write_all(response.as_bytes()).await.unwrap();
-        drop(socket);
-
-        // Second connection: success
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let sse_body = "event: paired\n\
-                        data: {\"client_jwt\":\"jwt-r\",\"client_id\":\"cid-r\"}\n\n";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/event-stream\r\n\
-             Cache-Control: no-cache\r\n\
-             Connection: close\r\n\r\n\
-             {sse_body}"
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let sse_body = "event: paired\n\
+                    data: {\"client_jwt\":\"jwt-r\",\"client_id\":\"cid-r\"}\n\n";
+    let addr = spawn_response_sequence(vec![
+        empty_response("HTTP/1.1 503 Service Unavailable"),
+        sse_response(sse_body),
+    ])
+    .await;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -204,42 +126,13 @@ fn display_pairing_complete_writes_warning() {
 
 #[tokio::test]
 async fn run_pairing_flow_end_to_end() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        // First connection: pairing-token
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let body = r#"{"pairing_token":"pt-1","expires_in":60}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body,
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-        drop(socket);
-
-        // Second connection: pairing-session SSE
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = socket.read(&mut buf).await;
-        let sse_body =
-            "event: paired\ndata: {\"client_jwt\":\"jwt-1\",\"client_id\":\"cid-1\"}\n\n";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/event-stream\r\n\
-             Cache-Control: no-cache\r\n\
-             Connection: close\r\n\r\n\
-             {sse_body}"
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
+    let pairing_body = r#"{"pairing_token":"pt-1","expires_in":60}"#;
+    let sse_body = "event: paired\ndata: {\"client_jwt\":\"jwt-1\",\"client_id\":\"cid-1\"}\n\n";
+    let addr = spawn_response_sequence(vec![
+        json_response("HTTP/1.1 200 OK", pairing_body),
+        sse_response(sse_body),
+    ])
+    .await;
 
     let dir = tempfile::tempdir().unwrap();
     let token_path = dir.path().join("tokens.json");
