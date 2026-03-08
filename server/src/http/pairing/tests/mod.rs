@@ -83,6 +83,25 @@ fn add_client_with_assertion_key(
     (priv_client, client_kid)
 }
 
+async fn pair_device_status_for_default_client(
+    repo: MockRepository,
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    pairing_id: &str,
+) -> StatusCode {
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
+    pair_device_status_for(
+        repo,
+        server_priv,
+        server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
+    )
+    .await
+}
+
 fn add_pairing(repo: &MockRepository, pairing_id: &str, expired: &str, client_id: Option<&str>) {
     repo.pairings.lock().unwrap().push(PairingRow {
         pairing_id: pairing_id.to_owned(),

@@ -8,8 +8,26 @@ use crate::test_support::{MockRepository, TEST_SECRET};
 
 use super::{
     add_client_with_assertion_key, add_unconsumed_pairing, build_test_app,
-    make_device_assertion_token, make_pairing_repo, pair_device_status_for, response_status,
+    make_device_assertion_token, make_pairing_repo, pair_device_status_for_default_client,
+    response_status,
 };
+
+fn make_server_signing_key_row(
+    private_key: String,
+    public_key: String,
+    server_kid: &str,
+    created_at: &str,
+    expires_at: &str,
+) -> SigningKeyRow {
+    SigningKeyRow {
+        kid: server_kid.to_owned(),
+        private_key,
+        public_key,
+        created_at: created_at.into(),
+        expires_at: expires_at.into(),
+        is_active: true,
+    }
+}
 
 // ===========================================================================
 // pair.rs – additional error path tests
@@ -43,27 +61,17 @@ async fn pair_device_corrupt_public_key_returns_500() {
     let (priv_server, _pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let private_json = jwk_to_json(&priv_server).unwrap();
     let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    let bad_sk = SigningKeyRow {
-        kid: server_kid.clone(),
-        private_key: encrypted,
-        public_key: "not-a-valid-jwk".into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        expires_at: "2027-01-01T00:00:00Z".into(),
-        is_active: true,
-    };
+    let bad_sk = make_server_signing_key_row(
+        encrypted,
+        "not-a-valid-jwk".into(),
+        &server_kid,
+        "2026-01-01T00:00:00Z",
+        "2027-01-01T00:00:00Z",
+    );
 
     let repo = MockRepository::new(bad_sk);
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        "pair-test",
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -71,21 +79,12 @@ async fn pair_device_corrupt_public_key_returns_500() {
 #[tokio::test]
 async fn pair_device_invalid_expired_format_returns_500() {
     let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-bad-ts";
     super::add_pairing(&repo, pairing_id, "not-a-valid-timestamp", None);
 
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        pairing_id,
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -93,22 +92,13 @@ async fn pair_device_invalid_expired_format_returns_500() {
 #[tokio::test]
 async fn pair_device_consume_db_error_returns_500() {
     let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-consume-err";
     add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("consume_pairing");
 
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        pairing_id,
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -116,22 +106,13 @@ async fn pair_device_consume_db_error_returns_500() {
 #[tokio::test]
 async fn pair_device_create_link_db_error_returns_500() {
     let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-link-err";
     add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("create_client_pairing");
 
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        pairing_id,
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, pairing_id).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -141,27 +122,17 @@ async fn pair_device_expired_signing_key_returns_401() {
     let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let private_json = jwk_to_json(&priv_server).unwrap();
     let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    let expired_sk = SigningKeyRow {
-        kid: server_kid.clone(),
-        private_key: encrypted,
-        public_key: jwk_to_json(&pub_server).unwrap(),
-        created_at: "2020-01-01T00:00:00Z".into(),
-        expires_at: "2020-06-01T00:00:00Z".into(),
-        is_active: true,
-    };
+    let expired_sk = make_server_signing_key_row(
+        encrypted,
+        jwk_to_json(&pub_server).unwrap(),
+        &server_kid,
+        "2020-01-01T00:00:00Z",
+        "2020-06-01T00:00:00Z",
+    );
 
     let repo = MockRepository::new(expired_sk);
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        "pair-test",
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
@@ -169,19 +140,10 @@ async fn pair_device_expired_signing_key_returns_401() {
 #[tokio::test]
 async fn pair_device_signing_key_db_error_returns_500() {
     let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     repo.force_error("get_signing_key_by_kid");
 
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        "pair-test",
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -189,19 +151,10 @@ async fn pair_device_signing_key_db_error_returns_500() {
 #[tokio::test]
 async fn pair_device_get_pairing_db_error_returns_500() {
     let (priv_server, _pub_server, server_kid, repo) = make_pairing_repo();
-    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     repo.force_error("get_pairing_by_id");
 
-    let status = pair_device_status_for(
-        repo,
-        &priv_server,
-        &server_kid,
-        "pair-test",
-        &priv_client,
-        &client_kid,
-        "fid-1",
-    )
-    .await;
+    let status =
+        pair_device_status_for_default_client(repo, &priv_server, &server_kid, "pair-test").await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
