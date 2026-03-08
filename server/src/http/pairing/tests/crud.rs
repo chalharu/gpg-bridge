@@ -10,7 +10,7 @@ use super::{
     add_client_pairing, add_client_with_assertion_key, add_pairing, build_app, build_test_app,
     delete_pairing_by_daemon_request_for, delete_pairing_by_phone_request,
     get_pairing_token_request, make_device_assertion_token, make_pairing_repo, make_pairing_token,
-    pair_device_request, refresh_pairing_request_for,
+    pair_device_request, pair_device_status_for, refresh_pairing_request_for,
 };
 
 // ===========================================================================
@@ -87,22 +87,20 @@ async fn pair_device_expired_pairing_returns_410() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-expired";
-    let past_expired = "2020-01-01T00:00:00+00:00";
+    add_pairing(&repo, pairing_id, "2020-01-01T00:00:00+00:00", None);
 
-    add_pairing(&repo, pairing_id, past_expired, None);
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
+    )
+    .await;
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
-
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let response = app
-        .oneshot(pair_device_request(&pairing_token, &device_assertion))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::GONE);
+    assert_eq!(status, StatusCode::GONE);
 }
 
 #[tokio::test]
@@ -111,22 +109,25 @@ async fn pair_device_already_consumed_returns_409() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-consumed";
-    let future_expired = "2099-01-01T00:00:00+00:00";
+    add_pairing(
+        &repo,
+        pairing_id,
+        "2099-01-01T00:00:00+00:00",
+        Some("other-client"),
+    );
 
-    add_pairing(&repo, pairing_id, future_expired, Some("other-client"));
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
+    )
+    .await;
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
-
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, pairing_id);
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
-    let response = app
-        .oneshot(pair_device_request(&pairing_token, &device_assertion))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 
 // ===========================================================================

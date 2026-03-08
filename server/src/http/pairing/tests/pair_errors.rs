@@ -3,12 +3,12 @@ use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 
 use crate::jwt::{encrypt_private_key, generate_signing_key_pair, jwk_to_json};
-use crate::repository::{PairingRow, SigningKeyRow};
+use crate::repository::SigningKeyRow;
 use crate::test_support::{MockRepository, TEST_SECRET};
 
 use super::{
-    add_client_with_assertion_key, build_test_app, make_device_assertion_token, make_pairing_repo,
-    pair_device_request_for, response_status,
+    add_client_with_assertion_key, add_unconsumed_pairing, build_test_app,
+    make_device_assertion_token, make_pairing_repo, pair_device_status_for, response_status,
 };
 
 // ===========================================================================
@@ -54,16 +54,14 @@ async fn pair_device_corrupt_public_key_returns_500() {
 
     let repo = MockRepository::new(bad_sk);
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            "pair-test",
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        "pair-test",
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -76,22 +74,16 @@ async fn pair_device_invalid_expired_format_returns_500() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-bad-ts";
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: "not-a-valid-timestamp".to_owned(),
-        client_id: None,
-    });
+    super::add_pairing(&repo, pairing_id, "not-a-valid-timestamp", None);
 
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            pairing_id,
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -104,23 +96,17 @@ async fn pair_device_consume_db_error_returns_500() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-consume-err";
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: "2099-01-01T00:00:00+00:00".to_owned(),
-        client_id: None,
-    });
+    add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("consume_pairing");
 
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            pairing_id,
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -133,23 +119,17 @@ async fn pair_device_create_link_db_error_returns_500() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
     let pairing_id = "pair-link-err";
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: pairing_id.to_owned(),
-        expired: "2099-01-01T00:00:00+00:00".to_owned(),
-        client_id: None,
-    });
+    add_unconsumed_pairing(&repo, pairing_id);
     repo.force_error("create_client_pairing");
 
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            pairing_id,
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        pairing_id,
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -172,16 +152,14 @@ async fn pair_device_expired_signing_key_returns_401() {
 
     let repo = MockRepository::new(expired_sk);
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            "pair-test",
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        "pair-test",
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -194,16 +172,14 @@ async fn pair_device_signing_key_db_error_returns_500() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     repo.force_error("get_signing_key_by_kid");
 
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            "pair-test",
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        "pair-test",
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 
@@ -216,16 +192,14 @@ async fn pair_device_get_pairing_db_error_returns_500() {
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     repo.force_error("get_pairing_by_id");
 
-    let status = response_status(
-        build_test_app(repo),
-        pair_device_request_for(
-            &priv_server,
-            &server_kid,
-            "pair-test",
-            &priv_client,
-            &client_kid,
-            "fid-1",
-        ),
+    let status = pair_device_status_for(
+        repo,
+        &priv_server,
+        &server_kid,
+        "pair-test",
+        &priv_client,
+        &client_kid,
+        "fid-1",
     )
     .await;
 

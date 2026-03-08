@@ -90,6 +90,10 @@ fn add_pairing(repo: &MockRepository, pairing_id: &str, expired: &str, client_id
     });
 }
 
+fn add_unconsumed_pairing(repo: &MockRepository, pairing_id: &str) {
+    add_pairing(repo, pairing_id, "2099-01-01T00:00:00+00:00", None);
+}
+
 fn add_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) {
     repo.client_pairings_data
         .lock()
@@ -126,6 +130,29 @@ fn pair_device_request_for(
     let device_assertion =
         make_device_assertion_token(client_priv, client_kid, client_id, "/pairing");
     pair_device_request(&pairing_token, &device_assertion)
+}
+
+async fn pair_device_status_for(
+    repo: MockRepository,
+    server_priv: &josekit::jwk::Jwk,
+    server_kid: &str,
+    pairing_id: &str,
+    client_priv: &josekit::jwk::Jwk,
+    client_kid: &str,
+    client_id: &str,
+) -> StatusCode {
+    response_status(
+        build_test_app(repo),
+        pair_device_request_for(
+            server_priv,
+            server_kid,
+            pairing_id,
+            client_priv,
+            client_kid,
+            client_id,
+        ),
+    )
+    .await
 }
 
 #[allow(dead_code)]
