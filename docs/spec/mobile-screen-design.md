@@ -8,81 +8,175 @@ updated: 2026-03-09
 
 ## Visual Overview
 
-<svg viewBox="0 0 1040 740" width="100%" role="img" aria-label="Mobile app screen overview">
-  <style>
-    .bg { fill: #f8fafc; }
-    .shell { fill: #e0f2fe; stroke: #0369a1; stroke-width: 2; }
-    .screen { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
-    .modal { fill: #fef3c7; stroke: #b45309; stroke-width: 1.5; }
-    .accent { fill: #dcfce7; stroke: #166534; stroke-width: 1.5; }
-    .arrow { stroke: #475569; stroke-width: 2; fill: none; marker-end: url(#arrow); }
-    .label { font: 15px sans-serif; fill: #0f172a; font-weight: 600; }
-    .small { font: 12px sans-serif; fill: #334155; }
-  </style>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
-    </marker>
-  </defs>
-  <rect class="bg" x="0" y="0" width="1040" height="740" rx="24" />
+以下は、現在の Flutter 実装に合わせた HTML ベースの画面モックです。Markdown ビューアで SVG が無効でも見えるよう、単純な table / div / inline style のみで構成しています。
 
-  <rect class="accent" x="70" y="70" width="220" height="92" rx="16" />
-  <text class="label" x="100" y="105">Register</text>
-  <text class="small" x="100" y="130">/register</text>
-  <text class="small" x="100" y="148">初回端末登録</text>
+<table>
+  <tr>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#f8fafc; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">Register /register</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">Register</div>
+          <div style="padding:24px 16px; text-align:center;">
+            <div style="margin:56px 0 18px 0; font-size:13px; color:#334155;">未登録端末の初期到達先</div>
+            <div style="display:inline-block; padding:12px 18px; border-radius:999px; background:#2563eb; color:#ffffff; font-weight:700;">Complete registration</div>
+            <div style="margin-top:18px; padding:10px; border:1px dashed #94a3b8; border-radius:12px; font-size:12px; color:#475569;">成功後に token refresh listener 開始</div>
+          </div>
+        </div>
+      </div>
+    </td>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#eff6ff; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">MainShell / Home</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">ホーム</div>
+          <div style="padding:16px; text-align:center; min-height:292px;">
+            <div style="margin:44px 0 16px 0; padding:12px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px; color:#334155;">初回表示時に JWT / FCM token 更新確認</div>
+            <div style="display:inline-block; padding:12px 20px; border-radius:999px; background:#dc2626; color:#ffffff; font-weight:700;">Reset registration</div>
+          </div>
+          <table style="width:100%; border-top:1px solid #cbd5e1; border-collapse:collapse; font-size:11px; text-align:center;">
+            <tr>
+              <td style="padding:10px 4px; background:#dbeafe; font-weight:700;">Home</td>
+              <td style="padding:10px 4px;">Keys</td>
+              <td style="padding:10px 4px;">Pairing</td>
+              <td style="padding:10px 4px;">Settings</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </td>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#eff6ff; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">Keys /keys</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">鍵管理</div>
+          <table style="width:100%; border-bottom:1px solid #cbd5e1; border-collapse:collapse; font-size:12px; text-align:center;">
+            <tr>
+              <td style="padding:10px 4px; background:#dbeafe; font-weight:700;">E2E公開鍵</td>
+              <td style="padding:10px 4px;">GPG鍵</td>
+            </tr>
+          </table>
+          <div style="padding:12px; min-height:260px; position:relative;">
+            <div style="padding:10px 12px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px;">★ 認証用 ES256<br />kid: abcd1234…</div>
+            <div style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px;">鍵カード一覧 / pull-to-refresh / 削除</div>
+            <div style="position:absolute; right:14px; bottom:14px; width:44px; height:44px; line-height:44px; border-radius:50%; background:#2563eb; color:#ffffff; text-align:center; font-size:28px; font-weight:700;">+</div>
+          </div>
+          <table style="width:100%; border-top:1px solid #cbd5e1; border-collapse:collapse; font-size:11px; text-align:center;">
+            <tr>
+              <td style="padding:10px 4px;">Home</td>
+              <td style="padding:10px 4px; background:#dbeafe; font-weight:700;">Keys</td>
+              <td style="padding:10px 4px;">Pairing</td>
+              <td style="padding:10px 4px;">Settings</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </td>
+  </tr>
+</table>
 
-  <rect class="shell" x="385" y="52" width="560" height="560" rx="24" />
-  <text class="label" x="410" y="86">MainShell</text>
-  <text class="small" x="410" y="108">下部ナビゲーション: Home / Keys / Pairing / Settings</text>
+<p><strong>Flow:</strong> Register 完了後に MainShell へ遷移し、Home / Keys / Pairing / Settings を下部ナビゲーションで切り替える。</p>
 
-  <rect class="screen" x="420" y="135" width="220" height="110" rx="14" />
-  <text class="label" x="448" y="170">Home</text>
-  <text class="small" x="448" y="194">/</text>
-  <text class="small" x="448" y="214">登録解除導線</text>
+<table>
+  <tr>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#eff6ff; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">Pairing /pairing</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">ペアリング</div>
+          <div style="padding:12px; min-height:304px; position:relative;">
+            <div style="padding:10px 12px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px;">client-a<br />ID: pair-001<br />ペアリング日時: 2026/03/09 10:30</div>
+            <div style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px;">各行で解除確認ダイアログと削除実行</div>
+            <div style="position:absolute; right:14px; bottom:14px; width:48px; height:48px; line-height:48px; border-radius:50%; background:#2563eb; color:#ffffff; text-align:center; font-size:20px; font-weight:700;">QR</div>
+          </div>
+          <table style="width:100%; border-top:1px solid #cbd5e1; border-collapse:collapse; font-size:11px; text-align:center;">
+            <tr>
+              <td style="padding:10px 4px;">Home</td>
+              <td style="padding:10px 4px;">Keys</td>
+              <td style="padding:10px 4px; background:#dbeafe; font-weight:700;">Pairing</td>
+              <td style="padding:10px 4px;">Settings</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </td>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#fff7ed; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">QR Scan /pairing/scan</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">QRコードスキャン</div>
+          <div style="padding:14px; text-align:center;">
+            <div style="margin:12px auto 18px auto; width:158px; height:158px; border:2px solid #0f172a; border-radius:16px; background:#f8fafc; line-height:158px; font-size:12px; color:#475569;">camera scan area</div>
+            <div style="padding:10px 12px; border:1px dashed #94a3b8; border-radius:12px; font-size:12px; color:#334155;">JWT 形式を検証し、成功で前画面へ戻る</div>
+            <div style="margin-top:12px; font-size:12px; color:#475569;">無効な値は SnackBar 表示</div>
+          </div>
+        </div>
+      </div>
+    </td>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#eff6ff; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">Settings /settings</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:390px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">設定</div>
+          <div style="padding:16px; min-height:292px;">
+            <div style="font-size:13px; font-weight:700; margin-bottom:10px;">テーマ</div>
+            <div style="padding:10px 12px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px;">◉ システム設定に従う</div>
+            <div style="padding:10px 12px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:12px; font-size:12px;">○ ライト</div>
+            <div style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:12px; font-size:12px;">○ ダーク</div>
+          </div>
+          <table style="width:100%; border-top:1px solid #cbd5e1; border-collapse:collapse; font-size:11px; text-align:center;">
+            <tr>
+              <td style="padding:10px 4px;">Home</td>
+              <td style="padding:10px 4px;">Keys</td>
+              <td style="padding:10px 4px;">Pairing</td>
+              <td style="padding:10px 4px; background:#dbeafe; font-weight:700;">Settings</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </td>
+  </tr>
+</table>
 
-  <rect class="screen" x="690" y="135" width="220" height="150" rx="14" />
-  <text class="label" x="718" y="170">Keys</text>
-  <text class="small" x="718" y="194">/keys</text>
-  <text class="small" x="718" y="214">E2E 公開鍵タブ</text>
-  <text class="small" x="718" y="232">GPG 鍵タブ</text>
-  <text class="small" x="718" y="250">GPG 鍵インポート画面へ遷移</text>
+<p><strong>Pairing branch:</strong> Pairing 一覧から QR スキャンへ push 遷移し、結果は SnackBar と前画面復帰で返す。</p>
 
-  <rect class="screen" x="420" y="325" width="220" height="125" rx="14" />
-  <text class="label" x="448" y="360">Pairing</text>
-  <text class="small" x="448" y="384">/pairing</text>
-  <text class="small" x="448" y="404">一覧 / 削除 / QR スキャン起点</text>
+<table>
+  <tr>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#fff7ed; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">GPG Key Import Navigator.push</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:430px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">GPG鍵インポート</div>
+          <div style="padding:14px;">
+            <div style="padding:10px 12px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px; min-height:92px;">-----BEGIN PGP PUBLIC KEY BLOCK-----<br />...</div>
+            <div style="display:inline-block; padding:10px 16px; border-radius:999px; background:#2563eb; color:#ffffff; font-size:12px; font-weight:700;">解析</div>
+            <div style="margin-top:12px; padding:10px 12px; border:1px solid #cbd5e1; border-radius:12px; font-size:12px;">☑ Ed25519 (主キー)<br />Key ID / Keygrip / 秘密鍵あり</div>
+            <div style="margin-top:10px; display:inline-block; padding:10px 16px; border-radius:999px; background:#0f766e; color:#ffffff; font-size:12px; font-weight:700;">インポート (1件)</div>
+          </div>
+        </div>
+      </div>
+    </td>
+    <td style="vertical-align:top;">
+      <div style="width:220px; border:1px solid #475569; border-radius:24px; padding:10px; background:#fff7ed; color:#0f172a;">
+        <div style="font-size:11px; text-align:center; padding-bottom:8px; color:#475569;">Sign Request /sign-request/:requestId</div>
+        <div style="border:1px solid #cbd5e1; border-radius:16px; background:#ffffff; overflow:hidden; min-height:430px;">
+          <div style="padding:12px 14px; background:#e2e8f0; font-weight:700;">署名要求</div>
+          <div style="padding:14px;">
+            <div style="padding:10px 12px; margin-bottom:12px; border:1px solid #fdba74; border-radius:12px; background:#ffedd5; font-size:12px; font-weight:700;">残り時間 00:52</div>
+            <div style="padding:12px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:12px; min-height:150px;">hash / algorithm / key ID を表示する詳細カード</div>
+            <div style="margin-top:18px;">
+              <div style="padding:10px 12px; margin-bottom:8px; border-radius:999px; background:#15803d; color:#ffffff; text-align:center; font-size:12px; font-weight:700;">承認</div>
+              <div style="padding:10px 12px; margin-bottom:8px; border-radius:999px; background:#b91c1c; color:#ffffff; text-align:center; font-size:12px; font-weight:700;">拒否</div>
+              <div style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:999px; text-align:center; font-size:12px; font-weight:700;">無視</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </td>
+  </tr>
+</table>
 
-  <rect class="screen" x="690" y="325" width="220" height="110" rx="14" />
-  <text class="label" x="718" y="360">Settings</text>
-  <text class="small" x="718" y="384">/settings</text>
-  <text class="small" x="718" y="404">テーマ切替</text>
-
-  <rect class="modal" x="720" y="482" width="190" height="92" rx="14" />
-  <text class="label" x="742" y="517">GPG Key Import</text>
-  <text class="small" x="742" y="541">Navigator.push</text>
-  <text class="small" x="742" y="559">貼り付け解析と取込</text>
-
-  <rect class="modal" x="115" y="286" width="220" height="104" rx="14" />
-  <text class="label" x="145" y="321">QR Scan</text>
-  <text class="small" x="145" y="345">/pairing/scan</text>
-  <text class="small" x="145" y="363">JWT QR を読み取りペアリング</text>
-
-  <rect class="modal" x="70" y="505" width="265" height="116" rx="14" />
-  <text class="label" x="100" y="540">Sign Request</text>
-  <text class="small" x="100" y="564">/sign-request/:requestId</text>
-  <text class="small" x="100" y="582">FCM 受信で push 表示</text>
-  <text class="small" x="100" y="600">承認 / 拒否 / 無視 / 期限切れ</text>
-
-  <path class="arrow" d="M290 116 L385 116" />
-  <path class="arrow" d="M530 245 L530 325" />
-  <path class="arrow" d="M800 285 L800 482" />
-  <path class="arrow" d="M420 385 L335 338" />
-  <path class="arrow" d="M205 390 L205 505" />
-  <path class="arrow" d="M182 162 L182 286" />
-  <text class="small" x="305" y="106">登録完了</text>
-  <text class="small" x="826" y="468">GPG タブから遷移</text>
-  <text class="small" x="236" y="432">FCM / 直前画面へ戻る</text>
-</svg>
+<p><strong>Overlay screens:</strong> Keys の GPG タブから GPG鍵インポートを開き、FCM 受信時には署名要求画面を一時的に push 表示する。</p>
 
 ## Navigation Structure
 
