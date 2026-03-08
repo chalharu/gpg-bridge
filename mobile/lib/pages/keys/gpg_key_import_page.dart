@@ -100,6 +100,7 @@ class _GpgKeyImportPageState extends ConsumerState<GpgKeyImportPage> {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
+    final importAction = _selectedIndices.isEmpty ? null : _import;
 
     return Scaffold(
       appBar: AppBar(title: const Text('GPG鍵インポート')),
@@ -142,7 +143,7 @@ class _GpgKeyImportPageState extends ConsumerState<GpgKeyImportPage> {
                     ..._buildKeyList(),
                     const SizedBox(height: 16),
                     FilledButton.icon(
-                      onPressed: _selectedIndices.isEmpty ? null : _import,
+                      onPressed: importAction,
                       icon: const Icon(Icons.file_download),
                       label: Text('インポート (${_selectedIndices.length}件)'),
                     ),
