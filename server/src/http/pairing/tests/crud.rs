@@ -1,18 +1,16 @@
-use axum::body::{self, Body};
-use axum::http::{Request, StatusCode, header};
-use serde_json::json;
+use axum::body;
+use axum::http::StatusCode;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
 use crate::repository::ClientPairingRow;
-use crate::test_support::{
-    MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
-};
+use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
 
 use super::{
-    add_client_pairing, add_client_with_assertion_key, add_pairing, build_app,
-    delete_pairing_by_phone_request, get_pairing_token_request, make_device_assertion_token,
-    make_pairing_repo, make_pairing_token, pair_device_request,
+    add_client_pairing, add_client_with_assertion_key, add_pairing, build_app, build_test_app,
+    delete_pairing_by_daemon_request_for, delete_pairing_by_phone_request,
+    get_pairing_token_request, make_device_assertion_token, make_pairing_repo, make_pairing_token,
+    pair_device_request, refresh_pairing_request_for,
 };
 
 // ===========================================================================
@@ -200,25 +198,16 @@ async fn delete_by_daemon_returns_204() {
             client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
         });
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
-
-    let client_jwt = make_client_jwt(
-        &priv_server,
-        &pub_server,
-        &server_kid,
-        "fid-1",
-        "pair-daemon-del",
-    );
-    let body_json = json!({ "client_jwt": client_jwt });
+    let app = build_test_app(repo);
 
     let response = app
-        .oneshot(
-            Request::delete("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_daemon_request_for(
+            &priv_server,
+            &pub_server,
+            &server_kid,
+            "fid-1",
+            "pair-daemon-del",
+        ))
         .await
         .unwrap();
 
@@ -244,25 +233,16 @@ async fn refresh_returns_200_with_new_jwt() {
             client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
         });
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
-
-    let client_jwt = make_client_jwt(
-        &priv_server,
-        &pub_server,
-        &server_kid,
-        "fid-1",
-        "pair-refresh",
-    );
-    let body_json = json!({ "client_jwt": client_jwt });
+    let app = build_test_app(repo);
 
     let response = app
-        .oneshot(
-            Request::post("/pairing/refresh")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(refresh_pairing_request_for(
+            &priv_server,
+            &pub_server,
+            &server_kid,
+            "fid-1",
+            "pair-refresh",
+        ))
         .await
         .unwrap();
 
@@ -282,25 +262,16 @@ async fn refresh_pairing_not_found_returns_404() {
     let repo = MockRepository::new(sk);
     // No client_pairings → not found after JWT verification
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
-
-    let client_jwt = make_client_jwt(
-        &priv_server,
-        &pub_server,
-        &server_kid,
-        "fid-1",
-        "pair-missing",
-    );
-    let body_json = json!({ "client_jwt": client_jwt });
+    let app = build_test_app(repo);
 
     let response = app
-        .oneshot(
-            Request::post("/pairing/refresh")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(refresh_pairing_request_for(
+            &priv_server,
+            &pub_server,
+            &server_kid,
+            "fid-1",
+            "pair-missing",
+        ))
         .await
         .unwrap();
 
