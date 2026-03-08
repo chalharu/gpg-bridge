@@ -9,21 +9,18 @@ mixin AsyncKeyTabState<T, W extends ConsumerStatefulWidget>
 
   @protected
   Future<void> loadData(Future<T> Function() loader) async {
-    if (mounted) {
-      setState(() {
-        isLoading = true;
-        errorMessage = null;
-      });
-    } else {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
       isLoading = true;
       errorMessage = null;
-    }
+    });
 
     try {
       final result = await loader();
       if (!mounted) {
-        data = result;
-        isLoading = false;
         return;
       }
       setState(() {
@@ -32,8 +29,6 @@ mixin AsyncKeyTabState<T, W extends ConsumerStatefulWidget>
       });
     } catch (error) {
       if (!mounted) {
-        errorMessage = error.toString();
-        isLoading = false;
         return;
       }
       setState(() {

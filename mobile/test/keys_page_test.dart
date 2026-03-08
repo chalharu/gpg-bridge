@@ -36,9 +36,12 @@ class _MockKeyManagementService implements KeyManagementService {
   int addE2eKeyPairCallCount = 0;
   int deletePublicKeyCallCount = 0;
   int deleteGpgKeyCallCount = 0;
+  int listPublicKeysCallCount = 0;
+  int listGpgKeysCallCount = 0;
 
   @override
   Future<PublicKeyListResponse> listPublicKeys() {
+    listPublicKeysCallCount += 1;
     if (listPublicKeysHandler != null) return listPublicKeysHandler!();
     if (publicKeyCompleter != null) return publicKeyCompleter!.future;
     return Future.value(PublicKeyListResponse(keys: [], defaultKid: 'none'));
@@ -46,6 +49,7 @@ class _MockKeyManagementService implements KeyManagementService {
 
   @override
   Future<GpgKeyListResponse> listGpgKeys() {
+    listGpgKeysCallCount += 1;
     if (listGpgKeysHandler != null) return listGpgKeysHandler!();
     if (gpgKeyCompleter != null) return gpgKeyCompleter!.future;
     return Future.value(GpgKeyListResponse(gpgKeys: []));
@@ -306,6 +310,64 @@ void main() {
       expect(find.text('鍵を削除しました'), findsOneWidget);
     });
 
+    testWidgets('E2E tab renders key details and fallback labels', (
+      WidgetTester tester,
+    ) async {
+      final mock = _MockKeyManagementService(
+        listPublicKeysHandler: () async {
+          return _publicKeysResponse(
+            keys: [
+              _publicKey(
+                kid: '44444444-4444-4444-4444-444444444444',
+                use: 'sig',
+                alg: 'ES256',
+              ),
+              {
+                'kid': '55555555-5555-5555-5555-555555555555',
+                'alg': 'RSA',
+                'kty': 'RSA',
+              },
+            ],
+          );
+        },
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+
+      expect(find.text('認証用  ES256'), findsOneWidget);
+      expect(find.text('不明  RSA'), findsOneWidget);
+      expect(find.text('kid: 44444444…'), findsOneWidget);
+      expect(find.text('kid: 55555555…'), findsOneWidget);
+      expect(find.byIcon(Icons.star), findsOneWidget);
+      expect(find.byIcon(Icons.key), findsOneWidget);
+    });
+
+    testWidgets('E2E tab shows snackbar and recovers after add failure', (
+      WidgetTester tester,
+    ) async {
+      final mock = _MockKeyManagementService(
+        addE2eKeyPairHandler: () async {
+          throw Exception('no entropy');
+        },
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+
+      final listCallsBeforeFailure = mock.listPublicKeysCallCount;
+
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(mock.addE2eKeyPairCallCount, 1);
+      expect(mock.listPublicKeysCallCount, listCallsBeforeFailure);
+      expect(find.textContaining('鍵ペアの生成に失敗しました:'), findsOneWidget);
+      expect(find.textContaining('no entropy'), findsOneWidget);
+      expect(find.text('登録されている公開鍵はありません'), findsOneWidget);
+    });
+
     testWidgets('GPG tab deletes a key after confirmation', (
       WidgetTester tester,
     ) async {
@@ -345,6 +407,111 @@ void main() {
       expect(mock.deleteGpgKeyCallCount, 1);
       expect(find.text('登録されているGPG鍵はありません'), findsOneWidget);
       expect(find.text('GPG鍵を削除しました'), findsOneWidget);
+    });
+
+    testWidgets('GPG tab retries after load failure', (
+      WidgetTester tester,
+    ) async {
+      var attempts = 0;
+      final mock = _MockKeyManagementService(
+        listGpgKeysHandler: () async {
+          attempts += 1;
+          if (attempts == 1) {
+            throw Exception('offline');
+          }
+          return _gpgKeysResponse(
+            keys: [
+              _gpgKey(
+                keygrip: '0123456789abcdef0123456789abcdef01234567',
+                keyId: 'FACEBEEF',
+              ),
+            ],
+          );
+        },
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('GPG鍵'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('読み込みに失敗しました'), findsOneWidget);
+      expect(find.textContaining('offline'), findsOneWidget);
+
+      await tester.tap(find.text('再試行'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Key ID: FACEBEEF'), findsOneWidget);
+      expect(attempts, 2);
+    });
+
+    testWidgets('GPG tab opens import page and reloads when returning', (
+      WidgetTester tester,
+    ) async {
+      final mock = _MockKeyManagementService(
+        listGpgKeysHandler: () async => _gpgKeysResponse(keys: const []),
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('GPG鍵'));
+      await tester.pumpAndSettle();
+
+      final listCallsBeforeNavigation = mock.listGpgKeysCallCount;
+      expect(listCallsBeforeNavigation, greaterThanOrEqualTo(1));
+
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+
+      expect(find.text('GPG鍵インポート'), findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(mock.listGpgKeysCallCount, greaterThan(listCallsBeforeNavigation));
+      expect(find.text('登録されているGPG鍵はありません'), findsOneWidget);
+    });
+
+    testWidgets('GPG tab shows snackbar and keeps list after delete failure', (
+      WidgetTester tester,
+    ) async {
+      final keygrip = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd';
+      final mock = _MockKeyManagementService(
+        listGpgKeysHandler: () async {
+          return _gpgKeysResponse(
+            keys: [_gpgKey(keygrip: keygrip, keyId: 'DEADBEEF')],
+          );
+        },
+        deleteGpgKeyHandler: (value) async {
+          throw Exception('permission denied');
+        },
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('GPG鍵'));
+      await tester.pumpAndSettle();
+
+      final listCallsBeforeFailure = mock.listGpgKeysCallCount;
+
+      expect(find.text('Key ID: DEADBEEF'), findsOneWidget);
+      expect(
+        find.text('Keygrip: ${keygrip.substring(0, 16)}…'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('削除'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(mock.deleteGpgKeyCallCount, 1);
+      expect(mock.listGpgKeysCallCount, listCallsBeforeFailure);
+      expect(find.text('Key ID: DEADBEEF'), findsOneWidget);
+      expect(find.textContaining('削除に失敗しました:'), findsOneWidget);
+      expect(find.textContaining('permission denied'), findsOneWidget);
     });
   });
 }
