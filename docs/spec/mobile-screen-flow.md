@@ -59,7 +59,7 @@ flowchart TD
 
 ## 注目フロー
 
-- 初回登録は `/register` で完了し、登録状態更新後はリダイレクトにより `/` へ遷移する。
+- 初回登録は `/register` で完了し、登録状態更新後はリダイレクトにより `/` へ遷移する。登録先サーバーは Register 画面で入力せず、`API_BASE_URL` の dart-define を `ApiConfig.baseUrl` として読み込んだ build-time config が `Dio` の base URL として使われる。
 - ホーム画面の `Reset registration` 実行後は登録情報が削除され、ルータの再評価で `/register` に戻る。
 - ペアリング画面からのみ `/pairing/scan` へ遷移でき、成功時は `pop` で一覧へ戻る。
 - 署名要求画面は通常の下部ナビゲーション遷移ではなく、FCM メッセージ受信時に `requestId` 付きで `push` される一時画面として扱われる。
@@ -71,3 +71,4 @@ flowchart TD
 - 署名要求画面への自動遷移は `FirebaseMessaging.onMessage` と `FirebaseMessaging.onMessageOpenedApp` に実装されている。
 - 現在の実装には `FirebaseMessaging.getInitialMessage()` によるコールドスタート時の復元導線は見当たらない。
 - `KeysPage` の 2 タブはルート分割ではなく、単一画面内のタブ切り替えとして実装されている。
+- Register 画面には接続先サーバーを指定する入力 UI はなく、`ApiConfig -> httpClientProvider -> deviceApiProvider -> DeviceRegistrationService` の経路で `API_BASE_URL` が `POST /device` の送信先に反映される。
