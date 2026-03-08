@@ -44,12 +44,16 @@ internal enum class KeystoreAlias {
 
 internal fun parseSupportedMethod(method: String): SupportedMethod? = supportedMethods[method]
 
-internal fun requireKnownAlias(alias: String): KeystoreAlias {
+internal fun parseKeystoreAlias(alias: String): KeystoreAlias {
 	return when (alias) {
 		DEVICE_KEY_ALIAS -> KeystoreAlias.DEVICE
 		E2E_KEY_ALIAS -> KeystoreAlias.E2E
 		else -> throw IllegalArgumentException("unsupported alias: $alias")
 	}
+}
+
+internal fun requireKnownAlias(alias: String) {
+	parseKeystoreAlias(alias)
 }
 
 internal fun requireSignAlias(alias: String) {
@@ -128,80 +132,25 @@ class KeystoreMethodCallHandler(
 	}
 }
 
-open class AndroidKeystoreOperations : KeystoreOperations {
+class AndroidKeystoreOperations : KeystoreOperations {
 	override fun generateKeyPair(alias: String) {
-		val keyAlias = requireKnownAlias(alias)
+		requireKnownAlias(alias)
 
-		if (containsAlias(alias)) {
+		val keyStore = getKeyStore()
+		if (keyStore.containsAlias(alias)) {
 			return
 		}
 
-		createKeyPair(alias, keyAlias == KeystoreAlias.DEVICE)
-	}
-
-	override fun sign(alias: String, dataBase64: String): String {
-		requireSignAlias(alias)
-		val privateKey = getPrivateKey(alias)
-		val data = decodeBase64(dataBase64)
-		val signatureBytes = signBytes(privateKey, data)
-
-		return encodeBase64(signatureBytes)
-	}
-
-	override fun verify(alias: String, dataBase64: String, signatureBase64: String): Boolean {
-		requireSignAlias(alias)
-		val publicKey = getEcPublicKey(alias)
-		val data = decodeBase64(dataBase64)
-		val signature = decodeBase64(signatureBase64)
-
-		return verifyBytes(publicKey, data, signature)
-	}
-
-	override fun getPublicKeyJwk(alias: String): Map<String, String> {
-		val keyAlias = requireKnownAlias(alias)
-		val publicKey = getEcPublicKey(alias)
-		val affineX = toUnsignedFixedLength(publicKey.w.affineX, 32)
-		val affineY = toUnsignedFixedLength(publicKey.w.affineY, 32)
-
-		return mapOf(
-			"kty" to "EC",
-			"use" to keyUse(keyAlias),
-			"crv" to "P-256",
-			"x" to encodeBase64Url(affineX),
-			"y" to encodeBase64Url(affineY),
-			"alg" to keyAlg(keyAlias),
-		)
-	}
-
-	private fun keyUse(alias: KeystoreAlias): String {
-		return when (alias) {
-			KeystoreAlias.DEVICE -> "sig"
-			KeystoreAlias.E2E -> "enc"
-		}
-	}
-
-	private fun keyAlg(alias: KeystoreAlias): String {
-		return when (alias) {
-			KeystoreAlias.DEVICE -> "ES256"
-			KeystoreAlias.E2E -> "ECDH-ES+A256KW"
-		}
-	}
-
-	protected open fun containsAlias(alias: String): Boolean {
-		return getKeyStore().containsAlias(alias)
-	}
-
-	protected open fun createKeyPair(alias: String, supportsSignAndVerify: Boolean) {
-		val purposes = if (supportsSignAndVerify) {
-			KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-		} else {
-			KeyProperties.PURPOSE_AGREE_KEY
+		val purposes = when (alias) {
+			DEVICE_KEY_ALIAS -> KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+			E2E_KEY_ALIAS -> KeyProperties.PURPOSE_AGREE_KEY
+			else -> throw IllegalArgumentException("unsupported alias: $alias")
 		}
 
 		val parameterSpec = KeyGenParameterSpec.Builder(alias, purposes)
 			.setAlgorithmParameterSpec(ECGenParameterSpec(CURVE_NAME))
 			.apply {
-				if (supportsSignAndVerify) {
+				if (alias == DEVICE_KEY_ALIAS) {
 					setDigests(KeyProperties.DIGEST_SHA256)
 				}
 			}
@@ -213,52 +162,95 @@ open class AndroidKeystoreOperations : KeystoreOperations {
 			.generateKeyPair()
 	}
 
-	protected open fun getKeyStore(): KeyStore {
-		return KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
-	}
+	override fun sign(alias: String, dataBase64: String): String {
+		requireSignAlias(alias)
+		val privateKey = getPrivateKey(alias)
+		val data = decodeBase64(dataBase64)
 
-	protected open fun getPrivateKey(alias: String): java.security.PrivateKey {
-		val key = getKeyStore().getKey(alias, null)
-			?: throw IllegalArgumentException("key alias not found: $alias")
-		return key as? java.security.PrivateKey
-			?: throw IllegalArgumentException("private key is not available for alias: $alias")
-	}
-
-	protected open fun getEcPublicKey(alias: String): ECPublicKey {
-		val certificate = getKeyStore().getCertificate(alias)
-			?: throw IllegalArgumentException("certificate not found for alias: $alias")
-		return certificate.publicKey as? ECPublicKey
-			?: throw IllegalArgumentException("public key is not EC for alias: $alias")
-	}
-
-	protected open fun decodeBase64(value: String): ByteArray {
-		return Base64.decode(value, Base64.DEFAULT)
-	}
-
-	protected open fun encodeBase64(value: ByteArray): String {
-		return Base64.encodeToString(value, Base64.NO_WRAP)
-	}
-
-	protected open fun encodeBase64Url(value: ByteArray): String {
-		return Base64.encodeToString(value, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-	}
-
-	protected open fun signBytes(privateKey: java.security.PrivateKey, data: ByteArray): ByteArray {
-		return Signature.getInstance(SIGNATURE_ALGORITHM)
+		val signatureBytes = Signature.getInstance(SIGNATURE_ALGORITHM)
 			.apply {
 				initSign(privateKey)
 				update(data)
 			}
 			.sign()
+
+		return encodeBase64(signatureBytes)
 	}
 
-	protected open fun verifyBytes(publicKey: ECPublicKey, data: ByteArray, signature: ByteArray): Boolean {
+	override fun verify(alias: String, dataBase64: String, signatureBase64: String): Boolean {
+		requireSignAlias(alias)
+		val publicKey = getEcPublicKey(alias)
+		val data = decodeBase64(dataBase64)
+		val signature = decodeBase64(signatureBase64)
+
 		return Signature.getInstance(SIGNATURE_ALGORITHM)
 			.apply {
 				initVerify(publicKey)
 				update(data)
 			}
 			.verify(signature)
+	}
+
+	override fun getPublicKeyJwk(alias: String): Map<String, String> {
+		requireKnownAlias(alias)
+		val publicKey = getEcPublicKey(alias)
+		val affineX = toUnsignedFixedLength(publicKey.w.affineX, 32)
+		val affineY = toUnsignedFixedLength(publicKey.w.affineY, 32)
+
+		return mapOf(
+			"kty" to "EC",
+			"use" to keyUse(alias),
+			"crv" to "P-256",
+			"x" to encodeBase64Url(affineX),
+			"y" to encodeBase64Url(affineY),
+			"alg" to keyAlg(alias),
+		)
+	}
+
+	private fun keyUse(alias: String): String {
+		return when (alias) {
+			DEVICE_KEY_ALIAS -> "sig"
+			E2E_KEY_ALIAS -> "enc"
+			else -> throw IllegalArgumentException("unsupported alias for jwk: $alias")
+		}
+	}
+
+	private fun keyAlg(alias: String): String {
+		return when (alias) {
+			DEVICE_KEY_ALIAS -> "ES256"
+			E2E_KEY_ALIAS -> "ECDH-ES+A256KW"
+			else -> throw IllegalArgumentException("unsupported alias for jwk: $alias")
+		}
+	}
+
+	private fun getKeyStore(): KeyStore {
+		return KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+	}
+
+	private fun getPrivateKey(alias: String): java.security.PrivateKey {
+		val key = getKeyStore().getKey(alias, null)
+			?: throw IllegalArgumentException("key alias not found: $alias")
+		return key as? java.security.PrivateKey
+			?: throw IllegalArgumentException("private key is not available for alias: $alias")
+	}
+
+	private fun getEcPublicKey(alias: String): ECPublicKey {
+		val certificate = getKeyStore().getCertificate(alias)
+			?: throw IllegalArgumentException("certificate not found for alias: $alias")
+		return certificate.publicKey as? ECPublicKey
+			?: throw IllegalArgumentException("public key is not EC for alias: $alias")
+	}
+
+	private fun decodeBase64(value: String): ByteArray {
+		return Base64.decode(value, Base64.DEFAULT)
+	}
+
+	private fun encodeBase64(value: ByteArray): String {
+		return Base64.encodeToString(value, Base64.NO_WRAP)
+	}
+
+	private fun encodeBase64Url(value: ByteArray): String {
+		return Base64.encodeToString(value, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 	}
 
 	private fun toUnsignedFixedLength(value: BigInteger, length: Int): ByteArray {
@@ -274,6 +266,18 @@ open class AndroidKeystoreOperations : KeystoreOperations {
 
 		return ByteArray(length).also { out ->
 			System.arraycopy(raw, 0, out, length - raw.size, raw.size)
+		}
+	}
+
+	private fun requireKnownAlias(alias: String) {
+		if (alias != DEVICE_KEY_ALIAS && alias != E2E_KEY_ALIAS) {
+			throw IllegalArgumentException("unsupported alias: $alias")
+		}
+	}
+
+	private fun requireSignAlias(alias: String) {
+		if (alias != DEVICE_KEY_ALIAS) {
+			throw IllegalArgumentException("alias does not support sign/verify: $alias")
 		}
 	}
 }
