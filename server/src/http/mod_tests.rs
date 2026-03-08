@@ -1,5 +1,6 @@
 use super::*;
 use axum::{
+    Router,
     body::{self, Body},
     http::{Request, StatusCode, header::HeaderName},
     response::IntoResponse,
@@ -99,24 +100,29 @@ fn failing_mock() -> MockRepository {
     }
 }
 
-#[tokio::test]
-async fn router_rejects_unsupported_accept_with_406() {
-    let app = build_router(
+fn test_app() -> Router {
+    build_router(
         make_test_app_state(healthy_mock()),
         test_rate_limit_config(),
-    );
+    )
+}
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/vnd.gpg-bridge.v2+json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+async fn get_health_response(app: Router, accept_header: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .header(header::ACCEPT, accept_header)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn router_rejects_unsupported_accept_with_406() {
+    let response = get_health_response(test_app(), "application/vnd.gpg-bridge.v2+json").await;
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
     assert_eq!(
@@ -148,22 +154,7 @@ async fn router_rejects_unsupported_accept_with_406() {
 
 #[tokio::test]
 async fn router_accepts_v1_media_type_and_adds_security_headers() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, ACCEPT_VERSION_V1)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), ACCEPT_VERSION_V1).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -194,22 +185,7 @@ async fn router_accepts_v1_media_type_and_adds_security_headers() {
 
 #[tokio::test]
 async fn router_accepts_application_json_and_returns_versioned_content_type() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -220,22 +196,7 @@ async fn router_accepts_application_json_and_returns_versioned_content_type() {
 
 #[tokio::test]
 async fn router_accepts_mixed_case_media_type() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "Application/Vnd.Gpg-Sign.V1+Json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "Application/Vnd.Gpg-Sign.V1+Json").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -246,44 +207,14 @@ async fn router_accepts_mixed_case_media_type() {
 
 #[tokio::test]
 async fn router_rejects_accept_media_type_with_zero_quality() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json;q=0, text/plain")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json;q=0, text/plain").await;
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 }
 
 #[tokio::test]
 async fn router_accepts_application_wildcard() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/*")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/*").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -408,22 +339,7 @@ async fn router_cors_preflight_allows_patch_and_delete_methods() {
 
 #[tokio::test]
 async fn router_accepts_uppercase_q_parameter_name() {
-    let app = build_router(
-        make_test_app_state(healthy_mock()),
-        test_rate_limit_config(),
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/health")
-                .header(header::ACCEPT, "application/json;Q=0.8")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = get_health_response(test_app(), "application/json;Q=0.8").await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }
