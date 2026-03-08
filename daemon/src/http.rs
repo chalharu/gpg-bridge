@@ -217,5 +217,9 @@ pub(crate) async fn send_delete_with_retry(
 }
 
 #[cfg(test)]
+#[path = "test_http_server.rs"]
+mod test_http_server;
+
+#[cfg(test)]
 #[path = "http_tests.rs"]
 mod tests;

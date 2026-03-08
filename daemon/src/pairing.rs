@@ -203,5 +203,9 @@ pub(crate) async fn run_pairing_flow(
 }
 
 #[cfg(test)]
+#[path = "test_http_server.rs"]
+mod test_http_server;
+
+#[cfg(test)]
 #[path = "pairing_tests.rs"]
 mod tests;
