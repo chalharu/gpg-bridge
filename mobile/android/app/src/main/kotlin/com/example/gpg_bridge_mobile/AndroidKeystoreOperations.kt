@@ -2,7 +2,6 @@ package com.example.gpg_bridge_mobile
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
 import java.math.BigInteger
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -12,6 +11,7 @@ import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.AlgorithmParameterSpec
 import java.security.spec.ECGenParameterSpec
+import java.util.Base64
 
 internal data class KeystoreKeyGenRequest(
 	val alias: String,
@@ -48,30 +48,38 @@ internal interface Base64Codec {
 	fun encodeUrl(value: ByteArray): String
 }
 
-internal fun loadSystemKeyStore(provider: String = KEYSTORE_PROVIDER): KeyStore {
-	return KeyStore.getInstance(provider).apply { load(null) }
-}
+internal fun toUnsignedFixedLength(value: BigInteger, length: Int): ByteArray {
+	val raw = value.toByteArray().let { bytes ->
+		if (bytes.size > length && bytes.first() == 0.toByte()) {
+			bytes.copyOfRange(1, bytes.size)
+		} else {
+			bytes
+		}
+	}
 
-internal fun loadSystemKeyPairGenerator(
-	algorithm: String = KeyProperties.KEY_ALGORITHM_EC,
-	provider: String = KEYSTORE_PROVIDER,
-): KeyPairGenerator {
-	return KeyPairGenerator.getInstance(algorithm, provider)
-}
+	require(raw.size <= length) { "coordinate length overflow: ${raw.size}" }
 
-internal fun createSystemKeyGenParameterSpecBuilder(
-	alias: String,
-	purposes: Int,
-): KeyGenParameterSpecBuilderAccess {
-	return AndroidKeyGenParameterSpecBuilderAccess(KeyGenParameterSpec.Builder(alias, purposes))
+	return ByteArray(length).also { out ->
+		System.arraycopy(raw, 0, out, length - raw.size, raw.size)
+	}
 }
 
 internal class AndroidKeystoreDependencies(
-	val createSystemKeyStore: () -> KeyStore = ::loadSystemKeyStore,
-	val createSystemKeyPairGenerator: () -> KeyPairGenerator = ::loadSystemKeyPairGenerator,
+	private val keyStoreProvider: String = KEYSTORE_PROVIDER,
+	private val keyPairGeneratorAlgorithm: String = KeyProperties.KEY_ALGORITHM_EC,
+	private val keyPairGeneratorProvider: String = KEYSTORE_PROVIDER,
+	val createSystemKeyStore: () -> KeyStore = { loadSystemKeyStore(keyStoreProvider) },
+	val createSystemKeyPairGenerator: () -> KeyPairGenerator = {
+		loadSystemKeyPairGenerator(keyPairGeneratorAlgorithm, keyPairGeneratorProvider)
+	},
+	val createKeyGenParameterSpecBuilder: (String, Int) -> KeyGenParameterSpecBuilderAccess =
+		::createPlatformKeyGenParameterSpecBuilderAccess,
 	val keyStoreAccess: () -> KeyStoreAccess = { SystemKeyStoreAccess(createSystemKeyStore()) },
 	val keyPairGeneratorAccess: () -> KeyPairGeneratorAccess = {
-		SystemKeyPairGeneratorAccess(createSystemKeyPairGenerator())
+		SystemKeyPairGeneratorAccess(
+			delegate = createSystemKeyPairGenerator(),
+			createKeyGenParameterSpecBuilder = createKeyGenParameterSpecBuilder,
+		)
 	},
 	val signatureAccess: SignatureAccess = SystemSignatureAccess,
 	val base64Codec: Base64Codec = AndroidBase64Codec,
@@ -157,22 +165,6 @@ internal class AndroidKeystoreOperations(
 			KeystoreAlias.E2E -> JwkMetadata(use = "enc", alg = "ECDH-ES+A256KW")
 		}
 	}
-
-	private fun toUnsignedFixedLength(value: BigInteger, length: Int): ByteArray {
-		val raw = value.toByteArray().let { bytes ->
-			if (bytes.size > length && bytes.first() == 0.toByte()) {
-				bytes.copyOfRange(1, bytes.size)
-			} else {
-				bytes
-			}
-		}
-
-		require(raw.size <= length) { "coordinate length overflow: ${raw.size}" }
-
-		return ByteArray(length).also { out ->
-			System.arraycopy(raw, 0, out, length - raw.size, raw.size)
-		}
-	}
 }
 
 private data class JwkMetadata(
@@ -198,7 +190,7 @@ internal class SystemKeyStoreAccess(
 internal class SystemKeyPairGeneratorAccess(
 	private val delegate: KeyPairGenerator,
 	private val createKeyGenParameterSpecBuilder: (String, Int) -> KeyGenParameterSpecBuilderAccess =
-		::createSystemKeyGenParameterSpecBuilder,
+		::createPlatformKeyGenParameterSpecBuilderAccess,
 ) : KeyPairGeneratorAccess {
 
 	override fun initialize(request: KeystoreKeyGenRequest) {
@@ -220,8 +212,8 @@ internal class SystemKeyPairGeneratorAccess(
 	}
 }
 
-private class AndroidKeyGenParameterSpecBuilderAccess(
-	private val delegate: KeyGenParameterSpec.Builder,
+internal class AndroidKeyGenParameterSpecBuilderAccess(
+	private val delegate: KeyGenParameterSpecBuilderAccessDelegate,
 ) : KeyGenParameterSpecBuilderAccess {
 	override fun setAlgorithmParameterSpec(spec: AlgorithmParameterSpec): KeyGenParameterSpecBuilderAccess {
 		delegate.setAlgorithmParameterSpec(spec)
@@ -241,7 +233,7 @@ private class AndroidKeyGenParameterSpecBuilderAccess(
 	override fun build(): AlgorithmParameterSpec = delegate.build()
 }
 
-private object SystemSignatureAccess : SignatureAccess {
+internal object SystemSignatureAccess : SignatureAccess {
 	override fun sign(privateKey: PrivateKey, data: ByteArray): ByteArray {
 		return Signature.getInstance(SIGNATURE_ALGORITHM)
 			.apply {
@@ -261,12 +253,12 @@ private object SystemSignatureAccess : SignatureAccess {
 	}
 }
 
-private object AndroidBase64Codec : Base64Codec {
-	override fun decode(value: String): ByteArray = Base64.decode(value, Base64.DEFAULT)
+internal object AndroidBase64Codec : Base64Codec {
+	override fun decode(value: String): ByteArray = Base64.getDecoder().decode(value)
 
-	override fun encode(value: ByteArray): String = Base64.encodeToString(value, Base64.NO_WRAP)
+	override fun encode(value: ByteArray): String = Base64.getEncoder().encodeToString(value)
 
 	override fun encodeUrl(value: ByteArray): String {
-		return Base64.encodeToString(value, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(value)
 	}
 }

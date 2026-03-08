@@ -1,5 +1,6 @@
 package com.example.gpg_bridge_mobile
 
+import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -9,6 +10,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mockito.Answers.RETURNS_SELF
+import org.mockito.Mockito.doReturn
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockConstruction
+import org.mockito.Mockito.verify
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.Key
@@ -16,6 +22,7 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.KeyStoreSpi
+import java.security.Security
 import java.security.PrivateKey
 import java.security.Provider
 import java.security.ProviderException
@@ -674,6 +681,15 @@ class KeystoreMethodCallHandlerTest {
 	}
 
 	@Test
+	fun systemKeyStoreAccessReturnsNullWhenCertificateMissing() {
+		val spi = RecordingKeyStoreSpi()
+		val access = SystemKeyStoreAccess(createTestKeyStore(spi))
+
+		assertNull(access.getPublicKey("device_key"))
+		assertEquals("device_key", spi.lastGetCertificateAlias)
+	}
+
+	@Test
 	fun defaultKeyStoreAccessFactoryUsesInjectedSystemKeyStoreCreator() {
 		val spi = RecordingKeyStoreSpi(containsAliasResult = true)
 		val access = AndroidKeystoreDependencies(
@@ -683,6 +699,21 @@ class KeystoreMethodCallHandlerTest {
 		assertTrue(access is SystemKeyStoreAccess)
 		assertTrue(access.containsAlias("device_key"))
 		assertEquals("device_key", spi.lastContainsAliasAlias)
+	}
+
+	@Test
+	fun androidKeystoreDependenciesExposeConfiguredSystemKeyStoreCreator() {
+		RegisteredTestKeyStoreSpi.reset()
+		registerProvider(TestKeyStoreProvider()) {
+			val dependencies = AndroidKeystoreDependencies(
+				keyStoreProvider = TestKeyStoreProvider.KEYSTORE_TYPE,
+			)
+
+			val keyStore = dependencies.createSystemKeyStore()
+
+			assertEquals(TestKeyStoreProvider.KEYSTORE_TYPE, keyStore.type)
+			assertTrue(RegisteredTestKeyStoreSpi.loaded)
+		}
 	}
 
 	@Test
@@ -786,9 +817,207 @@ class KeystoreMethodCallHandlerTest {
 		assertEquals(1, delegate.generateCalls)
 	}
 
+	@Test
+	fun androidKeystoreDependenciesExposeConfiguredSystemKeyPairGeneratorCreator() {
+		registerProvider(TestKeyPairGeneratorProvider()) {
+			val dependencies = AndroidKeystoreDependencies(
+				keyPairGeneratorAlgorithm = TestKeyPairGeneratorProvider.ALGORITHM,
+				keyPairGeneratorProvider = TestKeyPairGeneratorProvider.PROVIDER_NAME,
+			)
+
+			val generator = dependencies.createSystemKeyPairGenerator()
+
+			assertTrue(generator is RegisteredTestKeyPairGenerator)
+		}
+	}
+
+	@Test
+	fun androidKeyGenParameterSpecBuilderAccessDelegatesAllCalls() {
+		val delegate = RecordingKeyGenParameterSpecBuilderDelegate()
+		val access = AndroidKeyGenParameterSpecBuilderAccess(delegate)
+		val algorithmParameterSpec = ECGenParameterSpec(CURVE_NAME)
+
+		val chained = access
+			.setAlgorithmParameterSpec(algorithmParameterSpec)
+			.setDigests(KeyProperties.DIGEST_SHA256)
+			.setUserAuthenticationRequired(false)
+
+		assertTrue(chained === access)
+		assertEquals(algorithmParameterSpec, delegate.recordedAlgorithmParameterSpec)
+		assertEquals(listOf(KeyProperties.DIGEST_SHA256), delegate.digests)
+		assertEquals(false, delegate.userAuthenticationRequired)
+		assertEquals(delegate.builtSpec, access.build())
+	}
+
+	@Test
+	fun androidKeystoreDependenciesExposeInjectedKeyGenParameterSpecBuilderFactory() {
+		val delegate = RecordingKeyGenParameterSpecBuilderDelegate()
+		val dependencies = AndroidKeystoreDependencies(
+			createKeyGenParameterSpecBuilder = { alias, purposes ->
+				createSystemKeyGenParameterSpecBuilder(
+					alias = alias,
+					purposes = purposes,
+					createDelegate = { _, _ -> delegate },
+				)
+			},
+		)
+
+		val access = dependencies.createKeyGenParameterSpecBuilder("device_key", KeyProperties.PURPOSE_SIGN)
+
+		assertEquals(delegate.builtSpec, access.build())
+	}
+
+	@Test
+	fun createSystemKeyGenParameterSpecBuilderUsesProvidedDelegateFactory() {
+		var recordedAlias: String? = null
+		var recordedPurposes: Int? = null
+		val delegate = RecordingKeyGenParameterSpecBuilderDelegate()
+
+		val access = createSystemKeyGenParameterSpecBuilder(
+			alias = "device_key",
+			purposes = KeyProperties.PURPOSE_SIGN,
+			createDelegate = { alias, purposes ->
+				recordedAlias = alias
+				recordedPurposes = purposes
+				delegate
+			},
+		)
+
+		assertEquals("device_key", recordedAlias)
+		assertEquals(KeyProperties.PURPOSE_SIGN, recordedPurposes)
+		assertEquals(delegate.builtSpec, access.build())
+	}
+
+	@Test
+	fun createPlatformKeyGenParameterSpecBuilderAccessDelegatesToAndroidBuilder() {
+		val builtSpec = mock(KeyGenParameterSpec::class.java)
+		val ecSpec = ECGenParameterSpec(CURVE_NAME)
+
+		val mocked = mockConstruction(
+			KeyGenParameterSpec.Builder::class.java,
+			org.mockito.Mockito.withSettings().defaultAnswer(RETURNS_SELF),
+		) { builder, _ ->
+			doReturn(builtSpec).`when`(builder).build()
+		}
+		try {
+			val access = createPlatformKeyGenParameterSpecBuilderAccess(
+				alias = "device_key",
+				purposes = KeyProperties.PURPOSE_SIGN,
+			)
+
+			assertEquals(1, mocked.constructed().size)
+			val builder = mocked.constructed().single()
+
+			assertTrue(access === access.setAlgorithmParameterSpec(ecSpec))
+			assertTrue(access === access.setDigests(KeyProperties.DIGEST_SHA256))
+			assertTrue(access === access.setUserAuthenticationRequired(false))
+			assertTrue(builtSpec === access.build())
+
+			verify(builder).setAlgorithmParameterSpec(ecSpec)
+			verify(builder).setDigests(KeyProperties.DIGEST_SHA256)
+			verify(builder).setUserAuthenticationRequired(false)
+			verify(builder).build()
+		} finally {
+			mocked.close()
+		}
+	}
+
+	@Test
+	fun loadSystemKeyStoreLoadsRequestedType() {
+		RegisteredTestKeyStoreSpi.reset()
+		registerProvider(TestKeyStoreProvider()) {
+			val keyStore = loadSystemKeyStore(TestKeyStoreProvider.KEYSTORE_TYPE)
+
+			assertEquals(TestKeyStoreProvider.KEYSTORE_TYPE, keyStore.type)
+			assertTrue(RegisteredTestKeyStoreSpi.loaded)
+		}
+	}
+
+	@Test
+	fun loadSystemKeyPairGeneratorUsesRequestedProvider() {
+		registerProvider(TestKeyPairGeneratorProvider()) {
+			val generator = loadSystemKeyPairGenerator(
+				algorithm = TestKeyPairGeneratorProvider.ALGORITHM,
+				provider = TestKeyPairGeneratorProvider.PROVIDER_NAME,
+			)
+
+			assertTrue(generator is RegisteredTestKeyPairGenerator)
+		}
+	}
+
+	@Test
+	fun systemSignatureAccessSignsAndVerifiesWithEcKeyPair() {
+		val keyPair = KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair()
+		val payload = "payload".encodeToByteArray()
+
+		val signature = SystemSignatureAccess.sign(keyPair.private, payload)
+
+		assertTrue(
+			SystemSignatureAccess.verify(
+				keyPair.public as java.security.interfaces.ECPublicKey,
+				payload,
+				signature,
+			),
+		)
+	}
+
+	@Test
+	fun androidBase64CodecEncodesDecodesAndUsesUrlSafeAlphabet() {
+		val raw = byteArrayOf(0xfb.toByte(), 0xef.toByte(), 0xff.toByte())
+
+		assertEquals("aGVsbG8=", AndroidBase64Codec.encode("hello".encodeToByteArray()))
+		assertEquals("hello", AndroidBase64Codec.decode("aGVsbG8=").decodeToString())
+		assertEquals("--__", AndroidBase64Codec.encodeUrl(raw))
+	}
+
+	@Test
+	fun toUnsignedFixedLengthTrimsLeadingZeroByte() {
+		val result = toUnsignedFixedLength(BigInteger(byteArrayOf(0x00, 0x80.toByte())), 1)
+
+		assertEquals(listOf(0x80), result.map { it.toInt() and 0xff })
+	}
+
+	@Test
+	fun toUnsignedFixedLengthThrowsOnOverflow() {
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			toUnsignedFixedLength(BigInteger(byteArrayOf(0x01, 0x02, 0x03)), 2)
+		}
+
+		assertEquals("coordinate length overflow: 3", error.message)
+	}
+
+	@Test
+	fun toUnsignedFixedLengthLeftPadsShortCoordinates() {
+		val result = toUnsignedFixedLength(BigInteger.valueOf(0x1234), 4)
+
+		assertEquals(listOf(0x00, 0x00, 0x12, 0x34), result.map { it.toInt() and 0xff })
+	}
+
+	@Test
+	fun getPublicKeyJwkRejectsMissingCertificate() {
+		val operations = AndroidKeystoreOperations(
+			AndroidKeystoreDependencies(keyStoreAccess = { RecordingKeyStoreAccess() }),
+		)
+
+		val error = assertThrows(IllegalArgumentException::class.java) {
+			operations.getPublicKeyJwk("device_key")
+		}
+
+		assertEquals("certificate not found for alias: device_key", error.message)
+	}
+
 	private fun createTestKeyStore(spi: KeyStoreSpi): KeyStore {
 		val provider = object : Provider("TestProvider", 1.0, "Test provider") {}
 		return object : KeyStore(spi, provider, "TestKeyStore") {}.apply { load(null, null) }
+	}
+
+	private fun registerProvider(provider: Provider, block: () -> Unit) {
+		Security.addProvider(provider)
+		try {
+			block()
+		} finally {
+			Security.removeProvider(provider.name)
+		}
 	}
 
 	private class RecordingKeyPairGeneratorDelegate(
@@ -837,6 +1066,27 @@ class KeystoreMethodCallHandlerTest {
 	}
 
 	private class FakeAlgorithmParameterSpec : AlgorithmParameterSpec
+
+	private class RecordingKeyGenParameterSpecBuilderDelegate : KeyGenParameterSpecBuilderAccessDelegate {
+		var recordedAlgorithmParameterSpec: AlgorithmParameterSpec? = null
+		var digests: List<String> = emptyList()
+		var userAuthenticationRequired: Boolean? = null
+		val builtSpec = FakeAlgorithmParameterSpec()
+
+		override fun setAlgorithmParameterSpec(spec: AlgorithmParameterSpec) {
+			recordedAlgorithmParameterSpec = spec
+		}
+
+		override fun setDigests(vararg digests: String) {
+			this.digests = digests.toList()
+		}
+
+		override fun setUserAuthenticationRequired(required: Boolean) {
+			userAuthenticationRequired = required
+		}
+
+		override fun build(): AlgorithmParameterSpec = builtSpec
+	}
 
 	private class RecordingKeyStoreAccess(
 		private val existingAliases: Set<String> = emptySet(),
@@ -1033,6 +1283,80 @@ class KeystoreMethodCallHandlerTest {
 		override fun engineStore(stream: java.io.OutputStream?, password: CharArray?) = Unit
 
 		override fun engineLoad(stream: java.io.InputStream?, password: CharArray?) = Unit
+	}
+
+	class RegisteredTestKeyStoreSpi : KeyStoreSpi() {
+		companion object {
+			var loaded = false
+
+			fun reset() {
+				loaded = false
+			}
+		}
+
+		override fun engineGetKey(alias: String?, password: CharArray?): Key? = null
+
+		override fun engineGetCertificateChain(alias: String?): Array<Certificate>? = null
+
+		override fun engineGetCertificate(alias: String?): Certificate? = null
+
+		override fun engineGetCreationDate(alias: String?) = java.util.Date(0)
+
+		override fun engineSetKeyEntry(alias: String?, key: Key?, password: CharArray?, chain: Array<Certificate>?) = Unit
+
+		override fun engineSetKeyEntry(alias: String?, key: ByteArray?, chain: Array<Certificate>?) = Unit
+
+		override fun engineSetCertificateEntry(alias: String?, cert: Certificate?) = Unit
+
+		override fun engineDeleteEntry(alias: String?) = Unit
+
+		override fun engineAliases(): java.util.Enumeration<String> = java.util.Collections.emptyEnumeration()
+
+		override fun engineContainsAlias(alias: String?): Boolean = false
+
+		override fun engineSize(): Int = 0
+
+		override fun engineIsKeyEntry(alias: String?): Boolean = false
+
+		override fun engineIsCertificateEntry(alias: String?): Boolean = false
+
+		override fun engineGetCertificateAlias(cert: Certificate?): String? = null
+
+		override fun engineStore(stream: java.io.OutputStream?, password: CharArray?) = Unit
+
+		override fun engineLoad(stream: java.io.InputStream?, password: CharArray?) {
+			loaded = true
+		}
+	}
+
+	class TestKeyStoreProvider : Provider(PROVIDER_NAME, 1.0, "Test keystore provider") {
+		companion object {
+			const val PROVIDER_NAME = "JvmKeystoreProvider"
+			const val KEYSTORE_TYPE = "JvmAndroidKeyStore"
+		}
+
+		init {
+			put("KeyStore.$KEYSTORE_TYPE", RegisteredTestKeyStoreSpi::class.java.name)
+		}
+	}
+
+	class RegisteredTestKeyPairGenerator : KeyPairGenerator(TestKeyPairGeneratorProvider.ALGORITHM) {
+		override fun initialize(keysize: Int, random: SecureRandom?) = Unit
+
+		override fun initialize(params: AlgorithmParameterSpec?, random: SecureRandom?) = Unit
+
+		override fun generateKeyPair(): KeyPair = KeyPair(FakePublicKey(), FakePrivateKey())
+	}
+
+	class TestKeyPairGeneratorProvider : Provider(PROVIDER_NAME, 1.0, "Test key pair generator provider") {
+		companion object {
+			const val PROVIDER_NAME = "JvmKeyPairGeneratorProvider"
+			const val ALGORITHM = "EC"
+		}
+
+		init {
+			put("KeyPairGenerator.$ALGORITHM", RegisteredTestKeyPairGenerator::class.java.name)
+		}
 	}
 
 	private class CapturingResult : MethodChannel.Result {
