@@ -2,32 +2,60 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+struct JwkValidationSpec {
+    key_label: &'static str,
+    key_use: &'static str,
+    alg: &'static str,
+}
+
+const SIG_KEY_SPEC: JwkValidationSpec = JwkValidationSpec {
+    key_label: "sig key",
+    key_use: "sig",
+    alg: "ES256",
+};
+
+const ENC_KEY_SPEC: JwkValidationSpec = JwkValidationSpec {
+    key_label: "enc key",
+    key_use: "enc",
+    alg: "ECDH-ES+A256KW",
+};
+
 /// Validate a JWK sig key and return the (potentially assigned) kid.
 pub fn validate_sig_key(key: &mut serde_json::Value) -> Result<String, AppError> {
+    validate_key(key, &SIG_KEY_SPEC)
+}
+
+/// Validate a JWK enc key and return the (potentially assigned) kid.
+pub fn validate_enc_key(key: &mut serde_json::Value) -> Result<String, AppError> {
+    validate_key(key, &ENC_KEY_SPEC)
+}
+
+fn validate_key(key: &mut serde_json::Value, spec: &JwkValidationSpec) -> Result<String, AppError> {
     let obj = key
         .as_object_mut()
-        .ok_or_else(|| AppError::validation("sig key must be a JSON object"))?;
-    check_field_eq(obj, "kty", "EC")?;
-    check_field_eq(obj, "use", "sig")?;
-    check_field_eq(obj, "crv", "P-256")?;
-    check_field_eq(obj, "alg", "ES256")?;
+        .ok_or_else(|| AppError::validation(format!("{} must be a JSON object", spec.key_label)))?;
+    check_required_fields(
+        obj,
+        &[
+            ("kty", "EC"),
+            ("use", spec.key_use),
+            ("crv", "P-256"),
+            ("alg", spec.alg),
+        ],
+    )?;
     check_base64url_coord(obj, "x")?;
     check_base64url_coord(obj, "y")?;
     Ok(assign_kid_if_missing(obj))
 }
 
-/// Validate a JWK enc key and return the (potentially assigned) kid.
-pub fn validate_enc_key(key: &mut serde_json::Value) -> Result<String, AppError> {
-    let obj = key
-        .as_object_mut()
-        .ok_or_else(|| AppError::validation("enc key must be a JSON object"))?;
-    check_field_eq(obj, "kty", "EC")?;
-    check_field_eq(obj, "use", "enc")?;
-    check_field_eq(obj, "crv", "P-256")?;
-    check_field_eq(obj, "alg", "ECDH-ES+A256KW")?;
-    check_base64url_coord(obj, "x")?;
-    check_base64url_coord(obj, "y")?;
-    Ok(assign_kid_if_missing(obj))
+fn check_required_fields(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    fields: &[(&str, &str)],
+) -> Result<(), AppError> {
+    for (field, expected) in fields {
+        check_field_eq(obj, field, expected)?;
+    }
+    Ok(())
 }
 
 fn check_field_eq(

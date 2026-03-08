@@ -6,7 +6,7 @@ use crate::jwt::{DeviceAssertionClaims, decode_jws_unverified, extract_kid, veri
 
 use super::error::AuthError;
 use super::{
-    build_expected_aud, extract_bearer_token, find_public_key_by_kid, timestamp_to_rfc3339,
+    build_expected_aud, extract_bearer_token, find_public_key_by_kid, store_jti_with_expiration,
 };
 use crate::http::AppState;
 
@@ -43,7 +43,7 @@ impl FromRequestParts<AppState> for DeviceAssertionAuth {
         validate_iss_eq_sub(&claims)?;
         validate_aud(&claims, &build_expected_aud(&state.base_url, parts))?;
         validate_exp_window(&claims)?;
-        store_jti(state, &claims.jti, claims.exp).await?;
+        store_jti_with_expiration(state, &claims.jti, claims.exp).await?;
 
         Ok(Self {
             client_id: claims.sub,
@@ -73,19 +73,6 @@ fn validate_exp_window(claims: &DeviceAssertionClaims) -> Result<(), AuthError> 
         return Err(AuthError::InvalidToken(
             "token lifetime out of range".into(),
         ));
-    }
-    Ok(())
-}
-
-async fn store_jti(state: &AppState, jti: &str, exp: i64) -> Result<(), AppError> {
-    let expired = timestamp_to_rfc3339(exp)?;
-    let stored = state
-        .repository
-        .store_jti(jti, &expired)
-        .await
-        .map_err(AppError::from)?;
-    if !stored {
-        return Err(AuthError::InvalidToken("jti replay detected".into()).into());
     }
     Ok(())
 }
