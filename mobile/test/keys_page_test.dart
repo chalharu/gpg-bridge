@@ -310,6 +310,40 @@ void main() {
       expect(find.text('鍵を削除しました'), findsOneWidget);
     });
 
+    testWidgets('E2E tab shows snackbar and keeps list after delete failure', (
+      WidgetTester tester,
+    ) async {
+      final kid = '33333333-3333-3333-3333-333333333333';
+      final mock = _MockKeyManagementService(
+        listPublicKeysHandler: () async {
+          return _publicKeysResponse(
+            keys: [_publicKey(kid: kid, use: 'sig', alg: 'ES256')],
+          );
+        },
+        deletePublicKeyHandler: (value) async {
+          throw Exception('permission denied');
+        },
+      );
+
+      await tester.pumpWidget(_buildTestApp(mock));
+      await tester.pumpAndSettle();
+
+      final listCallsBeforeFailure = mock.listPublicKeysCallCount;
+      expect(find.text('認証用  ES256'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('削除'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(mock.deletePublicKeyCallCount, 1);
+      expect(mock.listPublicKeysCallCount, listCallsBeforeFailure);
+      expect(find.text('認証用  ES256'), findsOneWidget);
+      expect(find.textContaining('削除に失敗しました:'), findsOneWidget);
+      expect(find.textContaining('permission denied'), findsOneWidget);
+    });
+
     testWidgets('E2E tab renders key details and fallback labels', (
       WidgetTester tester,
     ) async {
