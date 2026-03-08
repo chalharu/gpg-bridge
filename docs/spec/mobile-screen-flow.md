@@ -20,33 +20,33 @@ updated: 2026-03-09
 
 ```mermaid
 flowchart TD
-    A[App launch] --> B{deviceJwt present?}
+    A["App launch"] --> B{"deviceJwt present?"};
 
-    B -- No --> R[/register<br/>RegisterPage]
-    B -- Yes --> M[MainShell]
+    B -- No --> R["/register RegisterPage"];
+    B -- Yes --> M["MainShell"];
 
-    R -- Complete registration success --> H[/<br/>HomePage]
+    R -- Complete registration success --> H["/ HomePage"];
 
-    M --> H
-    M --> K[/keys<br/>KeysPage]
-    M --> P[/pairing<br/>PairingPage]
-    M --> S[/settings<br/>SettingsPage]
+    M --> H;
+    M --> K["/keys KeysPage"];
+    M --> P["/pairing PairingPage"];
+    M --> S["/settings SettingsPage"];
 
-    H -- Reset registration success --> R
+    H -- Reset registration success --> R;
 
-    P -- FAB tap --> Q[/pairing/scan<br/>QrScanPage]
-    Q -- Pairing success --> P
-    Q -- Invalid QR or pairing error --> Q
-    Q -- Back --> P
+    P -- FAB tap --> Q["/pairing/scan QrScanPage"];
+    Q -- Pairing success --> P;
+    Q -- Invalid QR or pairing error --> Q;
+    Q -- Back --> P;
 
-    F[FCM sign request<br/>onMessage / onMessageOpenedApp] --> SR[/sign-request/:requestId<br/>SignRequestPage]
-    SR -- Approve --> PREV[Return to previous screen]
-    SR -- Deny --> PREV
-    SR -- Ignore --> PREV
-    SR -- Timeout --> PREV
+    F["FCM sign request onMessage / onMessageOpenedApp"] --> SR["/sign-request/:requestId SignRequestPage"];
+    SR -- Approve --> PREV["Return to previous screen"];
+    SR -- Deny --> PREV;
+    SR -- Ignore --> PREV;
+    SR -- Timeout --> PREV;
 
-    X[Attempt any non-register route while unregistered] --> R
-    Y[Attempt /register while registered] --> H
+    X["Attempt any non-register route while unregistered"] --> R;
+    Y["Attempt /register while registered"] --> H;
 ```
 
 ## 入口条件とリダイレクト
