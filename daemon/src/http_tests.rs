@@ -3,12 +3,36 @@ use crate::test_http_server::{
     empty_response, spawn_single_response_server, spawn_single_response_server_with_request,
     text_response,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 fn unused_local_url() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
     format!("http://{addr}")
+}
+
+async fn spawn_truncated_body_server(
+    status_line: &str,
+    declared_length: usize,
+    partial_body: &str,
+) -> std::net::SocketAddr {
+    let response = format!(
+        "{status_line}\r\nContent-Length: {declared_length}\r\nConnection: close\r\n\r\n{partial_body}",
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let _ = socket.read(&mut buffer).await.unwrap();
+        socket.write_all(response.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+
+    addr
 }
 
 #[test]
@@ -82,6 +106,18 @@ async fn send_get_with_retry_wraps_transport_errors_with_request_label() {
 }
 
 #[tokio::test]
+async fn send_get_with_retry_wraps_body_read_errors_with_request_url() {
+    let addr = spawn_truncated_body_server("HTTP/1.1 200 OK", 8, "abc").await;
+    let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+    let url = format!("http://{addr}");
+
+    let error = send_get_with_retry(&client, &url, None).await.unwrap_err();
+
+    assert!(error.to_string().contains("failed to read response body"));
+    assert!(error.to_string().contains(&url));
+}
+
+#[tokio::test]
 async fn send_post_json_with_retry_wraps_transport_errors_with_request_label() {
     let client = build_http_client(Duration::from_millis(200), "test").unwrap();
     let body = serde_json::json!({});
@@ -92,6 +128,21 @@ async fn send_post_json_with_retry_wraps_transport_errors_with_request_label() {
         .unwrap_err();
 
     assert!(error.to_string().contains("failed to send request"));
+    assert!(error.to_string().contains(&url));
+}
+
+#[tokio::test]
+async fn send_post_json_with_retry_wraps_body_read_errors_with_request_url() {
+    let addr = spawn_truncated_body_server("HTTP/1.1 200 OK", 9, "done").await;
+    let client = build_http_client(Duration::from_secs(2), "test").unwrap();
+    let body = serde_json::json!({"k": "v"});
+    let url = format!("http://{addr}");
+
+    let error = send_post_json_with_retry(&client, &url, None, &body)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("failed to read response body"));
     assert!(error.to_string().contains(&url));
 }
 
