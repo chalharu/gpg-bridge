@@ -9,14 +9,15 @@ use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::http::signing::get_sign_events;
-use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::repository::{FullRequestRow, RequestRow};
 use crate::test_support::{
-    MockRepository, assert_problem_details, make_signing_key_row, make_test_app_state,
-    make_test_app_state_arc, response_body_string,
+    MockRepository, assert_problem_details, make_test_app_state, make_test_app_state_arc,
+    response_body_string,
 };
 
-use super::{make_daemon_token, response_status};
+use super::{
+    make_daemon_auth_full_request_row, make_daemon_auth_repo, make_daemon_token, response_status,
+    seed_daemon_auth_request,
+};
 
 // ===========================================================================
 // GET /sign-events (SSE) tests
@@ -49,62 +50,6 @@ fn make_sign_events_aud() -> String {
     "https://api.example.com/sign-events".to_owned()
 }
 
-fn setup_sign_events_base() -> (
-    josekit::jwk::Jwk,
-    String,
-    josekit::jwk::Jwk,
-    String,
-    MockRepository,
-    String,
-) {
-    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
-    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-
-    (
-        server_priv,
-        server_kid,
-        daemon_priv,
-        daemon_kid,
-        MockRepository::new(sk),
-        jwk_to_json(&daemon_pub).unwrap(),
-    )
-}
-
-fn make_sign_events_request_row(
-    request_id: &str,
-    status: &str,
-    daemon_public_key: String,
-) -> RequestRow {
-    RequestRow {
-        request_id: request_id.into(),
-        status: status.into(),
-        daemon_public_key,
-    }
-}
-
-fn make_sign_events_full_request_row(
-    request_id: &str,
-    status: &str,
-    expired: &str,
-    signature: Option<&str>,
-    daemon_public_key: String,
-) -> FullRequestRow {
-    FullRequestRow {
-        request_id: request_id.into(),
-        status: status.into(),
-        expired: expired.into(),
-        signature: signature.map(str::to_owned),
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key,
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    }
-}
-
 fn replace_sign_events_full_request(
     repo: &MockRepository,
     status: &str,
@@ -119,7 +64,7 @@ fn replace_sign_events_full_request(
         .unwrap()
         .daemon_public_key
         .clone();
-    *repo.full_request.lock().unwrap() = Some(make_sign_events_full_request_row(
+    *repo.full_request.lock().unwrap() = Some(make_daemon_auth_full_request_row(
         "req-1",
         status,
         expired,
@@ -135,20 +80,21 @@ fn setup_sign_events_with_aud(
     aud: &str,
 ) -> (String, MockRepository) {
     let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
-        setup_sign_events_base();
+        make_daemon_auth_repo();
 
-    *repo.request.lock().unwrap() = Some(make_sign_events_request_row(
+    seed_daemon_auth_request(
+        &repo,
         "req-1",
         status,
-        daemon_public_key.clone(),
-    ));
-    *repo.full_request.lock().unwrap() = Some(make_sign_events_full_request_row(
-        "req-1",
-        status,
-        expired,
-        signature,
-        daemon_public_key,
-    ));
+        &daemon_public_key,
+        Some(make_daemon_auth_full_request_row(
+            "req-1",
+            status,
+            expired,
+            signature,
+            daemon_public_key.clone(),
+        )),
+    );
 
     let token = make_daemon_token(
         &server_priv,
@@ -164,13 +110,9 @@ fn setup_sign_events_with_aud(
 
 fn setup_sign_events_request_only(status: &str, aud: &str) -> (String, MockRepository) {
     let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
-        setup_sign_events_base();
+        make_daemon_auth_repo();
 
-    *repo.request.lock().unwrap() = Some(make_sign_events_request_row(
-        "req-1",
-        status,
-        daemon_public_key,
-    ));
+    seed_daemon_auth_request(&repo, "req-1", status, &daemon_public_key, None);
 
     let token = make_daemon_token(
         &server_priv,
@@ -193,6 +135,42 @@ fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepo
     )
 }
 
+async fn assert_sign_events_sse(response: axum::response::Response, expected: &[&str]) {
+    let body_str = response_body_string(response).await;
+    assert!(
+        body_str.contains("event: signature"),
+        "expected signature event in: {body_str}"
+    );
+    for expected_value in expected {
+        assert!(
+            body_str.contains(expected_value),
+            "expected {expected_value} in: {body_str}"
+        );
+    }
+}
+
+async fn assert_sign_events_sse_with_timeout(
+    response: axum::response::Response,
+    expected: &[&str],
+) {
+    let body_str = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        response_body_string(response),
+    )
+    .await
+    .expect("timed out reading SSE body");
+    assert!(
+        body_str.contains("event: signature"),
+        "expected signature event in: {body_str}"
+    );
+    for expected_value in expected {
+        assert!(
+            body_str.contains(expected_value),
+            "expected {expected_value} in: {body_str}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn sign_events_approved_returns_immediate_sse() {
     let (token, repo) = setup_sign_events("approved", Some("sig-data"));
@@ -212,19 +190,7 @@ async fn sign_events_approved_returns_immediate_sse() {
         "expected SSE content-type, got: {ct}"
     );
 
-    let body_str = response_body_string(resp).await;
-    assert!(
-        body_str.contains("event: signature"),
-        "expected signature event in: {body_str}"
-    );
-    assert!(
-        body_str.contains("sig-data"),
-        "expected signature data in: {body_str}"
-    );
-    assert!(
-        body_str.contains("approved"),
-        "expected approved status in: {body_str}"
-    );
+    assert_sign_events_sse(resp, &["sig-data", "approved"]).await;
 }
 
 #[tokio::test]
@@ -236,15 +202,7 @@ async fn sign_events_denied_returns_immediate_sse() {
     let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_str = response_body_string(resp).await;
-    assert!(
-        body_str.contains("event: signature"),
-        "expected signature event in: {body_str}"
-    );
-    assert!(
-        body_str.contains("denied"),
-        "expected denied status in: {body_str}"
-    );
+    assert_sign_events_sse(resp, &["denied"]).await;
 }
 
 #[tokio::test]
@@ -256,11 +214,7 @@ async fn sign_events_unavailable_returns_immediate_sse() {
     let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_str = response_body_string(resp).await;
-    assert!(
-        body_str.contains("unavailable"),
-        "expected unavailable status in: {body_str}"
-    );
+    assert_sign_events_sse(resp, &["unavailable"]).await;
 }
 
 #[tokio::test]
@@ -272,11 +226,7 @@ async fn sign_events_cancelled_returns_immediate_sse() {
     let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_str = response_body_string(resp).await;
-    assert!(
-        body_str.contains("cancelled"),
-        "expected cancelled status in: {body_str}"
-    );
+    assert_sign_events_sse(resp, &["cancelled"]).await;
 }
 
 #[tokio::test]
@@ -364,20 +314,7 @@ async fn sign_events_notify_delivers_signature_event_on_waiting_stream() {
         },
     );
 
-    let body_str = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        response_body_string(response),
-    )
-    .await
-    .expect("timed out reading SSE body");
-    assert!(
-        body_str.contains("sig-notified"),
-        "expected notified signature in: {body_str}"
-    );
-    assert!(
-        body_str.contains("approved"),
-        "expected approved status in: {body_str}"
-    );
+    assert_sign_events_sse_with_timeout(response, &["sig-notified", "approved"]).await;
 }
 
 #[tokio::test]
@@ -394,16 +331,7 @@ async fn sign_events_closed_stream_checks_db_fallback() {
     set_full_request_status(repo.as_ref(), "denied", None);
     notifier.unsubscribe("req-1");
 
-    let body_str = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        response_body_string(response),
-    )
-    .await
-    .expect("timed out reading SSE body");
-    assert!(
-        body_str.contains("denied"),
-        "expected DB fallback status in: {body_str}"
-    );
+    assert_sign_events_sse_with_timeout(response, &["denied"]).await;
 }
 
 #[tokio::test]

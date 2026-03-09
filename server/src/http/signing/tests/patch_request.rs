@@ -8,13 +8,13 @@ use serde_json::json;
 
 use crate::http::AppState;
 use crate::http::signing::patch_sign_request;
-use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::repository::{FullRequestRow, RequestRow};
-use crate::test_support::{
-    MockRepository, make_signing_key_row, make_test_app_state, make_test_app_state_arc,
-};
+use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
 
-use super::{VALID_COORD, make_client_row_with_enc_key, make_daemon_token, response_status};
+use super::{
+    VALID_COORD, make_client_row_with_enc_key, make_daemon_auth_full_request_row,
+    make_daemon_auth_repo, make_daemon_token, response_status, seed_daemon_auth_request,
+    seed_single_client_request_links,
+};
 
 // ===========================================================================
 // Phase 2: PATCH /sign-request tests
@@ -46,38 +46,31 @@ fn setup_phase2_happy_path() -> (
     String,
     MockRepository,
 ) {
-    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
-    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
+        make_daemon_auth_repo();
 
-    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-    let repo = MockRepository::new(sk);
+    let mut full_request = make_daemon_auth_full_request_row(
+        "req-1",
+        "created",
+        "2027-01-01T00:00:00Z",
+        None,
+        daemon_public_key.clone(),
+    );
+    full_request.daemon_enc_public_key = json!({
+        "kty": "EC", "crv": "P-256",
+        "x": VALID_COORD_P2, "y": VALID_COORD_P2,
+        "alg": "ECDH-ES+A256KW"
+    })
+    .to_string();
+    seed_single_client_request_links(&mut full_request, "client-1", "pair-1", "enc-kid-1");
 
-    // Required by DaemonAuthJws extractor
-    *repo.request.lock().unwrap() = Some(RequestRow {
-        request_id: "req-1".into(),
-        status: "created".into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-    });
-
-    // Required by patch_sign_request handler
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "created".into(),
-        expired: "2027-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-        daemon_enc_public_key: json!({
-            "kty": "EC", "crv": "P-256",
-            "x": VALID_COORD_P2, "y": VALID_COORD_P2,
-            "alg": "ECDH-ES+A256KW"
-        })
-        .to_string(),
-        pairing_ids: r#"{"client-1":"pair-1"}"#.into(),
-        e2e_kids: r#"{"client-1":"enc-kid-1"}"#.into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
+    seed_daemon_auth_request(
+        &repo,
+        "req-1",
+        "created",
+        &daemon_public_key,
+        Some(full_request),
+    );
 
     *repo.update_phase2_result.lock().unwrap() = Some(true);
 
@@ -248,31 +241,27 @@ async fn patch_missing_auth_returns_401() {
 
 #[tokio::test]
 async fn patch_multiple_clients_happy_path() {
-    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
-    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
+        make_daemon_auth_repo();
 
-    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-    let repo = MockRepository::new(sk);
+    let mut full_request = make_daemon_auth_full_request_row(
+        "req-2",
+        "created",
+        "2027-01-01T00:00:00Z",
+        None,
+        daemon_public_key.clone(),
+    );
+    full_request.client_ids = r#"["c1","c2"]"#.into();
+    full_request.pairing_ids = r#"{"c1":"p1","c2":"p2"}"#.into();
+    full_request.e2e_kids = r#"{"c1":"k1","c2":"k2"}"#.into();
 
-    *repo.request.lock().unwrap() = Some(RequestRow {
-        request_id: "req-2".into(),
-        status: "created".into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-    });
-
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-2".into(),
-        status: "created".into(),
-        expired: "2027-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"["c1","c2"]"#.into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: r#"{"c1":"p1","c2":"p2"}"#.into(),
-        e2e_kids: r#"{"c1":"k1","c2":"k2"}"#.into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
+    seed_daemon_auth_request(
+        &repo,
+        "req-2",
+        "created",
+        &daemon_public_key,
+        Some(full_request),
+    );
 
     *repo.update_phase2_result.lock().unwrap() = Some(true);
 

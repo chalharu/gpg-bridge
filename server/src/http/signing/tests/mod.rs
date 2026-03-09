@@ -9,7 +9,7 @@ use crate::http::AppState;
 use crate::jwt::{
     DaemonAuthClaims, PayloadType, RequestClaims, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
-use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow};
+use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
 use crate::test_support::{MockRepository, make_signing_key_row};
 
 use super::post_sign_request;
@@ -79,6 +79,87 @@ fn make_signing_repo() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRep
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     (priv_jwk, pub_jwk, kid, MockRepository::new(key_row))
+}
+
+fn make_daemon_auth_repo() -> (
+    josekit::jwk::Jwk,
+    String,
+    josekit::jwk::Jwk,
+    String,
+    MockRepository,
+    String,
+) {
+    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
+    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
+    let key_row = make_signing_key_row(&server_priv, &server_pub, &server_kid);
+
+    (
+        server_priv,
+        server_kid,
+        daemon_priv,
+        daemon_kid,
+        MockRepository::new(key_row),
+        jwk_to_json(&daemon_pub).unwrap(),
+    )
+}
+
+fn make_daemon_auth_request_row(
+    request_id: &str,
+    status: &str,
+    daemon_public_key: impl Into<String>,
+) -> RequestRow {
+    RequestRow {
+        request_id: request_id.into(),
+        status: status.into(),
+        daemon_public_key: daemon_public_key.into(),
+    }
+}
+
+fn make_daemon_auth_full_request_row(
+    request_id: &str,
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+    daemon_public_key: impl Into<String>,
+) -> FullRequestRow {
+    FullRequestRow {
+        request_id: request_id.into(),
+        status: status.into(),
+        expired: expired.into(),
+        signature: signature.map(str::to_owned),
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: daemon_public_key.into(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    }
+}
+
+fn seed_single_client_request_links(
+    full_request: &mut FullRequestRow,
+    client_id: &str,
+    pairing_id: &str,
+    e2e_kid: &str,
+) {
+    full_request.pairing_ids = format!(r#"{{"{client_id}":"{pairing_id}"}}"#);
+    full_request.e2e_kids = format!(r#"{{"{client_id}":"{e2e_kid}"}}"#);
+}
+
+fn seed_daemon_auth_request(
+    repo: &MockRepository,
+    request_id: &str,
+    status: &str,
+    daemon_public_key: &str,
+    full_request: Option<FullRequestRow>,
+) {
+    *repo.request.lock().unwrap() = Some(make_daemon_auth_request_row(
+        request_id,
+        status,
+        daemon_public_key,
+    ));
+    *repo.full_request.lock().unwrap() = full_request;
 }
 
 fn add_signing_client(repo: &MockRepository, client_id: &str) -> (josekit::jwk::Jwk, String) {
