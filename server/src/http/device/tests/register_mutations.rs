@@ -158,15 +158,7 @@ async fn register_device_uses_explicit_default_kid() {
             }
         }
     });
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -222,15 +214,7 @@ async fn register_device_public_keys_contains_all_keys() {
     let app = build_test_router(state);
 
     let body = register_body("fid-pk", "tok-pk");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
 

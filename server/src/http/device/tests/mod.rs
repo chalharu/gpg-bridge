@@ -11,7 +11,9 @@ use crate::jwt::{
     DeviceAssertionClaims, build_signing_key_row, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
 use crate::repository::{ClientRepository, ClientRow, SigningKeyRepository, SigningKeyRow};
-use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
+use crate::test_support::{
+    build_test_sqlite_repo, make_test_app_state_arc, make_test_client_row_with_issued_at,
+};
 
 use super::{
     add_gpg_key, add_public_key, delete_device, delete_gpg_key, delete_public_key, list_gpg_keys,
@@ -44,16 +46,14 @@ fn make_client_row(
     public_keys: &str,
     default_kid: &str,
 ) -> ClientRow {
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: device_token.to_owned(),
-        device_jwt_issued_at: chrono::Utc::now().to_rfc3339(),
-        public_keys: public_keys.to_owned(),
-        default_kid: default_kid.to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row_with_issued_at(
+        client_id,
+        device_token,
+        public_keys.to_owned(),
+        default_kid,
+        "[]",
+        chrono::Utc::now().to_rfc3339(),
+    )
 }
 
 fn register_body(fid: &str, token: &str) -> serde_json::Value {
@@ -196,16 +196,14 @@ fn make_gpg_client_row(
     default_kid: &str,
     gpg_keys: &str,
 ) -> ClientRow {
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: chrono::Utc::now().to_rfc3339(),
-        public_keys: public_keys.to_owned(),
-        default_kid: default_kid.to_owned(),
-        gpg_keys: gpg_keys.to_owned(),
-    }
+    make_test_client_row_with_issued_at(
+        client_id,
+        "tok",
+        public_keys.to_owned(),
+        default_kid,
+        gpg_keys.to_owned(),
+        chrono::Utc::now().to_rfc3339(),
+    )
 }
 
 fn make_gpg_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, ClientRow) {

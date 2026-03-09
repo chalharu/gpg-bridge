@@ -23,6 +23,10 @@ fn get_gpg_key_request(token: &str) -> Request<Body> {
     authed_request(Method::GET, "/device/gpg_key", token)
 }
 
+fn delete_gpg_key_request(token: &str, keygrip: &str) -> Request<Body> {
+    authed_request(Method::DELETE, &format!("/device/gpg_key/{keygrip}"), token)
+}
+
 #[tokio::test]
 async fn add_gpg_key_success() {
     let (priv_jwk, kid, _sk, client) = make_gpg_test_setup();
@@ -332,13 +336,7 @@ async fn add_gpg_key_multiple_keys_success() {
         ]
     });
     let response = app
-        .oneshot(
-            Request::post("/device/gpg_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(post_gpg_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -366,13 +364,7 @@ async fn add_gpg_key_concurrent_modification_conflict() {
         }]
     });
     let response = app
-        .oneshot(
-            Request::post("/device/gpg_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(post_gpg_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -398,13 +390,7 @@ async fn add_gpg_key_non_object_public_key_rejected() {
         }]
     });
     let response = app
-        .oneshot(
-            Request::post("/device/gpg_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(post_gpg_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -471,12 +457,10 @@ async fn delete_gpg_key_concurrent_modification_conflict() {
         "/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
     );
     let response = app
-        .oneshot(
-            Request::delete("/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_gpg_key_request(
+            &token,
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        ))
         .await
         .unwrap();
 
@@ -494,12 +478,7 @@ async fn delete_gpg_key_invalid_keygrip_format() {
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key/invalid-format");
     let response = app
-        .oneshot(
-            Request::delete("/device/gpg_key/invalid-format")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_gpg_key_request(&token, "invalid-format"))
         .await
         .unwrap();
 

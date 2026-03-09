@@ -1,12 +1,12 @@
 use axum::body::{self};
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
 use crate::test_support::{MockRepository, make_client_jwt, make_signing_key_row};
 
-use super::{add_client_pairings, build_test_app, json_body, make_client_row};
+use super::{add_client_pairings, build_test_app, make_client_row, query_gpg_keys_request};
 
 #[tokio::test]
 async fn query_gpg_keys_returns_aggregated_keys() {
@@ -36,12 +36,7 @@ async fn query_gpg_keys_returns_aggregated_keys() {
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-2", "pair-2");
 
     let response = app
-        .oneshot(
-            Request::post("/pairing/gpg-keys")
-                .header("content-type", "application/json")
-                .body(json_body(&[t1, t2]))
-                .unwrap(),
-        )
+        .oneshot(query_gpg_keys_request(&[t1, t2]))
         .await
         .unwrap();
 
@@ -68,15 +63,7 @@ async fn query_gpg_keys_returns_empty_when_no_keys() {
     let app = build_test_app(repo);
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
-    let response = app
-        .oneshot(
-            Request::post("/pairing/gpg-keys")
-                .header("content-type", "application/json")
-                .body(json_body(&[token]))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(query_gpg_keys_request(&[token])).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let resp_body = body::to_bytes(response.into_body(), usize::MAX)
@@ -112,12 +99,7 @@ async fn query_gpg_keys_missing_client_returns_remaining_keys() {
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-deleted", "pair-deleted");
 
     let response = app
-        .oneshot(
-            Request::post("/pairing/gpg-keys")
-                .header("content-type", "application/json")
-                .body(json_body(&[t1, t2]))
-                .unwrap(),
-        )
+        .oneshot(query_gpg_keys_request(&[t1, t2]))
         .await
         .unwrap();
 
@@ -147,15 +129,7 @@ async fn query_gpg_keys_malformed_json_returns_500() {
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-bad", "pair-bad");
 
-    let response = app
-        .oneshot(
-            Request::post("/pairing/gpg-keys")
-                .header("content-type", "application/json")
-                .body(json_body(&[token]))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(query_gpg_keys_request(&[token])).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

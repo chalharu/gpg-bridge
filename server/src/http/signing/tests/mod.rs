@@ -11,7 +11,9 @@ use crate::jwt::{
     generate_signing_key_pair, jwk_to_json, sign_jws,
 };
 use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
-use crate::test_support::{MockRepository, make_signing_key_row};
+use crate::test_support::{
+    MockRepository, make_signing_key_row, make_test_client_pairing_row, make_test_client_row,
+};
 
 use super::{get_sign_request, post_sign_request, post_sign_result};
 
@@ -36,16 +38,13 @@ fn make_client_row_with_enc_key(client_id: &str, enc_kid: &str) -> ClientRow {
         "use": "enc",
         "alg": "ECDH-ES+A256KW"
     });
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: serde_json::to_string(&vec![enc_key]).unwrap(),
-        default_kid: enc_kid.to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row(
+        client_id,
+        "tok",
+        serde_json::to_string(&vec![enc_key]).unwrap(),
+        enc_kid,
+        "[]",
+    )
 }
 
 fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
@@ -58,16 +57,13 @@ fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
         "use": "sig",
         "alg": "ES256"
     });
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: serde_json::to_string(&vec![sig_key]).unwrap(),
-        default_kid: "sig-kid".to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row(
+        client_id,
+        "tok",
+        serde_json::to_string(&vec![sig_key]).unwrap(),
+        "sig-kid",
+        "[]",
+    )
 }
 
 fn build_app(state: AppState) -> Router {
@@ -178,16 +174,13 @@ fn seed_daemon_auth_request(
 fn add_signing_client(repo: &MockRepository, client_id: &str) -> (josekit::jwk::Jwk, String) {
     let (client_priv, client_pub, client_kid) = generate_signing_key_pair().unwrap();
     let pub_json = jwk_to_json(&client_pub).unwrap();
-    repo.clients.lock().unwrap().push(ClientRow {
-        client_id: client_id.into(),
-        created_at: "2026-01-01T00:00:00+00:00".into(),
-        updated_at: "2026-01-01T00:00:00+00:00".into(),
-        device_token: "tok".into(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
-        public_keys: format!("[{pub_json}]"),
-        default_kid: client_kid.clone(),
-        gpg_keys: "[]".into(),
-    });
+    repo.clients.lock().unwrap().push(make_test_client_row(
+        client_id,
+        "tok",
+        format!("[{pub_json}]"),
+        &client_kid,
+        "[]",
+    ));
     (client_priv, client_kid)
 }
 
@@ -195,11 +188,7 @@ fn add_signing_client_pairing(repo: &MockRepository, client_id: &str, pairing_id
     repo.client_pairings_data
         .lock()
         .unwrap()
-        .push(ClientPairingRow {
-            client_id: client_id.into(),
-            pairing_id: pairing_id.into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
-        });
+        .push(make_test_client_pairing_row(client_id, pairing_id));
 }
 
 fn make_pending_request(

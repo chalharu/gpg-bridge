@@ -1,230 +1,12 @@
 use super::*;
 use crate::jwt::{generate_signing_key_pair, sign_jws};
-use crate::repository::{
-    AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
-    ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
-    PairingRepository, PairingRow, RequestRepository, RequestRow, SignatureRepository,
-    SigningKeyRepository, SigningKeyRow,
-};
-use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Json, Router};
 use tower::ServiceExt;
 
-use crate::test_support::{make_signing_key_row, make_test_app_state};
-
-// ---- Mock repository ----
-
-#[derive(Debug, Clone)]
-struct MockRepo {
-    signing_key: Option<SigningKeyRow>,
-}
-
-#[async_trait]
-impl SigningKeyRepository for MockRepo {
-    async fn store_signing_key(&self, _: &SigningKeyRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn get_active_signing_key(&self) -> anyhow::Result<Option<SigningKeyRow>> {
-        Ok(self.signing_key.clone())
-    }
-    async fn get_signing_key_by_kid(&self, kid: &str) -> anyhow::Result<Option<SigningKeyRow>> {
-        Ok(self.signing_key.as_ref().filter(|k| k.kid == kid).cloned())
-    }
-    async fn retire_signing_key(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_expired_signing_keys(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl ClientRepository for MockRepo {
-    async fn get_client_by_id(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
-        Ok(None)
-    }
-    async fn create_client(&self, _: &ClientRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn client_exists(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn client_by_device_token(&self, _: &str) -> anyhow::Result<Option<ClientRow>> {
-        unimplemented!()
-    }
-    async fn update_client_device_token(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_client_default_kid(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_client(&self, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_device_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn update_client_public_keys(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn update_client_gpg_keys(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl ClientPairingRepository for MockRepo {
-    async fn get_client_pairings(&self, _: &str) -> anyhow::Result<Vec<ClientPairingRow>> {
-        Ok(vec![])
-    }
-    async fn create_client_pairing(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_client_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_client_pairing_and_cleanup(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<(bool, bool)> {
-        unimplemented!()
-    }
-    async fn update_client_jwt_issued_at(&self, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl PairingRepository for MockRepo {
-    async fn create_pairing(&self, _: &str, _: &str) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn get_pairing_by_id(&self, _: &str) -> anyhow::Result<Option<PairingRow>> {
-        unimplemented!()
-    }
-    async fn consume_pairing(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn count_unconsumed_pairings(&self, _: &str) -> anyhow::Result<i64> {
-        unimplemented!()
-    }
-    async fn delete_expired_pairings(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl RequestRepository for MockRepo {
-    async fn get_request_by_id(&self, _: &str) -> anyhow::Result<Option<RequestRow>> {
-        Ok(None)
-    }
-    async fn get_full_request_by_id(&self, _: &str) -> anyhow::Result<Option<FullRequestRow>> {
-        unimplemented!()
-    }
-    async fn update_request_phase2(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn create_request(&self, _: &CreateRequestRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn count_pending_requests_for_pairing(&self, _: &str, _: &str) -> anyhow::Result<i64> {
-        unimplemented!()
-    }
-    async fn get_pending_requests_for_client(
-        &self,
-        _: &str,
-    ) -> anyhow::Result<Vec<FullRequestRow>> {
-        unimplemented!()
-    }
-    async fn update_request_approved(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn update_request_denied(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn add_unavailable_client_id(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> anyhow::Result<Option<(String, String)>> {
-        unimplemented!()
-    }
-    async fn update_request_unavailable(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_request(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-    async fn delete_expired_requests(&self, _: &str) -> anyhow::Result<Vec<String>> {
-        unimplemented!()
-    }
-    async fn is_kid_in_flight(&self, _: &str) -> anyhow::Result<bool> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl AuditLogRepository for MockRepo {
-    async fn create_audit_log(&self, _: &AuditLogRow) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-    async fn delete_expired_audit_logs(&self, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl JtiRepository for MockRepo {
-    async fn store_jti(&self, _: &str, _: &str) -> anyhow::Result<bool> {
-        Ok(true)
-    }
-    async fn delete_expired_jtis(&self, _: &str) -> anyhow::Result<u64> {
-        Ok(0)
-    }
-}
-
-#[async_trait]
-impl CleanupRepository for MockRepo {
-    async fn delete_unpaired_clients(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-    async fn delete_expired_device_jwt_clients(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-    async fn delete_expired_client_jwt_pairings(&self, _: &str) -> anyhow::Result<u64> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl SignatureRepository for MockRepo {
-    async fn run_migrations(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn health_check(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    fn backend_name(&self) -> &'static str {
-        "mock"
-    }
-}
+use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
 
 async fn handler(_auth: SignJwtAuth) -> Json<String> {
     Json("ok".into())
@@ -257,9 +39,7 @@ fn make_sign_jwt(
 async fn valid_sign_jwt_succeeds() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-    let state = make_test_app_state(MockRepo {
-        signing_key: Some(sk),
-    });
+    let state = make_test_app_state(MockRepository::new(sk));
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
@@ -278,7 +58,7 @@ async fn valid_sign_jwt_succeeds() {
 
 #[tokio::test]
 async fn missing_auth_returns_401() {
-    let state = make_test_app_state(MockRepo { signing_key: None });
+    let state = make_test_app_state(MockRepository::default());
     let app = build_app(state);
 
     let response = app
@@ -294,9 +74,7 @@ async fn wrong_key_returns_401() {
     let (priv_jwk, _pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let (_other_priv, other_pub, other_kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &other_pub, &other_kid);
-    let state = make_test_app_state(MockRepo {
-        signing_key: Some(sk),
-    });
+    let state = make_test_app_state(MockRepository::new(sk));
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
@@ -317,9 +95,7 @@ async fn wrong_key_returns_401() {
 async fn expired_sign_jwt_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-    let state = make_test_app_state(MockRepo {
-        signing_key: Some(sk),
-    });
+    let state = make_test_app_state(MockRepository::new(sk));
     let app = build_app(state);
 
     let claims = SignClaims {
@@ -348,9 +124,7 @@ async fn expired_signing_key_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let mut sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     sk.expires_at = "2020-01-01T00:00:00Z".into(); // expired key
-    let state = make_test_app_state(MockRepo {
-        signing_key: Some(sk),
-    });
+    let state = make_test_app_state(MockRepository::new(sk));
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
