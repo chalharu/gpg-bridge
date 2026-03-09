@@ -10,9 +10,10 @@ use crate::test_support::{
 };
 
 use super::{
-    add_client_pairing, add_client_with_assertion_key, build_app, delete_pairing_by_daemon_request,
-    get_pairing_token_request, make_client_row, make_client_with_public_key,
-    make_device_assertion_token, make_pairing_repo, make_pairing_token, pair_device_request,
+    add_client_pairing, add_client_pairings, add_client_with_assertion_key, build_app,
+    build_test_app, delete_pairing_by_daemon_request, get_pairing_token_request, make_client_row,
+    make_client_with_public_key, make_device_assertion_token, make_pairing_repo,
+    make_pairing_token, pair_device_request,
 };
 
 // ===========================================================================
@@ -25,8 +26,7 @@ use super::{
 async fn get_pairing_token_no_signing_key_returns_500() {
     let (_priv_server, _pub_server, _server_kid, mut repo) = make_pairing_repo();
     repo.signing_key = None; // no active key
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let response = app.oneshot(get_pairing_token_request()).await.unwrap();
 
@@ -40,8 +40,7 @@ async fn pair_device_invalid_token_format_returns_400() {
     let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let device_assertion =
         make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing");
@@ -65,8 +64,7 @@ async fn pair_device_unknown_signing_key_returns_400() {
 
     let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     // Sign the pairing token with the OTHER key (kid won't match repo)
     let pairing_token = make_pairing_token(&priv_other, &other_kid, "pair-test");
@@ -94,8 +92,7 @@ async fn pair_device_pairing_not_found_returns_410() {
     repo.clients.lock().unwrap().push(client);
     // No pairing record in DB — pairing_id from JWT won't be found
 
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-nonexistent");
     let device_assertion =
@@ -123,8 +120,7 @@ async fn delete_by_daemon_invalid_jwt_returns_401() {
     let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
     let repo = MockRepository::new(sk);
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let body_json = json!({ "client_jwt": "not-a-valid-jwt" });
 
@@ -205,14 +201,7 @@ async fn delete_by_phone_last_pairing_deletes_client() {
 
     let repo = MockRepository::new(sk);
     repo.clients.lock().unwrap().push(client);
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-only".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    add_client_pairings(&repo, &[("fid-1", "pair-only")]);
 
     let state = make_test_app_state(repo);
     let app = build_app(state.clone());
@@ -250,17 +239,7 @@ async fn delete_by_daemon_preserves_client_with_remaining_pairings() {
         .unwrap()
         .push(make_client_row("fid-1", "[]"));
     {
-        let mut cp = repo.client_pairings_data.lock().unwrap();
-        cp.push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-a".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
-        cp.push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-b".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+        add_client_pairings(&repo, &[("fid-1", "pair-a"), ("fid-1", "pair-b")]);
     }
 
     let state = make_test_app_state(repo);

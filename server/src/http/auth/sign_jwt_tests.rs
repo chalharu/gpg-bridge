@@ -1,5 +1,5 @@
 use super::*;
-use crate::jwt::{encrypt_private_key, generate_signing_key_pair, jwk_to_json, sign_jws};
+use crate::jwt::{generate_signing_key_pair, sign_jws};
 use crate::repository::{
     AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
     ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
@@ -11,10 +11,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Json, Router};
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_SECRET: &str = "test-secret-key!";
+use crate::test_support::{make_signing_key_row, make_test_app_state};
 
 // ---- Mock repository ----
 
@@ -227,49 +226,6 @@ impl SignatureRepository for MockRepo {
     }
 }
 
-// ---- Helpers ----
-
-fn make_signing_key_row(
-    priv_jwk: &josekit::jwk::Jwk,
-    pub_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-) -> SigningKeyRow {
-    let private_json = jwk_to_json(priv_jwk).unwrap();
-    let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    SigningKeyRow {
-        kid: kid.to_owned(),
-        private_key: encrypted,
-        public_key: jwk_to_json(pub_jwk).unwrap(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        expires_at: "2027-01-01T00:00:00Z".into(),
-        is_active: true,
-    }
-}
-
-fn make_state(repo: impl SignatureRepository + 'static) -> AppState {
-    use crate::http::pairing::notifier::PairingNotifier;
-    use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
-
-    AppState {
-        repository: Arc::new(repo),
-        base_url: "https://api.example.com".to_owned(),
-        signing_key_secret: TEST_SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(crate::http::fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
-    }
-}
-
 async fn handler(_auth: SignJwtAuth) -> Json<String> {
     Json("ok".into())
 }
@@ -301,7 +257,7 @@ fn make_sign_jwt(
 async fn valid_sign_jwt_succeeds() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-    let state = make_state(MockRepo {
+    let state = make_test_app_state(MockRepo {
         signing_key: Some(sk),
     });
     let app = build_app(state);
@@ -322,7 +278,7 @@ async fn valid_sign_jwt_succeeds() {
 
 #[tokio::test]
 async fn missing_auth_returns_401() {
-    let state = make_state(MockRepo { signing_key: None });
+    let state = make_test_app_state(MockRepo { signing_key: None });
     let app = build_app(state);
 
     let response = app
@@ -338,7 +294,7 @@ async fn wrong_key_returns_401() {
     let (priv_jwk, _pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let (_other_priv, other_pub, other_kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &other_pub, &other_kid);
-    let state = make_state(MockRepo {
+    let state = make_test_app_state(MockRepo {
         signing_key: Some(sk),
     });
     let app = build_app(state);
@@ -361,7 +317,7 @@ async fn wrong_key_returns_401() {
 async fn expired_sign_jwt_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-    let state = make_state(MockRepo {
+    let state = make_test_app_state(MockRepo {
         signing_key: Some(sk),
     });
     let app = build_app(state);
@@ -392,7 +348,7 @@ async fn expired_signing_key_returns_401() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let mut sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     sk.expires_at = "2020-01-01T00:00:00Z".into(); // expired key
-    let state = make_state(MockRepo {
+    let state = make_test_app_state(MockRepo {
         signing_key: Some(sk),
     });
     let app = build_app(state);

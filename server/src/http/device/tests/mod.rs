@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use axum::Router;
+use axum::body::Body;
+use axum::http::{Method, Request, header};
 use axum::routing::{delete, get, patch, post};
 use serde_json::json;
 
@@ -6,7 +10,8 @@ use crate::http::AppState;
 use crate::jwt::{
     DeviceAssertionClaims, build_signing_key_row, generate_signing_key_pair, jwk_to_json, sign_jws,
 };
-use crate::repository::{ClientRow, SigningKeyRow};
+use crate::repository::{ClientRepository, ClientRow, SigningKeyRepository, SigningKeyRow};
+use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
 
 use super::{
     add_gpg_key, add_public_key, delete_device, delete_gpg_key, delete_public_key, list_gpg_keys,
@@ -90,6 +95,64 @@ fn build_test_router(state: AppState) -> Router {
         .route("/device/gpg_key", get(list_gpg_keys))
         .route("/device/gpg_key/{keygrip}", delete(delete_gpg_key))
         .with_state(state)
+}
+
+struct DeviceAppFixture {
+    repo: Arc<crate::repository::SqliteRepository>,
+    app: Router,
+}
+
+impl DeviceAppFixture {
+    async fn new() -> Self {
+        let (sk, _) = make_signing_key_row();
+        let repo = build_test_sqlite_repo().await;
+        repo.store_signing_key(&sk).await.unwrap();
+
+        let app = build_test_router(make_test_app_state_arc(
+            Arc::clone(&repo) as Arc<dyn crate::repository::SignatureRepository>
+        ));
+
+        Self { repo, app }
+    }
+
+    async fn with_client(client: &ClientRow) -> Self {
+        let fixture = Self::new().await;
+        fixture.repo.create_client(client).await.unwrap();
+        fixture
+    }
+}
+
+fn json_request(method: Method, uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
+fn authed_request(method: Method, uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn authed_json_request(
+    method: Method,
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
 }
 
 // ---------------------------------------------------------------------------

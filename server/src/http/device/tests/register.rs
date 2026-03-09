@@ -7,30 +7,27 @@ use tower::ServiceExt;
 
 use crate::jwt::{DeviceClaims, PayloadType, generate_signing_key_pair, jwk_to_json, sign_jws};
 use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc, response_json};
+use crate::test_support::{make_test_app_state_arc, response_json};
 
 use super::{
-    SECRET, X_COORD, Y_COORD, build_test_router, make_client_row, make_device_assertion,
-    make_signing_key_row, register_body,
+    DeviceAppFixture, SECRET, X_COORD, Y_COORD, build_test_router, build_test_sqlite_repo,
+    json_request, make_client_row, make_device_assertion, make_signing_key_row, register_body,
 };
 
 fn post_device_request(body: serde_json::Value) -> Request<Body> {
-    Request::post("/device")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&body).unwrap()))
-        .unwrap()
+    json_request(Method::POST, "/device", &body)
 }
 
 #[tokio::test]
 async fn register_device_success() {
-    let (sk, _) = make_signing_key_row();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let fixture = DeviceAppFixture::new().await;
 
     let body = register_body("fid-1", "token-1");
-    let response = app.oneshot(post_device_request(body)).await.unwrap();
+    let response = fixture
+        .app
+        .oneshot(post_device_request(body))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
     let json = response_json(response).await;
@@ -39,32 +36,30 @@ async fn register_device_success() {
 
 #[tokio::test]
 async fn register_device_fid_conflict() {
-    let (sk, _) = make_signing_key_row();
     let client = make_client_row("fid-1", "old-token", "[]", "kid-1");
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let body = register_body("fid-1", "token-1");
-    let response = app.oneshot(post_device_request(body)).await.unwrap();
+    let response = fixture
+        .app
+        .oneshot(post_device_request(body))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
 async fn register_device_token_conflict() {
-    let (sk, _) = make_signing_key_row();
     let client = make_client_row("other-fid", "shared-token", "[]", "kid-1");
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let body = register_body("fid-1", "shared-token");
-    let response = app.oneshot(post_device_request(body)).await.unwrap();
+    let response = fixture
+        .app
+        .oneshot(post_device_request(body))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
@@ -72,8 +67,9 @@ async fn register_device_token_conflict() {
 #[tokio::test]
 async fn register_device_without_active_signing_key_returns_500() {
     let repo = build_test_sqlite_repo().await;
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let app = build_test_router(make_test_app_state_arc(
+        repo as Arc<dyn SignatureRepository>,
+    ));
 
     let body = register_body("fid-no-key", "token-no-key");
     let response = app.oneshot(post_device_request(body)).await.unwrap();
@@ -108,24 +104,16 @@ async fn register_device_with_invalid_stored_signing_key_returns_500() {
 
 #[tokio::test]
 async fn register_device_missing_sig_keys() {
-    let (sk, _) = make_signing_key_row();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let fixture = DeviceAppFixture::new().await;
 
     let body = json!({
         "device_token": "t",
         "firebase_installation_id": "fid-1",
         "public_key": { "keys": { "sig": [], "enc": [{ "kty": "EC", "use": "enc", "crv": "P-256", "alg": "ECDH-ES+A256KW", "x": X_COORD, "y": Y_COORD }] } }
     });
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_device_request(body))
         .await
         .unwrap();
 
@@ -134,11 +122,7 @@ async fn register_device_missing_sig_keys() {
 
 #[tokio::test]
 async fn register_device_invalid_sig_key_alg() {
-    let (sk, _) = make_signing_key_row();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let fixture = DeviceAppFixture::new().await;
 
     let body = json!({
         "device_token": "t",
@@ -150,13 +134,9 @@ async fn register_device_invalid_sig_key_alg() {
             }
         }
     });
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_device_request(body))
         .await
         .unwrap();
 

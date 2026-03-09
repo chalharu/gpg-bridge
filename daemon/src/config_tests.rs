@@ -14,6 +14,29 @@ fn assert_basic_file_config(config: FileConfig, log_level: &str) {
     assert_eq!(config.log_level, Some(log_level.to_owned()));
 }
 
+fn sample_file_config() -> FileConfig {
+    FileConfig {
+        server_url: Some("https://file.example".to_owned()),
+        socket_path: Some("tmp/file.sock".to_owned()),
+        log_level: Some("warn".to_owned()),
+        kill_existing_agent: None,
+    }
+}
+
+fn assert_runtime_config(
+    config: AppConfig,
+    server_url: &str,
+    socket_path: &str,
+    log_level: &str,
+    kill_existing_agent: bool,
+) {
+    assert_eq!(config.server_url, server_url);
+    assert_eq!(config.socket_path, socket_path);
+    assert_eq!(config.log_level, log_level);
+    assert_eq!(config.kill_existing_agent, kill_existing_agent);
+    assert!(config.allow_replace_existing_socket);
+}
+
 #[test]
 fn cli_defaults_are_applied() {
     let cli = parse_cli_from(["gpg-bridge-daemon"]);
@@ -93,12 +116,7 @@ fn cli_overrides_env_and_file_config() {
         "error",
     ]);
 
-    let file = FileConfig {
-        server_url: Some("https://file.example".to_owned()),
-        socket_path: Some("tmp/file.sock".to_owned()),
-        log_level: Some("warn".to_owned()),
-        kill_existing_agent: None,
-    };
+    let file = sample_file_config();
 
     let lookup = |key: &str| match key {
         "DAEMON_SERVER_URL" => Some("https://env.example".to_owned()),
@@ -109,21 +127,19 @@ fn cli_overrides_env_and_file_config() {
 
     let config = build_app_config(&cli, &file, &lookup, None).unwrap();
 
-    assert_eq!(config.server_url, "https://cli.example");
-    assert_eq!(config.socket_path, "tmp/cli.sock");
-    assert_eq!(config.log_level, "error");
-    assert!(!config.kill_existing_agent);
+    assert_runtime_config(
+        config,
+        "https://cli.example",
+        "tmp/cli.sock",
+        "error",
+        false,
+    );
 }
 
 #[test]
 fn env_overrides_file_config() {
     let cli = parse_cli_from(["gpg-bridge-daemon"]);
-    let file = FileConfig {
-        server_url: Some("https://file.example".to_owned()),
-        socket_path: Some("tmp/file.sock".to_owned()),
-        log_level: Some("warn".to_owned()),
-        kill_existing_agent: None,
-    };
+    let file = sample_file_config();
 
     let lookup = |key: &str| match key {
         "DAEMON_SERVER_URL" => Some("https://env.example".to_owned()),
@@ -134,10 +150,13 @@ fn env_overrides_file_config() {
 
     let config = build_app_config(&cli, &file, &lookup, None).unwrap();
 
-    assert_eq!(config.server_url, "https://env.example");
-    assert_eq!(config.socket_path, "tmp/env.sock");
-    assert_eq!(config.log_level, "debug");
-    assert!(!config.kill_existing_agent);
+    assert_runtime_config(
+        config,
+        "https://env.example",
+        "tmp/env.sock",
+        "debug",
+        false,
+    );
 }
 
 #[test]

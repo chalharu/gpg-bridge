@@ -117,11 +117,23 @@ fn add_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) 
     repo.client_pairings_data
         .lock()
         .unwrap()
-        .push(ClientPairingRow {
-            client_id: client_id.into(),
-            pairing_id: pairing_id.into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+        .push(make_client_pairing_row(client_id, pairing_id));
+}
+
+fn add_client_pairings(repo: &MockRepository, pairings: &[(&str, &str)]) {
+    repo.client_pairings_data.lock().unwrap().extend(
+        pairings
+            .iter()
+            .map(|(client_id, pairing_id)| make_client_pairing_row(client_id, pairing_id)),
+    );
+}
+
+fn make_client_pairing_row(client_id: &str, pairing_id: &str) -> ClientPairingRow {
+    ClientPairingRow {
+        client_id: client_id.into(),
+        pairing_id: pairing_id.into(),
+        client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
+    }
 }
 
 fn get_pairing_token_request() -> Request<Body> {
@@ -255,6 +267,18 @@ fn pairing_session_request(auth_header: Option<&str>) -> Request<Body> {
         builder = builder.header(header::AUTHORIZATION, value);
     }
     builder.body(Body::empty()).unwrap()
+}
+
+fn pairing_session_bearer_request(token: &str) -> Request<Body> {
+    let bearer = format!("Bearer {token}");
+    pairing_session_request(Some(&bearer))
+}
+
+fn pairing_session_bearer_request_without_ip(token: &str) -> Request<Body> {
+    Request::get("/pairing-session")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
 }
 
 fn json_body(tokens: &[String]) -> Body {

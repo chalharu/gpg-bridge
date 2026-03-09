@@ -1,97 +1,19 @@
 use std::sync::{Arc, Mutex};
 
-use axum::Router;
-use axum::body::Body;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::http::AppState;
-use crate::http::signing::{get_sign_request, post_sign_result};
-use crate::jwt::{
-    DeviceAssertionClaims, PayloadType, SignClaims, generate_signing_key_pair, sign_jws,
-};
-use crate::repository::FullRequestRow;
+use crate::jwt::generate_signing_key_pair;
 use crate::test_support::{
     MockRepository, make_signing_key_row, make_test_app_state, make_test_app_state_arc,
 };
 
 use super::{
-    add_signing_client, add_signing_client_pairing, body_json, make_pending_request,
-    make_signing_repo,
+    add_signing_client, add_signing_client_pairing, body_json, build_get_app, build_result_app,
+    get_request_with_auth, make_device_assertion, make_full_request, make_pending_request,
+    make_sign_jwt, make_signing_repo, post_result_json,
 };
-
-// ===========================================================================
-// GET /sign-request & POST /sign-result tests
-// ===========================================================================
-
-// ---------------------------------------------------------------------------
-// GET /sign-request helpers
-// ---------------------------------------------------------------------------
-
-fn build_get_app(state: AppState) -> Router {
-    Router::new()
-        .route("/sign-request", get(get_sign_request))
-        .with_state(state)
-}
-
-fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, path: &str) -> String {
-    let claims = DeviceAssertionClaims {
-        iss: sub.to_owned(),
-        sub: sub.to_owned(),
-        aud: format!("https://api.example.com{path}"),
-        exp: 1_900_000_000,
-        iat: 1_900_000_000 - 30,
-        jti: uuid::Uuid::new_v4().to_string(),
-    };
-    sign_jws(&claims, priv_jwk, kid).unwrap()
-}
-
-fn get_request_with_auth(token: &str) -> axum::http::Request<Body> {
-    axum::http::Request::builder()
-        .uri("/sign-request")
-        .method("GET")
-        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::empty())
-        .unwrap()
-}
-
-// ---------------------------------------------------------------------------
-// POST /sign-result helpers
-// ---------------------------------------------------------------------------
-
-fn build_result_app(state: AppState) -> Router {
-    Router::new()
-        .route("/sign-result", post(post_sign_result))
-        .with_state(state)
-}
-
-fn make_sign_jwt(
-    priv_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-    request_id: &str,
-    client_id: &str,
-) -> String {
-    let exp = chrono::Utc::now().timestamp() + 300;
-    let claims = SignClaims {
-        sub: request_id.to_owned(),
-        client_id: client_id.to_owned(),
-        payload_type: PayloadType::Sign,
-        exp,
-    };
-    sign_jws(&claims, priv_jwk, kid).unwrap()
-}
-
-fn post_result_json(token: &str, body: &serde_json::Value) -> axum::http::Request<Body> {
-    axum::http::Request::builder()
-        .uri("/sign-result")
-        .method("POST")
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::from(serde_json::to_vec(body).unwrap()))
-        .unwrap()
-}
 
 // ===========================================================================
 // GET /sign-request tests
@@ -269,19 +191,7 @@ async fn post_sign_result_denied_returns_204() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     let mut repo = MockRepository::new(key_row);
-    repo.full_request = Mutex::new(Some(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "pending".into(),
-        expired: "2027-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: "{}".into(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    }));
+    repo.full_request = Mutex::new(Some(make_full_request("req-1", "pending", None)));
     let state = make_test_app_state(repo);
     let app = build_result_app(state);
 
@@ -295,8 +205,9 @@ async fn post_sign_result_denied_returns_204() {
 async fn post_sign_result_denied_conflict_returns_409() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-    let repo = MockRepository::new(key_row);
-    *repo.deny_result.lock().unwrap() = Some(false); // CAS failure
+    let mut repo = MockRepository::new(key_row);
+    repo.full_request = Mutex::new(Some(make_full_request("req-1", "pending", None)));
+    *repo.deny_result.lock().unwrap() = Some(false);
     let state = make_test_app_state(repo);
     let app = build_result_app(state);
 
@@ -307,15 +218,13 @@ async fn post_sign_result_denied_conflict_returns_409() {
 }
 
 #[tokio::test]
-async fn post_sign_result_unavailable_returns_204() {
+async fn post_sign_result_unavailable_all_clients_triggers_status_change() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     let repo = MockRepository::new(key_row);
-    // Not all clients unavailable yet
-    *repo.add_unavailable_result.lock().unwrap() = Some(Some((
-        r#"["client-1"]"#.into(),
-        r#"["client-1","client-2"]"#.into(),
-    )));
+    // All clients now unavailable
+    *repo.add_unavailable_result.lock().unwrap() =
+        Some(Some((r#"["client-1"]"#.into(), r#"["client-1"]"#.into())));
     let state = make_test_app_state(repo);
     let app = build_result_app(state);
 
@@ -326,13 +235,14 @@ async fn post_sign_result_unavailable_returns_204() {
 }
 
 #[tokio::test]
-async fn post_sign_result_unavailable_all_clients_triggers_status_change() {
+async fn post_sign_result_unavailable_returns_204() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     let repo = MockRepository::new(key_row);
-    // All clients now unavailable
-    *repo.add_unavailable_result.lock().unwrap() =
-        Some(Some((r#"["client-1"]"#.into(), r#"["client-1"]"#.into())));
+    *repo.add_unavailable_result.lock().unwrap() = Some(Some((
+        r#"["client-1"]"#.into(),
+        r#"["client-1","client-2"]"#.into(),
+    )));
     let state = make_test_app_state(repo);
     let app = build_result_app(state);
 
@@ -376,19 +286,10 @@ async fn post_sign_result_approved_writes_audit_log() {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let key_row = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
     let repo = Arc::new(MockRepository::new(key_row));
-    repo.full_request.lock().unwrap().replace(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "pending".into(),
-        expired: "2027-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: "{}".into(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
+    repo.full_request
+        .lock()
+        .unwrap()
+        .replace(make_full_request("req-1", "pending", None));
 
     let state = make_test_app_state_arc(repo.clone());
     let app = build_result_app(state);

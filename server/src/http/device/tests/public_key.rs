@@ -1,42 +1,40 @@
 use std::sync::{Arc, Mutex};
 
 use axum::body::{self, Body};
-use axum::http::{Request, StatusCode, header};
+use axum::http::{Method, Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{
-    MockRepository, build_test_sqlite_repo, make_test_app_state, make_test_app_state_arc,
-};
+use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
 
 use super::{
-    X_COORD, Y_COORD, build_test_router, make_client_row, make_device_assertion,
-    make_pk_test_setup, make_signing_key_row,
+    DeviceAppFixture, X_COORD, Y_COORD, authed_json_request, authed_request, build_test_router,
+    build_test_sqlite_repo, make_client_row, make_device_assertion, make_pk_test_setup,
+    make_signing_key_row,
 };
+
+fn post_public_key_request(token: &str, body: &serde_json::Value) -> Request<Body> {
+    authed_json_request(Method::POST, "/device/public_key", token, body)
+}
+
+fn get_public_key_request(token: &str) -> Request<Body> {
+    authed_request(Method::GET, "/device/public_key", token)
+}
 
 #[tokio::test]
 async fn add_public_key_sig_success() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [{ "kty": "EC", "use": "sig", "crv": "P-256", "alg": "ES256", "x": X_COORD, "y": Y_COORD }]
     });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -45,25 +43,16 @@ async fn add_public_key_sig_success() {
 
 #[tokio::test]
 async fn add_public_key_enc_success() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [{ "kty": "EC", "use": "enc", "crv": "P-256", "alg": "ECDH-ES+A256KW", "x": X_COORD, "y": Y_COORD }]
     });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -72,26 +61,17 @@ async fn add_public_key_enc_success() {
 
 #[tokio::test]
 async fn add_public_key_with_default_kid_change() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [{ "kty": "EC", "use": "enc", "crv": "P-256", "alg": "ECDH-ES+A256KW", "kid": "enc-new", "x": X_COORD, "y": Y_COORD }],
         "default_kid": "enc-new"
     });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -100,25 +80,16 @@ async fn add_public_key_with_default_kid_change() {
 
 #[tokio::test]
 async fn add_public_key_invalid_key_rejected() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [{ "kty": "EC", "use": "sig", "crv": "P-256", "alg": "RS256", "x": X_COORD, "y": Y_COORD }]
     });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -127,23 +98,14 @@ async fn add_public_key_invalid_key_rejected() {
 
 #[tokio::test]
 async fn add_public_key_empty_keys_rejected() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({ "keys": [] });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -152,25 +114,16 @@ async fn add_public_key_empty_keys_rejected() {
 
 #[tokio::test]
 async fn add_public_key_unsupported_use_rejected() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [{ "kty": "EC", "use": "other", "crv": "P-256", "alg": "ES256", "x": X_COORD, "y": Y_COORD }]
     });
-    let response = app
-        .oneshot(
-            Request::post("/device/public_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(post_public_key_request(&token, &body))
         .await
         .unwrap();
 
@@ -183,21 +136,13 @@ async fn add_public_key_unsupported_use_rejected() {
 
 #[tokio::test]
 async fn list_public_keys_returns_all() {
-    let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (priv_jwk, kid, _sk, client, enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let response = app
-        .oneshot(
-            Request::get("/device/public_key")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let response = fixture
+        .app
+        .oneshot(get_public_key_request(&token))
         .await
         .unwrap();
 
@@ -229,7 +174,8 @@ async fn delete_public_key_success() {
         "[{pub_json_patched},{{\"kty\":\"EC\",\"use\":\"sig\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"kid\":\"sig-2\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
     );
     let client = make_client_row("fid-del", "tok-del", &keys, "enc-1");
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -252,7 +198,8 @@ async fn delete_public_key_success() {
 #[tokio::test]
 async fn delete_public_key_last_sig_returns_409() {
     let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -280,7 +227,8 @@ async fn delete_public_key_last_sig_returns_409() {
 #[tokio::test]
 async fn delete_public_key_last_enc_returns_409() {
     let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -308,7 +256,8 @@ async fn delete_public_key_last_enc_returns_409() {
 #[tokio::test]
 async fn delete_public_key_not_found_returns_404() {
     let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -372,7 +321,8 @@ async fn delete_public_key_auto_reassign_default_kid() {
         "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-del\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-keep\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
     );
     let client = make_client_row("fid-reassign", "tok-reassign", &keys, "enc-del");
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
@@ -412,7 +362,8 @@ async fn delete_public_key_auto_reassign_default_kid() {
 #[tokio::test]
 async fn add_public_key_default_kid_referencing_sig_key_rejected() {
     let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -441,7 +392,8 @@ async fn add_public_key_default_kid_referencing_sig_key_rejected() {
 #[tokio::test]
 async fn add_public_key_default_kid_nonexistent_rejected() {
     let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
@@ -480,7 +432,8 @@ async fn delete_public_key_no_default_kid_reassign_when_not_affected() {
         "[{pub_json_patched},{{\"kty\":\"EC\",\"use\":\"sig\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"kid\":\"sig-extra\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
     );
     let client = make_client_row("fid-noreassign", "tok-noreassign", &keys, "enc-1");
-    let repo = build_test_sqlite_repo().await;
+    let repo: Arc<crate::repository::SqliteRepository> =
+        crate::test_support::build_test_sqlite_repo().await;
     repo.store_signing_key(&sk).await.unwrap();
     repo.create_client(&client).await.unwrap();
     let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);

@@ -1,7 +1,5 @@
 use super::*;
-use crate::jwt::{
-    encrypt_jwe_direct, encrypt_private_key, generate_signing_key_pair, jwk_to_json, sign_jws,
-};
+use crate::jwt::{encrypt_jwe_direct, generate_signing_key_pair, sign_jws};
 use crate::repository::{
     AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
     ClientRepository, ClientRow, CreateRequestRow, FullRequestRow, JtiRepository,
@@ -13,10 +11,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_SECRET: &str = "test-secret-key!";
+use crate::test_support::{make_client_jwt, make_signing_key_row, make_test_app_state};
 
 // ---- Mock repository ----
 
@@ -235,71 +232,6 @@ impl SignatureRepository for MockRepo {
     }
 }
 
-// ---- Helpers ----
-
-fn make_signing_key_row(
-    priv_jwk: &josekit::jwk::Jwk,
-    pub_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-) -> SigningKeyRow {
-    let private_json = jwk_to_json(priv_jwk).unwrap();
-    let encrypted = encrypt_private_key(&private_json, TEST_SECRET).unwrap();
-    SigningKeyRow {
-        kid: kid.to_owned(),
-        private_key: encrypted,
-        public_key: jwk_to_json(pub_jwk).unwrap(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        expires_at: "2027-01-01T00:00:00Z".into(),
-        is_active: true,
-    }
-}
-
-fn make_client_jwt(
-    priv_jwk: &josekit::jwk::Jwk,
-    pub_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-    client_id: &str,
-    pairing_id: &str,
-) -> String {
-    let inner_claims = ClientInnerClaims {
-        sub: client_id.into(),
-        pairing_id: pairing_id.into(),
-    };
-    let inner_bytes = serde_json::to_vec(&inner_claims).unwrap();
-    let jwe = encrypt_jwe_direct(&inner_bytes, pub_jwk).unwrap();
-
-    let outer = ClientOuterClaims {
-        payload_type: PayloadType::Client,
-        client_jwe: jwe,
-        exp: 1_900_000_000,
-    };
-    sign_jws(&outer, priv_jwk, kid).unwrap()
-}
-
-fn make_state(repo: MockRepo) -> AppState {
-    use crate::http::pairing::notifier::PairingNotifier;
-    use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
-
-    AppState {
-        repository: Arc::new(repo),
-        base_url: "https://api.example.com".to_owned(),
-        signing_key_secret: TEST_SECRET.to_owned(),
-        device_jwt_validity_seconds: 31_536_000,
-        pairing_jwt_validity_seconds: 300,
-        client_jwt_validity_seconds: 31_536_000,
-        request_jwt_validity_seconds: 300,
-        unconsumed_pairing_limit: 100,
-        fcm_validator: Arc::new(crate::http::fcm::NoopFcmValidator),
-        fcm_sender: Arc::new(crate::http::fcm::NoopFcmSender),
-        sse_tracker: SseConnectionTracker::new(SseConnectionConfig {
-            max_per_ip: 20,
-            max_per_key: 1,
-        }),
-        pairing_notifier: PairingNotifier::new(),
-        sign_event_notifier: crate::http::signing::notifier::SignEventNotifier::new(),
-    }
-}
-
 async fn handler(_auth: ClientJwtAuth) -> Json<serde_json::Value> {
     Json(serde_json::json!({"ok": true}))
 }
@@ -330,7 +262,7 @@ async fn valid_single_client_jwt_succeeds() {
         signing_key: Some(sk),
         pairings: vec![pairing],
     };
-    let app = build_app(make_state(repo));
+    let app = build_app(make_test_app_state(repo));
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let response = app
@@ -359,7 +291,7 @@ async fn jwt_verification_failure_rejects_all() {
         signing_key: Some(sk),
         pairings: vec![pairing],
     };
-    let app = build_app(make_state(repo));
+    let app = build_app(make_test_app_state(repo));
 
     let valid_token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let bad_token = "invalid.jwt.token".to_owned();
@@ -385,7 +317,7 @@ async fn pairing_not_found_filters_out() {
         signing_key: Some(sk),
         pairings: vec![],
     };
-    let app = build_app(make_state(repo));
+    let app = build_app(make_test_app_state(repo));
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let response = app
@@ -407,7 +339,7 @@ async fn empty_body_returns_401() {
         signing_key: None,
         pairings: vec![],
     };
-    let app = build_app(make_state(repo));
+    let app = build_app(make_test_app_state(repo));
 
     let response = app
         .oneshot(
@@ -442,7 +374,7 @@ async fn multiple_valid_tokens_returns_all() {
         signing_key: Some(sk),
         pairings,
     };
-    let state = make_state(repo);
+    let state = make_test_app_state(repo);
     let app = build_app(state);
 
     let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
@@ -473,7 +405,7 @@ async fn expired_outer_jws_rejects_all() {
         signing_key: Some(sk),
         pairings: vec![pairing],
     };
-    let app = build_app(make_state(repo));
+    let app = build_app(make_test_app_state(repo));
 
     // Create token with expired outer JWS
     let inner_claims = ClientInnerClaims {

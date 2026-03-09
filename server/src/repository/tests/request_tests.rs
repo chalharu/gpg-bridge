@@ -4,6 +4,20 @@ use super::fixture::TestFixture;
 use super::helpers;
 use super::repo_test;
 
+fn make_create_request_row(request_id: &str, status: &str) -> CreateRequestRow {
+    CreateRequestRow {
+        request_id: request_id.to_owned(),
+        status: status.to_owned(),
+        expired: "2027-01-01T00:00:00Z".to_owned(),
+        client_ids: "[]".to_owned(),
+        daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
+        daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
+        pairing_ids: "{}".to_owned(),
+        e2e_kids: "[]".to_owned(),
+        unavailable_client_ids: "[]".to_owned(),
+    }
+}
+
 async fn get_request_by_id_found(f: &dyn TestFixture) {
     let repo = f.repo();
 
@@ -101,17 +115,10 @@ repo_test!(is_kid_in_flight_ignores_non_active_statuses);
 async fn create_request_and_get_full(f: &dyn TestFixture) {
     let repo = f.repo();
 
-    let row = CreateRequestRow {
-        request_id: "req-new".to_owned(),
-        status: "created".to_owned(),
-        expired: "2027-01-01T00:00:00Z".to_owned(),
-        client_ids: "[\"c1\"]".to_owned(),
-        daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        pairing_ids: "{\"c1\":\"p1\"}".to_owned(),
-        e2e_kids: "[\"kid-1\"]".to_owned(),
-        unavailable_client_ids: "[]".to_owned(),
-    };
+    let mut row = make_create_request_row("req-new", "created");
+    row.client_ids = "[\"c1\"]".to_owned();
+    row.pairing_ids = "{\"c1\":\"p1\"}".to_owned();
+    row.e2e_kids = "[\"kid-1\"]".to_owned();
     repo.create_request(&row).await.unwrap();
 
     let full = repo
@@ -130,17 +137,7 @@ repo_test!(create_request_and_get_full);
 async fn update_request_phase2_cas(f: &dyn TestFixture) {
     let repo = f.repo();
 
-    let row = CreateRequestRow {
-        request_id: "req-1".to_owned(),
-        status: "created".to_owned(),
-        expired: "2027-01-01T00:00:00Z".to_owned(),
-        client_ids: "[]".to_owned(),
-        daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        pairing_ids: "{}".to_owned(),
-        e2e_kids: "[]".to_owned(),
-        unavailable_client_ids: "[]".to_owned(),
-    };
+    let row = make_create_request_row("req-1", "created");
     repo.create_request(&row).await.unwrap();
 
     let ok = repo.update_request_phase2("req-1", "{}").await.unwrap();
@@ -156,17 +153,7 @@ async fn update_request_approved_and_denied_cas(f: &dyn TestFixture) {
     let repo = f.repo();
 
     for id in &["req-a", "req-d"] {
-        let row = CreateRequestRow {
-            request_id: id.to_string(),
-            status: "created".to_owned(),
-            expired: "2027-01-01T00:00:00Z".to_owned(),
-            client_ids: "[]".to_owned(),
-            daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
-            daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
-            pairing_ids: "{}".to_owned(),
-            e2e_kids: "[]".to_owned(),
-            unavailable_client_ids: "[]".to_owned(),
-        };
+        let row = make_create_request_row(id, "created");
         repo.create_request(&row).await.unwrap();
         repo.update_request_phase2(id, "{}").await.unwrap();
     }
@@ -187,17 +174,7 @@ repo_test!(update_request_approved_and_denied_cas);
 async fn delete_request_removes_row(f: &dyn TestFixture) {
     let repo = f.repo();
 
-    let row = CreateRequestRow {
-        request_id: "req-1".to_owned(),
-        status: "created".to_owned(),
-        expired: "2027-01-01T00:00:00Z".to_owned(),
-        client_ids: "[]".to_owned(),
-        daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        pairing_ids: "{}".to_owned(),
-        e2e_kids: "[]".to_owned(),
-        unavailable_client_ids: "[]".to_owned(),
-    };
+    let row = make_create_request_row("req-1", "created");
     repo.create_request(&row).await.unwrap();
 
     let deleted = repo.delete_request("req-1").await.unwrap();
@@ -212,17 +189,8 @@ repo_test!(delete_request_removes_row);
 async fn add_unavailable_client_id_cas_logic(f: &dyn TestFixture) {
     let repo = f.repo();
 
-    let row = CreateRequestRow {
-        request_id: "req-1".to_owned(),
-        status: "created".to_owned(),
-        expired: "2027-01-01T00:00:00Z".to_owned(),
-        client_ids: "[\"c1\",\"c2\"]".to_owned(),
-        daemon_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        daemon_enc_public_key: "{\"kty\":\"EC\"}".to_owned(),
-        pairing_ids: "{}".to_owned(),
-        e2e_kids: "[]".to_owned(),
-        unavailable_client_ids: "[]".to_owned(),
-    };
+    let mut row = make_create_request_row("req-1", "created");
+    row.client_ids = "[\"c1\",\"c2\"]".to_owned();
     repo.create_request(&row).await.unwrap();
 
     // Not pending → None

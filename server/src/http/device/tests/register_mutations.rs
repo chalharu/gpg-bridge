@@ -10,9 +10,17 @@ use crate::repository::{ClientRepository, SignatureRepository, SigningKeyReposit
 use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
 
 use super::{
-    X_COORD, Y_COORD, build_test_router, make_client_row, make_device_assertion,
-    make_signing_key_row, register_body,
+    X_COORD, Y_COORD, authed_json_request, build_test_router, json_request, make_client_row,
+    make_device_assertion, make_signing_key_row, register_body,
 };
+
+fn post_device_request(body: &serde_json::Value) -> Request<Body> {
+    json_request(Method::POST, "/device", body)
+}
+
+fn patch_device_request(token: &str, body: &serde_json::Value) -> Request<Body> {
+    authed_json_request(Method::PATCH, "/device", token, body)
+}
 
 // ---------------------------------------------------------------------------
 // register: verify stored client row fields  (kills build_client_row mutations)
@@ -27,15 +35,7 @@ async fn register_device_stores_correct_client_row() {
     let app = build_test_router(state);
 
     let body = register_body("fid-row", "tok-row");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -64,15 +64,7 @@ async fn register_device_jwt_has_correct_sub_and_future_exp() {
 
     let before = chrono::Utc::now().timestamp();
     let body = register_body("fid-jwt", "tok-jwt");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
     let bytes = body::to_bytes(response.into_body(), usize::MAX)
@@ -131,15 +123,7 @@ async fn register_device_uses_first_enc_kid_when_none_specified() {
             }
         }
     });
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -278,15 +262,7 @@ async fn update_device_only_token_succeeds() {
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ot", "/device");
     let body = json!({ "device_token": "new-tok" });
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::PATCH)
-                .uri("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(patch_device_request(&token, &body))
         .await
         .unwrap();
 
@@ -315,15 +291,7 @@ async fn update_device_only_default_kid_succeeds() {
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ok", "/device");
     let body = json!({ "default_kid": "enc-1" });
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::PATCH)
-                .uri("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(patch_device_request(&token, &body))
         .await
         .unwrap();
 

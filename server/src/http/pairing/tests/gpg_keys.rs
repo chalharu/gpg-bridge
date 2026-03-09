@@ -4,12 +4,9 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
-use crate::repository::ClientPairingRow;
-use crate::test_support::{
-    MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
-};
+use crate::test_support::{MockRepository, make_client_jwt, make_signing_key_row};
 
-use super::{build_app, json_body, make_client_row};
+use super::{add_client_pairings, build_test_app, json_body, make_client_row};
 
 #[tokio::test]
 async fn query_gpg_keys_returns_aggregated_keys() {
@@ -30,23 +27,10 @@ async fn query_gpg_keys_returns_aggregated_keys() {
     let client1 = make_client_row("fid-1", &gpg_keys_1.to_string());
     let client2 = make_client_row("fid-2", &gpg_keys_2.to_string());
 
-    let pairings = vec![
-        ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-1".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        },
-        ClientPairingRow {
-            client_id: "fid-2".into(),
-            pairing_id: "pair-2".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        },
-    ];
-
     let repo = MockRepository::new(sk);
     repo.clients.lock().unwrap().extend(vec![client1, client2]);
-    repo.client_pairings_data.lock().unwrap().extend(pairings);
-    let app = build_app(make_test_app_state(repo));
+    add_client_pairings(&repo, &[("fid-1", "pair-1"), ("fid-2", "pair-2")]);
+    let app = build_test_app(repo);
 
     let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-2", "pair-2");
@@ -78,16 +62,10 @@ async fn query_gpg_keys_returns_empty_when_no_keys() {
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
 
     let client = make_client_row("fid-1", "[]");
-    let pairing = ClientPairingRow {
-        client_id: "fid-1".into(),
-        pairing_id: "pair-1".into(),
-        client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-    };
-
     let repo = MockRepository::new(sk);
     repo.clients.lock().unwrap().push(client);
-    repo.client_pairings_data.lock().unwrap().push(pairing);
-    let app = build_app(make_test_app_state(repo));
+    add_client_pairings(&repo, &[("fid-1", "pair-1")]);
+    let app = build_test_app(repo);
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let response = app
@@ -122,23 +100,13 @@ async fn query_gpg_keys_missing_client_returns_remaining_keys() {
     // Only client1 exists in the DB; client2 (fid-deleted) is missing
     let client1 = make_client_row("fid-1", &gpg_keys_1.to_string());
 
-    let pairings = vec![
-        ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-1".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        },
-        ClientPairingRow {
-            client_id: "fid-deleted".into(),
-            pairing_id: "pair-deleted".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        },
-    ];
-
     let repo = MockRepository::new(sk);
     repo.clients.lock().unwrap().push(client1);
-    repo.client_pairings_data.lock().unwrap().extend(pairings);
-    let app = build_app(make_test_app_state(repo));
+    add_client_pairings(
+        &repo,
+        &[("fid-1", "pair-1"), ("fid-deleted", "pair-deleted")],
+    );
+    let app = build_test_app(repo);
 
     let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-deleted", "pair-deleted");
@@ -172,16 +140,10 @@ async fn query_gpg_keys_malformed_json_returns_500() {
     // Client with invalid gpg_keys JSON stored in DB
     let client = make_client_row("fid-bad", "not-valid-json");
 
-    let pairings = vec![ClientPairingRow {
-        client_id: "fid-bad".into(),
-        pairing_id: "pair-bad".into(),
-        client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-    }];
-
     let repo = MockRepository::new(sk);
     repo.clients.lock().unwrap().push(client);
-    repo.client_pairings_data.lock().unwrap().extend(pairings);
-    let app = build_app(make_test_app_state(repo));
+    add_client_pairings(&repo, &[("fid-bad", "pair-bad")]);
+    let app = build_test_app(repo);
 
     let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-bad", "pair-bad");
 

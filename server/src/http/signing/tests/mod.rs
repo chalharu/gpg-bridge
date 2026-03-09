@@ -1,18 +1,19 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::routing::post;
+use axum::routing::{get, post};
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
-    DaemonAuthClaims, PayloadType, RequestClaims, generate_signing_key_pair, jwk_to_json, sign_jws,
+    DaemonAuthClaims, DeviceAssertionClaims, PayloadType, RequestClaims, SignClaims,
+    generate_signing_key_pair, jwk_to_json, sign_jws,
 };
 use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
 use crate::test_support::{MockRepository, make_signing_key_row};
 
-use super::post_sign_request;
+use super::{get_sign_request, post_sign_request, post_sign_result};
 
 mod delete_request;
 mod get_and_result;
@@ -72,6 +73,18 @@ fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
 fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/sign-request", post(post_sign_request))
+        .with_state(state)
+}
+
+fn build_get_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-request", get(get_sign_request))
+        .with_state(state)
+}
+
+fn build_result_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-result", post(post_sign_result))
         .with_state(state)
 }
 
@@ -212,6 +225,22 @@ fn make_pending_request(
     }
 }
 
+fn make_full_request(request_id: &str, status: &str, signature: Option<&str>) -> FullRequestRow {
+    FullRequestRow {
+        request_id: request_id.into(),
+        status: status.into(),
+        expired: "2027-01-01T00:00:00Z".into(),
+        signature: signature.map(str::to_owned),
+        client_ids: r#"["client-1"]"#.into(),
+        daemon_public_key: "{}".into(),
+        daemon_enc_public_key: "{}".into(),
+        pairing_ids: "{}".into(),
+        e2e_kids: "{}".into(),
+        encrypted_payloads: None,
+        unavailable_client_ids: "[]".into(),
+    }
+}
+
 fn valid_request_body(client_jwts: Vec<String>) -> serde_json::Value {
     json!({
         "client_jwts": client_jwts,
@@ -243,6 +272,53 @@ fn post_json(body: &serde_json::Value) -> Request<Body> {
 
 async fn response_status(app: Router, req: Request<Body>) -> StatusCode {
     app.oneshot(req).await.unwrap().status()
+}
+
+fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, path: &str) -> String {
+    let claims = DeviceAssertionClaims {
+        iss: sub.to_owned(),
+        sub: sub.to_owned(),
+        aud: format!("https://api.example.com{path}"),
+        exp: 1_900_000_000,
+        iat: 1_900_000_000 - 30,
+        jti: uuid::Uuid::new_v4().to_string(),
+    };
+    sign_jws(&claims, priv_jwk, kid).unwrap()
+}
+
+fn get_request_with_auth(token: &str) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-request")
+        .method("GET")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn make_sign_jwt(
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    request_id: &str,
+    client_id: &str,
+) -> String {
+    let exp = chrono::Utc::now().timestamp() + 300;
+    let claims = SignClaims {
+        sub: request_id.to_owned(),
+        client_id: client_id.to_owned(),
+        payload_type: PayloadType::Sign,
+        exp,
+    };
+    sign_jws(&claims, priv_jwk, kid).unwrap()
+}
+
+fn post_result_json(token: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-result")
+        .method("POST")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
 }
 
 /// Setup common test fixtures: signing key pair, mock repo with a client + pairing.
