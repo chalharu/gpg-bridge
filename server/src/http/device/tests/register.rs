@@ -14,6 +14,13 @@ use super::{
     make_signing_key_row, register_body,
 };
 
+fn post_device_request(body: serde_json::Value) -> Request<Body> {
+    Request::post("/device")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn register_device_success() {
     let (sk, _) = make_signing_key_row();
@@ -23,21 +30,10 @@ async fn register_device_success() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "token-1");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let json = response_json(response).await;
     assert!(json["device_jwt"].as_str().is_some());
 }
 
@@ -52,15 +48,7 @@ async fn register_device_fid_conflict() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "token-1");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
@@ -76,15 +64,7 @@ async fn register_device_token_conflict() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "shared-token");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
@@ -96,15 +76,7 @@ async fn register_device_without_active_signing_key_returns_500() {
     let app = build_test_router(state);
 
     let body = register_body("fid-no-key", "token-no-key");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response_json(response).await;
@@ -122,15 +94,7 @@ async fn register_device_with_invalid_stored_signing_key_returns_500() {
     let app = build_test_router(state);
 
     let body = register_body("fid-invalid-key", "token-invalid-key");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response_json(response).await;
