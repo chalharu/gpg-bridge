@@ -1,10 +1,14 @@
+use axum::body::Body;
+use axum::http::{Request, header};
+use tower::ServiceExt;
+
 use crate::http::auth::test_support::{
     DaemonAuthFixture, TEST_AUD, TEST_REQUEST_ID, TEST_WRONG_AUD, build_daemon_auth_app,
     daemon_auth_repo, get_sign_status, make_auth_state,
 };
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::RequestRow;
-use crate::test_support::make_signing_key_row;
+use crate::test_support::{make_signing_key_row, response_json};
 
 // ---- Tests ----
 
@@ -119,4 +123,90 @@ async fn invalid_request_jwt_returns_401() {
         get_sign_status(app, Some(&token)).await,
         axum::http::StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn invalid_authorization_header_returns_401_with_instance() {
+    let fixture = DaemonAuthFixture::new();
+    let app = fixture.app(Some(fixture.request_row()), true);
+
+    let response = app
+        .oneshot(
+            Request::get("/v1/sign")
+                .header(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_bytes(b"\xff").unwrap(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "invalid authorization header");
+    assert_eq!(body["instance"], "/v1/sign");
+}
+
+#[tokio::test]
+async fn invalid_daemon_public_key_returns_401_with_instance() {
+    let fixture = DaemonAuthFixture::new();
+    let request = RequestRow {
+        request_id: TEST_REQUEST_ID.into(),
+        status: "created".into(),
+        daemon_public_key: "not-json".into(),
+    };
+    let app = fixture.app(Some(request), true);
+    let token = fixture.token(TEST_REQUEST_ID, TEST_AUD);
+
+    let response = app
+        .oneshot(
+            Request::get("/v1/sign")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["instance"], "/v1/sign");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("invalid daemon_public_key")
+    );
+}
+
+#[tokio::test]
+async fn signing_key_lookup_error_returns_500_with_instance() {
+    let fixture = DaemonAuthFixture::new();
+    let repo = daemon_auth_repo(
+        Some(fixture.signing_key_row()),
+        Some(fixture.request_row()),
+        true,
+    );
+    repo.force_error("get_signing_key_by_kid");
+    let app = build_daemon_auth_app(make_auth_state(repo));
+    let token = fixture.token(TEST_REQUEST_ID, TEST_AUD);
+
+    let response = app
+        .oneshot(
+            Request::get("/v1/sign")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let body = response_json(response).await;
+    assert_eq!(body["instance"], "/v1/sign");
 }

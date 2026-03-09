@@ -154,6 +154,27 @@ async fn no_active_signing_key_returns_500() {
 }
 
 #[tokio::test]
+async fn invalid_active_signing_key_returns_500() {
+    let (priv_jwk, pub_jwk, kid, mut repo) = setup_happy_path();
+    let mut bad_signing_key = repo.signing_key.clone().unwrap();
+    bad_signing_key.private_key = "not-an-encrypted-jwk".into();
+    repo.active_signing_key_override = Some(Some(bad_signing_key));
+    let app = build_app(make_test_app_state(repo));
+
+    let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "client-1", "pair-1");
+    let body = valid_request_body(vec![token]);
+    let response = app.oneshot(post_json(&body)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(response).await;
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("key decrypt failed")
+    );
+}
+
+#[tokio::test]
 async fn client_not_in_db_returns_500() {
     let (priv_jwk, pub_jwk, kid, repo) = setup_happy_path();
     // Remove client row so lookup_enc_key returns None → empty e2e_keys → 500.

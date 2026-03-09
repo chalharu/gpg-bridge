@@ -8,6 +8,7 @@ pub(crate) use client_jwt::verify_one_token;
 pub use client_jwt::{ClientInfo, ClientJwtAuth};
 pub(crate) use client_jwt::{filter_valid_pairings, verify_all_tokens};
 pub use daemon_auth::DaemonAuthJws;
+pub(crate) use daemon_auth::authenticate_daemon_request;
 pub use device_assertion::DeviceAssertionAuth;
 pub use error::AuthError;
 pub use sign_jwt::SignJwtAuth;
@@ -20,19 +21,25 @@ use josekit::jwk::Jwk;
 
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::jwt::jwk_from_json;
+use crate::jwt::{decrypt_private_key, jwk_from_json};
 use crate::repository::SigningKeyRow;
 
 /// Extract a bearer token from the `Authorization` header.
 pub(crate) fn extract_bearer_token(parts: &Parts) -> Result<String, AuthError> {
-    let header = parts
-        .headers
+    extract_bearer_header(&parts.headers)
+}
+
+/// Extract a bearer token from an HTTP header map.
+pub(crate) fn extract_bearer_header(headers: &http::HeaderMap) -> Result<String, AuthError> {
+    let header = headers
         .get(http::header::AUTHORIZATION)
-        .ok_or(AuthError::MissingToken)?;
-    let value = header.to_str().map_err(|_| AuthError::MissingToken)?;
+        .ok_or(AuthError::MissingAuthorizationHeader)?;
+    let value = header
+        .to_str()
+        .map_err(|_| AuthError::InvalidAuthorizationHeader)?;
     let token = value
         .strip_prefix("Bearer ")
-        .ok_or(AuthError::MissingToken)?;
+        .ok_or(AuthError::MissingBearerScheme)?;
     Ok(token.to_owned())
 }
 
@@ -86,6 +93,26 @@ pub(crate) async fn store_jti_with_expiration(
     Ok(())
 }
 
+pub(crate) async fn load_active_signing_key(state: &AppState) -> Result<SigningKeyRow, AppError> {
+    state
+        .repository
+        .get_active_signing_key()
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::internal("no active signing key"))
+}
+
+pub(crate) fn load_private_signing_jwk(
+    signing_key: &SigningKeyRow,
+    secret: &str,
+    decrypt_error: &str,
+    parse_error: &str,
+) -> Result<Jwk, AppError> {
+    let private_json = decrypt_private_key(&signing_key.private_key, secret)
+        .map_err(|e| AppError::internal(format!("{decrypt_error}: {e}")))?;
+    jwk_from_json(&private_json).map_err(|e| AppError::internal(format!("{parse_error}: {e}")))
+}
+
 /// Verify that a signing key has not expired.
 pub(crate) fn check_signing_key_not_expired(key: &SigningKeyRow) -> Result<(), AuthError> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -123,7 +150,7 @@ mod tests {
 
         assert!(matches!(
             extract_bearer_token(&parts),
-            Err(AuthError::MissingToken)
+            Err(AuthError::MissingAuthorizationHeader)
         ));
     }
 
@@ -138,8 +165,34 @@ mod tests {
 
         assert!(matches!(
             extract_bearer_token(&parts),
-            Err(AuthError::MissingToken)
+            Err(AuthError::MissingBearerScheme)
         ));
+    }
+
+    #[test]
+    fn extract_bearer_header_rejects_invalid_value() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+
+        assert!(matches!(
+            extract_bearer_header(&headers),
+            Err(AuthError::InvalidAuthorizationHeader)
+        ));
+    }
+
+    #[test]
+    fn extract_bearer_header_parses_valid_header() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("Bearer header-token"),
+        );
+
+        let token = extract_bearer_header(&headers).unwrap();
+        assert_eq!(token, "header-token");
     }
 
     #[test]

@@ -7,12 +7,19 @@ use tower::ServiceExt;
 
 use crate::jwt::{DeviceClaims, PayloadType, generate_signing_key_pair, jwk_to_json, sign_jws};
 use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
+use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc, response_json};
 
 use super::{
     SECRET, X_COORD, Y_COORD, build_test_router, make_client_row, make_device_assertion,
     make_signing_key_row, register_body,
 };
+
+fn post_device_request(body: serde_json::Value) -> Request<Body> {
+    Request::post("/device")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
 
 #[tokio::test]
 async fn register_device_success() {
@@ -23,21 +30,10 @@ async fn register_device_success() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "token-1");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let json = response_json(response).await;
     assert!(json["device_jwt"].as_str().is_some());
 }
 
@@ -52,15 +48,7 @@ async fn register_device_fid_conflict() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "token-1");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
@@ -76,17 +64,46 @@ async fn register_device_token_conflict() {
     let app = build_test_router(state);
 
     let body = register_body("fid-1", "shared-token");
-    let response = app
-        .oneshot(
-            Request::post("/device")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn register_device_without_active_signing_key_returns_500() {
+    let repo = build_test_sqlite_repo().await;
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
+    let app = build_test_router(state);
+
+    let body = register_body("fid-no-key", "token-no-key");
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"], "no active signing key");
+    assert_eq!(body["instance"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn register_device_with_invalid_stored_signing_key_returns_500() {
+    let (mut sk, _) = make_signing_key_row();
+    sk.private_key = "not-an-encrypted-jwk".to_owned();
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(&sk).await.unwrap();
+    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
+    let app = build_test_router(state);
+
+    let body = register_body("fid-invalid-key", "token-invalid-key");
+    let response = app.oneshot(post_device_request(body)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response_json(response).await;
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("failed to decrypt signing key")
+    );
 }
 
 #[tokio::test]

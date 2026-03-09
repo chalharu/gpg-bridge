@@ -20,6 +20,34 @@ pub struct DaemonAuthJws {
     pub request_id: String,
 }
 
+pub(crate) async fn authenticate_daemon_request(
+    parts: &mut Parts,
+    state: &AppState,
+    instance: &str,
+) -> Result<DaemonAuthJws, AppError> {
+    let token = extract_bearer_token(parts).map_err(|error| auth_error(error, instance))?;
+
+    let outer: DaemonAuthClaims = decode_jws_unverified(&token)
+        .map_err(|e| auth_error(AuthError::InvalidToken(e.to_string()), instance))?;
+
+    let request_claims = verify_request_jwt(&outer.request_jwt, state, instance).await?;
+    let request_id = request_claims.sub;
+
+    let daemon_pub_jwk = fetch_daemon_key(state, &request_id, instance).await?;
+
+    let verified: DaemonAuthClaims = verify_jws_with_key(&token, &daemon_pub_jwk)
+        .map_err(|e| auth_error(AuthError::InvalidToken(e.to_string()), instance))?;
+
+    let expected_aud = build_expected_aud(&state.base_url, parts);
+    validate_aud(&verified, &expected_aud).map_err(|error| auth_error(error, instance))?;
+
+    store_jti_with_expiration(state, &verified.jti, verified.exp)
+        .await
+        .map_err(|error| error.with_instance(instance))?;
+
+    Ok(DaemonAuthJws { request_id })
+}
+
 impl FromRequestParts<AppState> for DaemonAuthJws {
     type Rejection = AppError;
 
@@ -27,73 +55,69 @@ impl FromRequestParts<AppState> for DaemonAuthJws {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = extract_bearer_token(parts)?;
-
-        // Step 1: Decode outer JWS (unverified) to get request_jwt
-        let outer: DaemonAuthClaims =
-            decode_jws_unverified(&token).map_err(|e| AuthError::InvalidToken(e.to_string()))?;
-
-        // Steps 2-3: Verify inner request_jwt with server signing key
-        let request_claims = verify_request_jwt(&outer.request_jwt, state).await?;
-        let request_id = &request_claims.sub;
-
-        // Step 4: Fetch daemon_public_key from DB
-        let daemon_pub_jwk = fetch_daemon_key(state, request_id).await?;
-
-        // Step 5: Verify outer JWS with daemon_public_key
-        let verified: DaemonAuthClaims = verify_jws_with_key(&token, &daemon_pub_jwk)
-            .map_err(|e| AuthError::InvalidToken(e.to_string()))?;
-
-        // Step 6: Check aud
-        let expected_aud = build_expected_aud(&state.base_url, parts);
-        validate_aud(&verified, &expected_aud)?;
-
-        // Step 7: Check jti replay
-        store_jti_with_expiration(state, &verified.jti, verified.exp).await?;
-
-        Ok(Self {
-            request_id: request_id.clone(),
-        })
+        let instance = parts.uri.path().to_owned();
+        authenticate_daemon_request(parts, state, &instance).await
     }
+}
+
+fn auth_error(error: AuthError, instance: &str) -> AppError {
+    AppError::unauthorized(error.to_string()).with_instance(instance)
 }
 
 /// Verify the inner `request_jwt` using the server's signing key.
 async fn verify_request_jwt(
     request_jwt: &str,
     state: &AppState,
+    instance: &str,
 ) -> Result<RequestClaims, AppError> {
-    let kid = extract_kid(request_jwt).map_err(|e| AuthError::InvalidToken(e.to_string()))?;
+    let kid = extract_kid(request_jwt)
+        .map_err(|e| auth_error(AuthError::InvalidToken(e.to_string()), instance))?;
 
     let signing_key = state
         .repository
         .get_signing_key_by_kid(&kid)
         .await
-        .map_err(AppError::from)?
-        .ok_or(AuthError::InvalidToken("unknown signing key".into()))?;
+        .map_err(|error| AppError::from(error).with_instance(instance))?
+        .ok_or_else(|| {
+            auth_error(
+                AuthError::InvalidToken("unknown signing key".into()),
+                instance,
+            )
+        })?;
 
-    check_signing_key_not_expired(&signing_key)?;
+    check_signing_key_not_expired(&signing_key).map_err(|error| auth_error(error, instance))?;
 
     let public_jwk = jwk_from_json(&signing_key.public_key)
-        .map_err(|e| AuthError::InvalidToken(e.to_string()))?;
+        .map_err(|e| auth_error(AuthError::InvalidToken(e.to_string()), instance))?;
 
     verify_jws(request_jwt, &public_jwk, PayloadType::Request)
-        .map_err(|e| AuthError::InvalidToken(e.to_string()).into())
+        .map_err(|e| auth_error(AuthError::InvalidToken(e.to_string()), instance))
 }
 
 /// Fetch the daemon public key from the requests table.
 async fn fetch_daemon_key(
     state: &AppState,
     request_id: &str,
+    instance: &str,
 ) -> Result<josekit::jwk::Jwk, AppError> {
     let request = state
         .repository
         .get_request_by_id(request_id)
         .await
-        .map_err(AppError::from)?
-        .ok_or(AuthError::Unauthorized("request not found".into()))?;
+        .map_err(|error| AppError::from(error).with_instance(instance))?
+        .ok_or_else(|| {
+            auth_error(
+                AuthError::Unauthorized("request not found".into()),
+                instance,
+            )
+        })?;
 
-    jwk_from_json(&request.daemon_public_key)
-        .map_err(|e| AuthError::InvalidToken(format!("invalid daemon_public_key: {e}")).into())
+    jwk_from_json(&request.daemon_public_key).map_err(|e| {
+        auth_error(
+            AuthError::InvalidToken(format!("invalid daemon_public_key: {e}")),
+            instance,
+        )
+    })
 }
 
 fn validate_aud(claims: &DaemonAuthClaims, expected: &str) -> Result<(), AuthError> {

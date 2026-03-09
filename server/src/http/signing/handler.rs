@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::{ClientInfo, filter_valid_pairings, verify_all_tokens};
-use crate::jwt::{PayloadType, RequestClaims, decrypt_private_key, jwk_from_json, sign_jws};
+use crate::http::auth::{load_active_signing_key, load_private_signing_jwk};
+use crate::jwt::{PayloadType, RequestClaims, sign_jws};
 use crate::repository::{AuditLogRow, CreateRequestRow};
 
 use super::types::{
@@ -146,17 +147,13 @@ pub(super) fn build_e2e_kids_map(e2e_keys: &[E2eKeyItem]) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 async fn issue_request_jwt(request_id: &str, state: &AppState) -> Result<String, AppError> {
-    let signing_key = state
-        .repository
-        .get_active_signing_key()
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::internal("no active signing key"))?;
-
-    let private_json = decrypt_private_key(&signing_key.private_key, &state.signing_key_secret)
-        .map_err(|e| AppError::internal(format!("key decrypt failed: {e}")))?;
-    let private_jwk = jwk_from_json(&private_json)
-        .map_err(|e| AppError::internal(format!("invalid JWK: {e}")))?;
+    let signing_key = load_active_signing_key(state).await?;
+    let private_jwk = load_private_signing_jwk(
+        &signing_key,
+        &state.signing_key_secret,
+        "key decrypt failed",
+        "invalid JWK",
+    )?;
 
     let exp = chrono::Utc::now().timestamp() + state.request_jwt_validity_seconds as i64;
     let claims = RequestClaims {

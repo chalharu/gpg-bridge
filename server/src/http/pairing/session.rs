@@ -1,12 +1,11 @@
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{Request, State};
 use axum::response::Response;
 use chrono::{DateTime, Utc};
 
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::check_signing_key_not_expired;
-use crate::http::rate_limit::ip_extractor::extract_client_ip;
-use crate::http::rate_limit::sse_tracker::SseRejection;
+use crate::http::rate_limit::{acquire_sse_slot, resolve_client_ip};
 use crate::jwt::{PairingClaims, PayloadType, extract_kid, jwk_from_json, verify_jws};
 use crate::repository::SigningKeyRow;
 
@@ -24,8 +23,14 @@ pub async fn get_pairing_session(
 ) -> Result<Response, AppError> {
     let token = extract_bearer(request.headers())?;
     let (pairing_id, signing_key) = verify_pairing_jwt(&token, &state).await?;
-    let client_ip = resolve_client_ip(&request)?;
-    let guard = acquire_sse_slot(&state, client_ip, &pairing_id)?;
+    let client_ip = resolve_client_ip(&request, INSTANCE)?;
+    let guard = acquire_sse_slot(
+        &state,
+        client_ip,
+        &pairing_id,
+        "SSE connection already active for this pairing",
+        INSTANCE,
+    )?;
 
     // Subscribe before DB check to prevent TOCTOU race:
     // notify() between check and subscribe would otherwise be lost.
@@ -33,7 +38,7 @@ pub async fn get_pairing_session(
 
     let pairing = check_pairing_state(&state, &pairing_id).await?;
 
-    let expiry = parse_expiry(&pairing.expired)?;
+    let expiry = parse_expiry(&pairing.expired).map_err(|e| e.with_instance(INSTANCE))?;
 
     if let Some(client_id) = pairing.client_id {
         state.pairing_notifier.unsubscribe(&pairing_id);
@@ -67,7 +72,7 @@ fn extract_bearer(headers: &axum::http::HeaderMap) -> Result<String, AppError> {
 
     value
         .strip_prefix("Bearer ")
-        .map(|t| t.to_owned())
+        .map(str::to_owned)
         .ok_or_else(|| AppError::unauthorized("missing Bearer scheme").with_instance(INSTANCE))
 }
 
@@ -109,43 +114,6 @@ async fn verify_pairing_jwt(
 }
 
 // ---------------------------------------------------------------------------
-// SSE connection limit
-// ---------------------------------------------------------------------------
-
-fn acquire_sse_slot(
-    state: &AppState,
-    ip: std::net::IpAddr,
-    pairing_id: &str,
-) -> Result<crate::http::rate_limit::SseConnectionGuard, AppError> {
-    state
-        .sse_tracker
-        .try_acquire(ip, pairing_id.to_owned())
-        .map_err(|rejection| match rejection {
-            SseRejection::IpLimitExceeded { .. } => {
-                AppError::too_many_requests("SSE connection limit per IP exceeded")
-                    .with_instance(INSTANCE)
-            }
-            SseRejection::KeyLimitExceeded { .. } => {
-                AppError::too_many_requests("SSE connection already active for this pairing")
-                    .with_instance(INSTANCE)
-            }
-        })
-}
-
-// ---------------------------------------------------------------------------
-// IP extraction (uses ConnectInfo from extensions as fallback over headers)
-// ---------------------------------------------------------------------------
-
-fn resolve_client_ip(request: &Request) -> Result<std::net::IpAddr, AppError> {
-    let connect_info = request
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .cloned();
-    extract_client_ip(request.headers(), connect_info.as_ref())
-        .ok_or_else(|| AppError::internal("could not determine client IP").with_instance(INSTANCE))
-}
-
-// ---------------------------------------------------------------------------
 // Pairing state check
 // ---------------------------------------------------------------------------
 
@@ -160,7 +128,7 @@ async fn check_pairing_state(
         .map_err(|e| AppError::from(e).with_instance(INSTANCE))?
         .ok_or_else(|| AppError::gone("pairing not found or expired").with_instance(INSTANCE))?;
 
-    let expired = parse_expiry(&pairing.expired)?;
+    let expired = parse_expiry(&pairing.expired).map_err(|e| e.with_instance(INSTANCE))?;
     if expired <= Utc::now() {
         return Err(AppError::gone("pairing expired").with_instance(INSTANCE));
     }

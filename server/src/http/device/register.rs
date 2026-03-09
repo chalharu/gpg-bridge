@@ -2,7 +2,8 @@ use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::jwt::{DeviceClaims, PayloadType, decrypt_private_key, jwk_from_json, sign_jws};
+use crate::http::auth::{load_active_signing_key, load_private_signing_jwk};
+use crate::jwt::{DeviceClaims, PayloadType, sign_jws};
 use crate::repository::ClientRow;
 
 use super::validation::{validate_enc_key, validate_sig_key};
@@ -129,17 +130,13 @@ pub(super) async fn issue_device_jwt(
     sub: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, AppError> {
-    let signing_key = state
-        .repository
-        .get_active_signing_key()
-        .await
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::internal("no active signing key"))?;
-
-    let private_json = decrypt_private_key(&signing_key.private_key, &state.signing_key_secret)
-        .map_err(|e| AppError::internal(format!("failed to decrypt signing key: {e}")))?;
-    let private_jwk = jwk_from_json(&private_json)
-        .map_err(|e| AppError::internal(format!("failed to parse signing key: {e}")))?;
+    let signing_key = load_active_signing_key(state).await?;
+    let private_jwk = load_private_signing_jwk(
+        &signing_key,
+        &state.signing_key_secret,
+        "failed to decrypt signing key",
+        "failed to parse signing key",
+    )?;
 
     let exp = now.timestamp() + state.device_jwt_validity_seconds as i64;
     let claims = DeviceClaims {
