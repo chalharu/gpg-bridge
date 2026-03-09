@@ -770,6 +770,11 @@ pub async fn response_json(response: axum::response::Response) -> serde_json::Va
     serde_json::from_slice(&bytes).unwrap()
 }
 
+pub fn assert_problem_details(body: &serde_json::Value, detail: &str, instance: &str) {
+    assert_eq!(body["detail"], detail);
+    assert_eq!(body["instance"], instance);
+}
+
 /// Read a response body as UTF-8 for SSE and plain-text handler tests.
 pub async fn response_body_string(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

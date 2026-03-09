@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::body::{self, Body};
+use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
 use serde_json::json;
@@ -190,14 +190,7 @@ fn setup_happy_path() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRepo
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Helper to extract JSON from response.
-// ---------------------------------------------------------------------------
-
-async fn body_json(resp: axum::http::Response<Body>) -> serde_json::Value {
-    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
+pub(super) use crate::test_support::response_json as body_json;
 
 /// Create a valid daemon_auth_jws bearer token (shared across multiple sub-modules).
 fn make_daemon_token(

@@ -9,7 +9,8 @@ use crate::http::pairing::get_pairing_session;
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRow, PairingRow};
 use crate::test_support::{
-    MockRepository, make_signing_key_row, make_test_app_state, response_body_string,
+    MockRepository, assert_problem_details, make_signing_key_row, make_test_app_state,
+    response_body_string,
 };
 
 use super::{make_pairing_token, response_json};
@@ -91,8 +92,7 @@ async fn session_missing_auth_returns_401() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = response_json(response).await;
-    assert_eq!(body["detail"], "missing authorization token");
-    assert_eq!(body["instance"], "/pairing-session");
+    assert_problem_details(&body, "missing authorization token", "/pairing-session");
 }
 
 #[tokio::test]
@@ -116,8 +116,7 @@ async fn session_invalid_bearer_scheme_returns_401() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = response_json(response).await;
-    assert_eq!(body["detail"], "missing Bearer scheme");
-    assert_eq!(body["instance"], "/pairing-session");
+    assert_problem_details(&body, "missing Bearer scheme", "/pairing-session");
 }
 
 #[tokio::test]
@@ -144,8 +143,7 @@ async fn session_invalid_authorization_header_returns_401() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = response_json(response).await;
-    assert_eq!(body["detail"], "invalid authorization header");
-    assert_eq!(body["instance"], "/pairing-session");
+    assert_problem_details(&body, "invalid authorization header", "/pairing-session");
 }
 
 #[tokio::test]
@@ -306,8 +304,7 @@ async fn session_missing_client_ip_returns_500_with_instance() {
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response_json(response).await;
-    assert_eq!(body["detail"], "could not determine client IP");
-    assert_eq!(body["instance"], "/pairing-session");
+    assert_problem_details(&body, "could not determine client IP", "/pairing-session");
 }
 
 #[tokio::test]
@@ -331,11 +328,11 @@ async fn session_duplicate_connection_returns_429_with_instance() {
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = response_json(response).await;
-    assert_eq!(
-        body["detail"],
-        "SSE connection already active for this pairing"
+    assert_problem_details(
+        &body,
+        "SSE connection already active for this pairing",
+        "/pairing-session",
     );
-    assert_eq!(body["instance"], "/pairing-session");
 
     drop(first);
 }

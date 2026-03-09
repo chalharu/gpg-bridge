@@ -12,8 +12,8 @@ use crate::http::signing::get_sign_events;
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{FullRequestRow, RequestRow};
 use crate::test_support::{
-    MockRepository, make_signing_key_row, make_test_app_state, make_test_app_state_arc,
-    response_body_string,
+    MockRepository, assert_problem_details, make_signing_key_row, make_test_app_state,
+    make_test_app_state_arc, response_body_string,
 };
 
 use super::{make_daemon_token, response_status};
@@ -49,32 +49,106 @@ fn make_sign_events_aud() -> String {
     "https://api.example.com/sign-events".to_owned()
 }
 
-fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepository) {
+fn setup_sign_events_base() -> (
+    josekit::jwk::Jwk,
+    String,
+    josekit::jwk::Jwk,
+    String,
+    MockRepository,
+    String,
+) {
     let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
     let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
-
     let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-    let repo = MockRepository::new(sk);
 
-    *repo.request.lock().unwrap() = Some(RequestRow {
-        request_id: "req-1".into(),
-        status: status.into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-    });
+    (
+        server_priv,
+        server_kid,
+        daemon_priv,
+        daemon_kid,
+        MockRepository::new(sk),
+        jwk_to_json(&daemon_pub).unwrap(),
+    )
+}
 
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-1".into(),
+fn make_sign_events_request_row(
+    request_id: &str,
+    status: &str,
+    daemon_public_key: String,
+) -> RequestRow {
+    RequestRow {
+        request_id: request_id.into(),
         status: status.into(),
-        expired: "2099-01-01T00:00:00Z".into(),
-        signature: signature.map(|s| s.to_owned()),
+        daemon_public_key,
+    }
+}
+
+fn make_sign_events_full_request_row(
+    request_id: &str,
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+    daemon_public_key: String,
+) -> FullRequestRow {
+    FullRequestRow {
+        request_id: request_id.into(),
+        status: status.into(),
+        expired: expired.into(),
+        signature: signature.map(str::to_owned),
         client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
+        daemon_public_key,
         daemon_enc_public_key: "{}".into(),
         pairing_ids: "{}".into(),
         e2e_kids: "{}".into(),
         encrypted_payloads: None,
         unavailable_client_ids: "[]".into(),
-    });
+    }
+}
+
+fn replace_sign_events_full_request(
+    repo: &MockRepository,
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+) {
+    let daemon_public_key = repo
+        .request
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .daemon_public_key
+        .clone();
+    *repo.full_request.lock().unwrap() = Some(make_sign_events_full_request_row(
+        "req-1",
+        status,
+        expired,
+        signature,
+        daemon_public_key,
+    ));
+}
+
+fn setup_sign_events_with_aud(
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+    aud: &str,
+) -> (String, MockRepository) {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
+        setup_sign_events_base();
+
+    *repo.request.lock().unwrap() = Some(make_sign_events_request_row(
+        "req-1",
+        status,
+        daemon_public_key.clone(),
+    ));
+    *repo.full_request.lock().unwrap() = Some(make_sign_events_full_request_row(
+        "req-1",
+        status,
+        expired,
+        signature,
+        daemon_public_key,
+    ));
 
     let token = make_daemon_token(
         &server_priv,
@@ -82,10 +156,41 @@ fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepo
         &daemon_priv,
         &daemon_kid,
         "req-1",
-        &make_sign_events_aud(),
+        aud,
     );
 
     (token, repo)
+}
+
+fn setup_sign_events_request_only(status: &str, aud: &str) -> (String, MockRepository) {
+    let (server_priv, server_kid, daemon_priv, daemon_kid, repo, daemon_public_key) =
+        setup_sign_events_base();
+
+    *repo.request.lock().unwrap() = Some(make_sign_events_request_row(
+        "req-1",
+        status,
+        daemon_public_key,
+    ));
+
+    let token = make_daemon_token(
+        &server_priv,
+        &server_kid,
+        &daemon_priv,
+        &daemon_kid,
+        "req-1",
+        aud,
+    );
+
+    (token, repo)
+}
+
+fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepository) {
+    setup_sign_events_with_aud(
+        status,
+        "2099-01-01T00:00:00Z",
+        signature,
+        &make_sign_events_aud(),
+    )
 }
 
 #[tokio::test]
@@ -190,81 +295,30 @@ async fn sign_events_missing_auth_returns_401() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     let body = super::body_json(response).await;
-    assert_eq!(body["detail"], "missing authorization token");
-    assert_eq!(body["instance"], "/sign-events");
+    assert_problem_details(&body, "missing authorization token", "/sign-events");
 }
 
 #[tokio::test]
 async fn sign_events_wrong_aud_returns_401_with_route_instance() {
-    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
-    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
-
-    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-    let repo = MockRepository::new(sk);
-    *repo.request.lock().unwrap() = Some(RequestRow {
-        request_id: "req-1".into(),
-        status: "created".into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-    });
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "created".into(),
-        expired: "2099-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
-
-    let token = make_daemon_token(
-        &server_priv,
-        &server_kid,
-        &daemon_priv,
-        &daemon_kid,
-        "req-1",
+    let (token, repo) = setup_sign_events_with_aud(
+        "created",
+        "2099-01-01T00:00:00Z",
+        None,
         "https://api.example.com/wrong",
     );
-
     let state = make_test_app_state(repo);
     let app = build_sign_events_app(state);
     let response = app.oneshot(sign_events_request(&token)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = super::body_json(response).await;
-    assert_eq!(body["detail"], "invalid token: aud mismatch");
-    assert_eq!(body["instance"], "/sign-events");
+    assert_problem_details(&body, "invalid token: aud mismatch", "/sign-events");
 }
 
 #[tokio::test]
 async fn sign_events_request_not_found_returns_404() {
-    let (server_priv, server_pub, server_kid) = generate_signing_key_pair().unwrap();
-    let (daemon_priv, daemon_pub, daemon_kid) = generate_signing_key_pair().unwrap();
-
-    let sk = make_signing_key_row(&server_priv, &server_pub, &server_kid);
-    let repo = MockRepository::new(sk);
-
-    // DaemonAuth extractor needs a request row
-    *repo.request.lock().unwrap() = Some(RequestRow {
-        request_id: "req-1".into(),
-        status: "created".into(),
-        daemon_public_key: jwk_to_json(&daemon_pub).unwrap(),
-    });
-
-    // But full_request is None → 404
+    let (token, repo) = setup_sign_events_request_only("created", &make_sign_events_aud());
     *repo.full_request.lock().unwrap() = None;
-
-    let token = make_daemon_token(
-        &server_priv,
-        &server_kid,
-        &daemon_priv,
-        &daemon_kid,
-        "req-1",
-        &make_sign_events_aud(),
-    );
 
     let state = make_test_app_state(repo);
     let app = build_sign_events_app(state);
@@ -392,8 +446,7 @@ async fn sign_events_missing_client_ip_returns_500_with_instance() {
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = super::body_json(response).await;
-    assert_eq!(body["detail"], "could not determine client IP");
-    assert_eq!(body["instance"], "/sign-events");
+    assert_problem_details(&body, "could not determine client IP", "/sign-events");
 }
 
 #[tokio::test]
@@ -413,11 +466,11 @@ async fn sign_events_duplicate_connection_returns_429_with_instance() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
     let body = super::body_json(response).await;
-    assert_eq!(
-        body["detail"],
-        "SSE connection already active for this request"
+    assert_problem_details(
+        &body,
+        "SSE connection already active for this request",
+        "/sign-events",
     );
-    assert_eq!(body["instance"], "/sign-events");
 
     drop(first);
 }
@@ -425,59 +478,21 @@ async fn sign_events_duplicate_connection_returns_429_with_instance() {
 #[tokio::test]
 async fn sign_events_invalid_expiry_returns_500_with_instance() {
     let (token, repo) = setup_sign_events("pending", None);
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "pending".into(),
-        expired: "not-a-date".into(),
-        signature: None,
-        client_ids: r#"[\"client-1\"]"#.into(),
-        daemon_public_key: repo
-            .request
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .daemon_public_key
-            .clone(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
+    replace_sign_events_full_request(&repo, "pending", "not-a-date", None);
     let state = make_test_app_state(repo);
     let app = build_sign_events_app(state);
 
     let response = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = super::body_json(response).await;
-    assert_eq!(body["instance"], "/sign-events");
+    assert_problem_details(&body, "internal server error", "/sign-events");
 }
 
 #[tokio::test]
 async fn sign_events_expired_stream_emits_expired_event_and_writes_audit_log() {
     let (token, repo) = setup_sign_events("pending", None);
     let repo = Arc::new(repo);
-    *repo.full_request.lock().unwrap() = Some(FullRequestRow {
-        request_id: "req-1".into(),
-        status: "pending".into(),
-        expired: "2020-01-01T00:00:00Z".into(),
-        signature: None,
-        client_ids: r#"[\"client-1\"]"#.into(),
-        daemon_public_key: repo
-            .request
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .daemon_public_key
-            .clone(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    });
+    replace_sign_events_full_request(repo.as_ref(), "pending", "2020-01-01T00:00:00Z", None);
     let state = make_test_app_state_arc(repo.clone());
     let app = build_sign_events_app(state);
 
