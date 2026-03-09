@@ -2,6 +2,10 @@ use super::*;
 use crate::e2e_crypto;
 use crate::http::build_http_client;
 use crate::sign_flow::SignFlowState;
+use crate::test_http_server::{
+    empty_response, spawn_response_sequence, spawn_single_response_server,
+    spawn_single_response_server_with_request, sse_event, sse_headers, sse_response,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -40,13 +44,8 @@ fn fast_config() -> SignEventSseConfig {
     }
 }
 
-fn sse_headers() -> &'static str {
-    concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/event-stream\r\n",
-        "Cache-Control: no-cache\r\n",
-        "Connection: close\r\n\r\n",
-    )
+fn signature_status_event(status: &str) -> String {
+    sse_event("signature", &format!(r#"{{"status":"{status}"}}"#))
 }
 
 fn approved_jwe(enc_pub: &serde_json::Value, sig_bytes: &[u8]) -> String {
@@ -55,18 +54,8 @@ fn approved_jwe(enc_pub: &serde_json::Value, sig_bytes: &[u8]) -> String {
     e2e_crypto::encrypt_jwe_a256kw(enc_pub, &plaintext).unwrap()
 }
 
-async fn spawn_sse_server(body: String) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
-
-    format!("http://{addr}")
+fn signature_status_response(status: &str) -> String {
+    sse_response(&signature_status_event(status))
 }
 
 #[tokio::test]
@@ -74,12 +63,12 @@ async fn approved_returns_decrypted_signature() {
     let (mut flow_state, enc_pub) = flow_state_with_url("http://placeholder");
     let jwe = approved_jwe(&enc_pub, &[0xDE, 0xAD, 0xBE, 0xEF]);
     let event_data = serde_json::json!({"status": "approved", "signature": jwe});
-    flow_state.server_url = spawn_sse_server(format!(
-        "{}event: signature\ndata: {}\n\n",
-        sse_headers(),
-        event_data,
-    ))
+    let addr = spawn_single_response_server(sse_response(&sse_event(
+        "signature",
+        &event_data.to_string(),
+    )))
     .await;
+    flow_state.server_url = format!("http://{addr}");
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -96,11 +85,8 @@ async fn approved_returns_decrypted_signature() {
 #[tokio::test]
 async fn denied_status_returns_denied() {
     let (mut flow_state, _) = flow_state_with_url("http://placeholder");
-    flow_state.server_url = spawn_sse_server(format!(
-        "{}event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-        sse_headers(),
-    ))
-    .await;
+    let addr = spawn_single_response_server(signature_status_response("denied")).await;
+    flow_state.server_url = format!("http://{addr}");
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -112,11 +98,8 @@ async fn denied_status_returns_denied() {
 #[tokio::test]
 async fn unavailable_status_returns_unavailable() {
     let (mut flow_state, _) = flow_state_with_url("http://placeholder");
-    flow_state.server_url = spawn_sse_server(format!(
-        "{}event: signature\ndata: {{\"status\":\"unavailable\"}}\n\n",
-        sse_headers(),
-    ))
-    .await;
+    let addr = spawn_single_response_server(signature_status_response("unavailable")).await;
+    flow_state.server_url = format!("http://{addr}");
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -127,20 +110,8 @@ async fn unavailable_status_returns_unavailable() {
 
 #[tokio::test]
 async fn expired_status_returns_expired() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_single_response_server(signature_status_response("expired")).await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"expired\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -151,20 +122,8 @@ async fn expired_status_returns_expired() {
 
 #[tokio::test]
 async fn cancelled_status_returns_cancelled() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_single_response_server(signature_status_response("cancelled")).await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"cancelled\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -175,24 +134,13 @@ async fn cancelled_status_returns_cancelled() {
 
 #[tokio::test]
 async fn heartbeat_before_signature_is_handled() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_single_response_server(sse_response(&format!(
+        "{}{}",
+        sse_event("heartbeat", "{}"),
+        signature_status_event("denied"),
+    )))
+    .await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            concat!(
-                "{}",
-                "event: heartbeat\ndata: {{}}\n\n",
-                "event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-            ),
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -223,33 +171,12 @@ async fn expired_jwt_returns_expired_immediately() {
 
 #[tokio::test]
 async fn reconnects_on_server_error_then_succeeds() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_response_sequence(vec![
+        empty_response("HTTP/1.1 500 Internal Server Error"),
+        signature_status_response("denied"),
+    ])
+    .await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        // First connection: 500 error
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        socket
-            .write_all(
-                b"HTTP/1.1 500 Internal Server Error\r\n\
-                  Content-Length: 0\r\n\
-                  Connection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-
-        // Second connection: success with denied
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -260,34 +187,12 @@ async fn reconnects_on_server_error_then_succeeds() {
 
 #[tokio::test]
 async fn reconnects_on_stream_close_then_succeeds() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_response_sequence(vec![
+        sse_headers().to_owned(),
+        signature_status_response("denied"),
+    ])
+    .await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        // First connection: send headers then close
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        socket
-            .write_all(
-                b"HTTP/1.1 200 OK\r\n\
-                  Content-Type: text/event-stream\r\n\
-                  Connection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-        drop(socket);
-
-        // Second connection: success
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -298,22 +203,9 @@ async fn reconnects_on_stream_close_then_succeeds() {
 
 #[tokio::test]
 async fn bearer_token_sent_in_request() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let (addr, server) =
+        spawn_single_response_server_with_request(signature_status_response("denied")).await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 8192];
-        let n = socket.read(&mut buf).await.unwrap();
-        let request = String::from_utf8_lossy(&buf[..n]).to_string();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-        request
-    });
 
     let client = build_http_client(Duration::from_secs(2), "test").unwrap();
     wait_for_sign_result(&client, &fast_config(), &flow_state)
@@ -414,34 +306,12 @@ fn default_config_values() {
 
 #[tokio::test]
 async fn retry_after_429_then_succeeds() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let addr = spawn_response_sequence(vec![
+        empty_response("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1"),
+        signature_status_response("denied"),
+    ])
+    .await;
     let (flow_state, _) = flow_state_with_url(&format!("http://{addr}"));
-
-    tokio::spawn(async move {
-        // First connection: 429 with Retry-After
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
-        socket
-            .write_all(
-                b"HTTP/1.1 429 Too Many Requests\r\n\
-                  Retry-After: 1\r\n\
-                  Content-Length: 0\r\n\
-                  Connection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-
-        // Second connection: success with denied
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let _ = socket.read(&mut buf).await.unwrap();
-        let body = format!(
-            "{}event: signature\ndata: {{\"status\":\"denied\"}}\n\n",
-            sse_headers(),
-        );
-        socket.write_all(body.as_bytes()).await.unwrap();
-    });
 
     let client = build_http_client(Duration::from_secs(5), "test").unwrap();
     let result = wait_for_sign_result(&client, &fast_config(), &flow_state)

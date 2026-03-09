@@ -1,5 +1,5 @@
 use reqwest::{
-    Client, StatusCode,
+    Client, RequestBuilder, StatusCode,
     header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER},
 };
 use std::time::Duration;
@@ -62,32 +62,37 @@ pub(crate) fn map_status_error(status: StatusCode, url: &str) -> anyhow::Error {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) async fn send_get_with_retry(
-    client: &Client,
+fn apply_bearer(request: RequestBuilder, bearer: Option<&HeaderValue>) -> RequestBuilder {
+    match bearer {
+        Some(value) => request.header(AUTHORIZATION, value),
+        None => request,
+    }
+}
+
+async fn execute_with_retry<T, BuildRequest, IsSuccess, HandleSuccess, SuccessFuture>(
     url: &str,
-    bearer: Option<&HeaderValue>,
-) -> anyhow::Result<String> {
+    send_error_label: &str,
+    mut build_request: BuildRequest,
+    is_success: IsSuccess,
+    mut handle_success: HandleSuccess,
+) -> anyhow::Result<T>
+where
+    BuildRequest: FnMut() -> RequestBuilder,
+    IsSuccess: Fn(StatusCode) -> bool,
+    HandleSuccess: FnMut(reqwest::Response) -> SuccessFuture,
+    SuccessFuture: std::future::Future<Output = anyhow::Result<T>>,
+{
     let mut attempt = 0;
 
     loop {
-        let mut request = client.get(url);
-
-        if let Some(value) = bearer {
-            request = request.header(AUTHORIZATION, value);
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to send request to {url}: {error}"))?;
+        let response = build_request().send().await.map_err(|error| {
+            anyhow::anyhow!("failed to send {send_error_label} to {url}: {error}")
+        })?;
 
         let status = response.status();
 
-        if status.is_success() {
-            return response.text().await.map_err(|error| {
-                anyhow::anyhow!("failed to read response body from {url}: {error}")
-            });
+        if is_success(status) {
+            return handle_success(response).await;
         }
 
         if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
@@ -100,42 +105,44 @@ pub(crate) async fn send_get_with_retry(
     }
 }
 
+#[allow(dead_code)]
+pub(crate) async fn send_get_with_retry(
+    client: &Client,
+    url: &str,
+    bearer: Option<&HeaderValue>,
+) -> anyhow::Result<String> {
+    execute_with_retry(
+        url,
+        "request",
+        || apply_bearer(client.get(url), bearer),
+        |status| status.is_success(),
+        |response| async move {
+            response.text().await.map_err(|error| {
+                anyhow::anyhow!("failed to read response body from {url}: {error}")
+            })
+        },
+    )
+    .await
+}
+
 pub(crate) async fn send_post_json_with_retry(
     client: &Client,
     url: &str,
     bearer: Option<&HeaderValue>,
     body: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let mut attempt = 0;
-
-    loop {
-        let mut request = client.post(url).json(body);
-
-        if let Some(value) = bearer {
-            request = request.header(AUTHORIZATION, value);
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to send request to {url}: {error}"))?;
-
-        let status = response.status();
-
-        if status.is_success() {
-            return response.text().await.map_err(|error| {
+    execute_with_retry(
+        url,
+        "request",
+        || apply_bearer(client.post(url).json(body), bearer),
+        |status| status.is_success(),
+        |response| async move {
+            response.text().await.map_err(|error| {
                 anyhow::anyhow!("failed to read response body from {url}: {error}")
-            });
-        }
-
-        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
-            attempt += 1;
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-
-        return Err(map_status_error(status, url));
-    }
+            })
+        },
+    )
+    .await
 }
 
 /// Send a PATCH request with JSON body, retrying on 5xx/429.
@@ -147,34 +154,14 @@ pub(crate) async fn send_patch_json_with_retry(
     bearer: Option<&HeaderValue>,
     body: &serde_json::Value,
 ) -> anyhow::Result<u16> {
-    let mut attempt = 0;
-
-    loop {
-        let mut request = client.patch(url).json(body);
-
-        if let Some(value) = bearer {
-            request = request.header(AUTHORIZATION, value);
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to send PATCH to {url}: {error}"))?;
-
-        let status = response.status();
-
-        if status.is_success() || status == StatusCode::CONFLICT {
-            return Ok(status.as_u16());
-        }
-
-        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
-            attempt += 1;
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-
-        return Err(map_status_error(status, url));
-    }
+    execute_with_retry(
+        url,
+        "PATCH",
+        || apply_bearer(client.patch(url).json(body), bearer),
+        |status| status.is_success() || status == StatusCode::CONFLICT,
+        |response| async move { Ok(response.status().as_u16()) },
+    )
+    .await
 }
 
 /// Send a DELETE request, retrying on 5xx/429.
@@ -185,35 +172,16 @@ pub(crate) async fn send_delete_with_retry(
     url: &str,
     bearer: Option<&HeaderValue>,
 ) -> anyhow::Result<u16> {
-    let mut attempt = 0;
-
-    loop {
-        let mut request = client.delete(url);
-
-        if let Some(value) = bearer {
-            request = request.header(AUTHORIZATION, value);
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to send DELETE to {url}: {error}"))?;
-
-        let status = response.status();
-
-        if status.is_success() || status == StatusCode::CONFLICT || status == StatusCode::NOT_FOUND
-        {
-            return Ok(status.as_u16());
-        }
-
-        if let Some(delay) = retry_delay_for(status, response.headers(), attempt) {
-            attempt += 1;
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-
-        return Err(map_status_error(status, url));
-    }
+    execute_with_retry(
+        url,
+        "DELETE",
+        || apply_bearer(client.delete(url), bearer),
+        |status| {
+            status.is_success() || status == StatusCode::CONFLICT || status == StatusCode::NOT_FOUND
+        },
+        |response| async move { Ok(response.status().as_u16()) },
+    )
+    .await
 }
 
 #[cfg(test)]
