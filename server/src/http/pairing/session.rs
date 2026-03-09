@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::auth::{AuthError, check_signing_key_not_expired, extract_bearer_header};
+use crate::http::auth::check_signing_key_not_expired;
 use crate::http::rate_limit::{acquire_sse_slot, resolve_client_ip};
 use crate::jwt::{PairingClaims, PayloadType, extract_kid, jwk_from_json, verify_jws};
 use crate::repository::SigningKeyRow;
@@ -60,21 +60,20 @@ pub async fn get_pairing_session(
 // ---------------------------------------------------------------------------
 
 fn extract_bearer(headers: &axum::http::HeaderMap) -> Result<String, AppError> {
-    extract_bearer_header(headers).map_err(|error| match error {
-        AuthError::MissingAuthorizationHeader => {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .ok_or_else(|| {
             AppError::unauthorized("missing authorization token").with_instance(INSTANCE)
-        }
-        AuthError::InvalidAuthorizationHeader => {
+        })?
+        .to_str()
+        .map_err(|_| {
             AppError::unauthorized("invalid authorization header").with_instance(INSTANCE)
-        }
-        AuthError::MissingBearerScheme => {
-            AppError::unauthorized("missing Bearer scheme").with_instance(INSTANCE)
-        }
-        AuthError::InvalidToken(message) => {
-            AppError::unauthorized(format!("invalid token: {message}")).with_instance(INSTANCE)
-        }
-        AuthError::Unauthorized(message) => AppError::unauthorized(message).with_instance(INSTANCE),
-    })
+        })?;
+
+    value
+        .strip_prefix("Bearer ")
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::unauthorized("missing Bearer scheme").with_instance(INSTANCE))
 }
 
 // ---------------------------------------------------------------------------

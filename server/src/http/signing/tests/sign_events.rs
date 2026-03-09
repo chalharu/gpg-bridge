@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::{self, Body};
+use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 
@@ -13,6 +13,7 @@ use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{FullRequestRow, RequestRow};
 use crate::test_support::{
     MockRepository, make_signing_key_row, make_test_app_state, make_test_app_state_arc,
+    response_body_string,
 };
 
 use super::{make_daemon_token, response_status};
@@ -46,13 +47,6 @@ fn set_full_request_status(repo: &MockRepository, status: &str, signature: Optio
 
 fn make_sign_events_aud() -> String {
     "https://api.example.com/sign-events".to_owned()
-}
-
-async fn response_body_string(response: axum::response::Response) -> String {
-    let bytes = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn setup_sign_events(status: &str, signature: Option<&str>) -> (String, MockRepository) {
@@ -113,8 +107,7 @@ async fn sign_events_approved_returns_immediate_sse() {
         "expected SSE content-type, got: {ct}"
     );
 
-    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let body_str = String::from_utf8_lossy(&bytes);
+    let body_str = response_body_string(resp).await;
     assert!(
         body_str.contains("event: signature"),
         "expected signature event in: {body_str}"
@@ -138,8 +131,7 @@ async fn sign_events_denied_returns_immediate_sse() {
     let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let body_str = String::from_utf8_lossy(&bytes);
+    let body_str = response_body_string(resp).await;
     assert!(
         body_str.contains("event: signature"),
         "expected signature event in: {body_str}"
@@ -159,8 +151,7 @@ async fn sign_events_unavailable_returns_immediate_sse() {
     let resp = app.oneshot(sign_events_request(&token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let body_str = String::from_utf8_lossy(&bytes);
+    let body_str = response_body_string(resp).await;
     assert!(
         body_str.contains("unavailable"),
         "expected unavailable status in: {body_str}"

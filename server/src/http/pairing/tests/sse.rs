@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::body::{self, Body};
+use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use tower::ServiceExt;
@@ -8,7 +8,9 @@ use crate::http::AppState;
 use crate::http::pairing::get_pairing_session;
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRow, PairingRow};
-use crate::test_support::{MockRepository, make_signing_key_row, make_test_app_state};
+use crate::test_support::{
+    MockRepository, make_signing_key_row, make_test_app_state, response_body_string,
+};
 
 use super::{make_pairing_token, response_json};
 
@@ -249,10 +251,7 @@ async fn session_already_paired_returns_sse_with_paired_event() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    let body_str = response_body_string(response).await;
     assert!(
         body_str.contains("event: paired"),
         "expected paired event in body: {body_str}"
@@ -437,14 +436,12 @@ async fn session_notify_delivers_paired_event_on_waiting_stream() {
         },
     );
 
-    let body_bytes = tokio::time::timeout(
+    let body_str = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        body::to_bytes(response.into_body(), usize::MAX),
+        response_body_string(response),
     )
     .await
-    .expect("timed out reading SSE body")
-    .unwrap();
-    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    .expect("timed out reading SSE body");
 
     assert!(
         body_str.contains("event: paired"),

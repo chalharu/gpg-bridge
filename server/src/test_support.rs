@@ -770,6 +770,14 @@ pub async fn response_json(response: axum::response::Response) -> serde_json::Va
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Read a response body as UTF-8 for SSE and plain-text handler tests.
+pub async fn response_body_string(response: axum::response::Response) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 /// Build an in-memory [`SqliteRepository`] with migrations applied, wrapped
 /// in `Arc` for use in HTTP handler tests.
 pub async fn build_test_sqlite_repo() -> Arc<crate::repository::SqliteRepository> {

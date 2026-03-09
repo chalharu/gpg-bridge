@@ -88,10 +88,9 @@ mod tests {
     async fn resolve_client_ip_reports_instance_when_unavailable() {
         let request = Request::builder().body(Body::empty()).unwrap();
 
-        let error = match resolve_client_ip(&request, "/sign-events") {
-            Ok(_) => panic!("expected client IP resolution to fail"),
-            Err(error) => error,
-        };
+        let result = resolve_client_ip(&request, "/sign-events");
+        assert!(result.is_err(), "expected client IP resolution to fail");
+        let error = result.err().unwrap();
         let response = error.into_response();
         let body = response_json(response).await;
 
@@ -106,10 +105,9 @@ mod tests {
         let _guard =
             acquire_sse_slot(&state, ip, "pair-1", "custom key limit", "/pairing").unwrap();
 
-        let error = match acquire_sse_slot(&state, ip, "pair-1", "custom key limit", "/pairing") {
-            Ok(_) => panic!("expected SSE slot acquisition to fail"),
-            Err(error) => error,
-        };
+        let result = acquire_sse_slot(&state, ip, "pair-1", "custom key limit", "/pairing");
+        assert!(result.is_err(), "expected SSE slot acquisition to fail");
+        let error = result.err().unwrap();
         let response = error.into_response();
         let body = response_json(response).await;
 
@@ -135,16 +133,15 @@ mod tests {
             );
         }
 
-        let error = match acquire_sse_slot(
+        let result = acquire_sse_slot(
             &state,
             ip,
             "pair-overflow",
             "custom key limit",
             "/sign-events",
-        ) {
-            Ok(_) => panic!("expected IP SSE slot acquisition to fail"),
-            Err(error) => error,
-        };
+        );
+        assert!(result.is_err(), "expected IP SSE slot acquisition to fail");
+        let error = result.err().unwrap();
         let response = error.into_response();
         let body = response_json(response).await;
 
