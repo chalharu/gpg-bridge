@@ -185,6 +185,39 @@ async fn get_sign_request_without_active_signing_key_returns_500() {
     assert_eq!(body["instance"], serde_json::Value::Null);
 }
 
+#[tokio::test]
+async fn get_sign_request_with_invalid_stored_signing_key_returns_500() {
+    let (_server_priv, _server_pub, _server_kid, mut repo) = make_signing_repo();
+    let (client_priv, client_kid) = add_signing_client(&repo, "client-1");
+    add_signing_client_pairing(&repo, "client-1", "pair-1");
+    repo.pending_requests
+        .lock()
+        .unwrap()
+        .push(make_pending_request(
+            "req-1",
+            "client-1",
+            "pair-1",
+            Some("enc-data-1"),
+        ));
+    let mut bad_signing_key = repo.signing_key.clone().unwrap();
+    bad_signing_key.private_key = "not-an-encrypted-jwk".into();
+    repo.active_signing_key_override = Some(Some(bad_signing_key));
+
+    let state = make_test_app_state(repo);
+    let app = build_get_app(state);
+
+    let token = make_device_assertion(&client_priv, &client_kid, "client-1", "/sign-request");
+    let resp = app.oneshot(get_request_with_auth(&token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(resp).await;
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("key decrypt failed")
+    );
+}
+
 // ===========================================================================
 // POST /sign-result tests
 // ===========================================================================

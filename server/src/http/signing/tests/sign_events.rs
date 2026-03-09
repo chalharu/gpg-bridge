@@ -37,6 +37,13 @@ fn sign_events_request(token: &str) -> Request<Body> {
         .unwrap()
 }
 
+fn set_full_request_status(repo: &MockRepository, status: &str, signature: Option<&str>) {
+    let mut full_request = repo.full_request.lock().unwrap();
+    let row = full_request.as_mut().unwrap();
+    row.status = status.to_owned();
+    row.signature = signature.map(str::to_owned);
+}
+
 fn make_sign_events_aud() -> String {
     "https://api.example.com/sign-events".to_owned()
 }
@@ -291,6 +298,90 @@ async fn sign_events_pending_returns_sse_stream() {
     assert!(
         ct.contains("text/event-stream"),
         "expected SSE content-type, got: {ct}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_notify_delivers_signature_event_on_waiting_stream() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let state = make_test_app_state(repo);
+    let notifier = state.sign_event_notifier.clone();
+    let app = build_sign_events_app(state);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    notifier.notify(
+        "req-1",
+        crate::http::signing::notifier::SignEventData {
+            signature: Some("sig-notified".to_owned()),
+            status: "approved".to_owned(),
+        },
+    );
+
+    let body_str = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        response_body_string(response),
+    )
+    .await
+    .expect("timed out reading SSE body");
+    assert!(
+        body_str.contains("sig-notified"),
+        "expected notified signature in: {body_str}"
+    );
+    assert!(
+        body_str.contains("approved"),
+        "expected approved status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_closed_stream_checks_db_fallback() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let repo = Arc::new(repo);
+    let state = make_test_app_state_arc(repo.clone());
+    let notifier = state.sign_event_notifier.clone();
+    let app = build_sign_events_app(state);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    set_full_request_status(repo.as_ref(), "denied", None);
+    notifier.unsubscribe("req-1");
+
+    let body_str = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        response_body_string(response),
+    )
+    .await
+    .expect("timed out reading SSE body");
+    assert!(
+        body_str.contains("denied"),
+        "expected DB fallback status in: {body_str}"
+    );
+}
+
+#[tokio::test]
+async fn sign_events_closed_stream_emits_closed_comment_when_request_stays_pending() {
+    let (token, repo) = setup_sign_events("pending", None);
+    let state = make_test_app_state(repo);
+    let notifier = state.sign_event_notifier.clone();
+    let app = build_sign_events_app(state);
+
+    let response = app.oneshot(sign_events_request(&token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    notifier.unsubscribe("req-1");
+
+    let body_str = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        response_body_string(response),
+    )
+    .await
+    .expect("timed out reading SSE body");
+    assert!(
+        body_str.contains("closed"),
+        "expected closed comment in: {body_str}"
     );
 }
 
