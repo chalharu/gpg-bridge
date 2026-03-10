@@ -105,12 +105,7 @@ struct DeviceAppFixture {
 impl DeviceAppFixture {
     async fn new() -> Self {
         let (sk, _) = make_signing_key_row();
-        let repo = build_test_sqlite_repo().await;
-        repo.store_signing_key(&sk).await.unwrap();
-
-        let app = build_test_router(make_test_app_state_arc(
-            Arc::clone(&repo) as Arc<dyn crate::repository::SignatureRepository>
-        ));
+        let (repo, app) = build_sqlite_device_app(&sk).await;
 
         Self { repo, app }
     }
@@ -120,6 +115,28 @@ impl DeviceAppFixture {
         fixture.repo.create_client(client).await.unwrap();
         fixture
     }
+}
+
+async fn build_sqlite_device_app(
+    signing_key: &SigningKeyRow,
+) -> (Arc<crate::repository::SqliteRepository>, Router) {
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(signing_key).await.unwrap();
+
+    let app = build_test_router(make_test_app_state_arc(
+        Arc::clone(&repo) as Arc<dyn crate::repository::SignatureRepository>
+    ));
+
+    (repo, app)
+}
+
+async fn build_sqlite_device_app_with_client(
+    signing_key: &SigningKeyRow,
+    client: &ClientRow,
+) -> (Arc<crate::repository::SqliteRepository>, Router) {
+    let (repo, app) = build_sqlite_device_app(signing_key).await;
+    repo.create_client(client).await.unwrap();
+    (repo, app)
 }
 
 fn json_request(method: Method, uri: &str, body: &serde_json::Value) -> Request<Body> {
@@ -153,6 +170,22 @@ fn authed_json_request(
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::from(serde_json::to_vec(body).unwrap()))
         .unwrap()
+}
+
+fn post_device_json_request(
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Request<Body> {
+    authed_json_request(Method::POST, uri, token, body)
+}
+
+fn get_device_request(uri: &str, token: &str) -> Request<Body> {
+    authed_request(Method::GET, uri, token)
+}
+
+fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Request<Body> {
+    authed_request(Method::DELETE, &format!("{resource}/{item}"), token)
 }
 
 // ---------------------------------------------------------------------------

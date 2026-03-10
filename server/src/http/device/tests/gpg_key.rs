@@ -10,22 +10,10 @@ use crate::repository::{ClientRepository, SignatureRepository, SigningKeyReposit
 use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
 
 use super::{
-    DeviceAppFixture, X_COORD, Y_COORD, authed_json_request, authed_request, build_test_router,
-    build_test_sqlite_repo, make_device_assertion, make_gpg_client_row, make_gpg_test_setup,
-    make_signing_key_row,
+    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client,
+    delete_device_item_request, get_device_request, make_device_assertion, make_gpg_client_row,
+    make_gpg_test_setup, make_signing_key_row, post_device_json_request,
 };
-
-fn post_gpg_key_request(token: &str, body: &serde_json::Value) -> Request<Body> {
-    authed_json_request(Method::POST, "/device/gpg_key", token, body)
-}
-
-fn get_gpg_key_request(token: &str) -> Request<Body> {
-    authed_request(Method::GET, "/device/gpg_key", token)
-}
-
-fn delete_gpg_key_request(token: &str, keygrip: &str) -> Request<Body> {
-    authed_request(Method::DELETE, &format!("/device/gpg_key/{keygrip}"), token)
-}
 
 #[tokio::test]
 async fn add_gpg_key_success() {
@@ -42,7 +30,7 @@ async fn add_gpg_key_success() {
     });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -58,7 +46,7 @@ async fn add_gpg_key_empty_rejected() {
     let body = json!({ "gpg_keys": [] });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -80,7 +68,7 @@ async fn add_gpg_key_invalid_keygrip_rejected() {
     });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -102,7 +90,7 @@ async fn add_gpg_key_invalid_key_id_rejected() {
     });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -124,7 +112,7 @@ async fn add_gpg_key_empty_public_key_rejected() {
     });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -157,7 +145,7 @@ async fn add_gpg_key_upsert_overwrites_existing() {
     });
     let response = fixture
         .app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -197,7 +185,7 @@ async fn list_gpg_keys_returns_registered() {
     let token = make_device_assertion(&priv_jwk, &kid, "fid-list", "/device/gpg_key");
     let response = fixture
         .app
-        .oneshot(get_gpg_key_request(&token))
+        .oneshot(get_device_request("/device/gpg_key", &token))
         .await
         .unwrap();
 
@@ -212,20 +200,11 @@ async fn list_gpg_keys_returns_registered() {
 #[tokio::test]
 async fn list_gpg_keys_empty() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo: Arc<crate::repository::SqliteRepository> = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
     let response = app
-        .oneshot(
-            Request::get("/device/gpg_key")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(get_device_request("/device/gpg_key", &token))
         .await
         .unwrap();
 
@@ -255,12 +234,7 @@ async fn delete_gpg_key_success() {
         "public_key": { "kty": "EC" }
     }]);
     let client = make_gpg_client_row("fid-del-gpg", &keys, "enc-1", &gpg.to_string());
-    let repo: Arc<crate::repository::SqliteRepository> =
-        crate::test_support::build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(
         &priv_jwk,
@@ -269,12 +243,11 @@ async fn delete_gpg_key_success() {
         "/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
     );
     let response = app
-        .oneshot(
-            Request::delete("/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_device_item_request(
+            "/device/gpg_key",
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            &token,
+        ))
         .await
         .unwrap();
 
@@ -284,12 +257,7 @@ async fn delete_gpg_key_success() {
 #[tokio::test]
 async fn delete_gpg_key_not_found() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo: Arc<crate::repository::SqliteRepository> =
-        crate::test_support::build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(
         &priv_jwk,
@@ -298,12 +266,11 @@ async fn delete_gpg_key_not_found() {
         "/device/gpg_key/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
     );
     let response = app
-        .oneshot(
-            Request::delete("/device/gpg_key/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_device_item_request(
+            "/device/gpg_key",
+            "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+            &token,
+        ))
         .await
         .unwrap();
 
@@ -313,12 +280,7 @@ async fn delete_gpg_key_not_found() {
 #[tokio::test]
 async fn add_gpg_key_multiple_keys_success() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo: Arc<crate::repository::SqliteRepository> =
-        crate::test_support::build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(Arc::clone(&repo) as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
     let body = json!({
@@ -336,7 +298,7 @@ async fn add_gpg_key_multiple_keys_success() {
         ]
     });
     let response = app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -364,7 +326,7 @@ async fn add_gpg_key_concurrent_modification_conflict() {
         }]
     });
     let response = app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -374,12 +336,7 @@ async fn add_gpg_key_concurrent_modification_conflict() {
 #[tokio::test]
 async fn add_gpg_key_non_object_public_key_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo: Arc<crate::repository::SqliteRepository> =
-        crate::test_support::build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
     let body = json!({
@@ -390,7 +347,7 @@ async fn add_gpg_key_non_object_public_key_rejected() {
         }]
     });
     let response = app
-        .oneshot(post_gpg_key_request(&token, &body))
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -400,12 +357,7 @@ async fn add_gpg_key_non_object_public_key_rejected() {
 #[tokio::test]
 async fn add_gpg_key_key_id_too_long_rejected() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo: Arc<crate::repository::SqliteRepository> =
-        crate::test_support::build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
     // "0x" + 41 hex chars = 43 chars total, exceeds maxLength:42
@@ -418,13 +370,7 @@ async fn add_gpg_key_key_id_too_long_rejected() {
         }]
     });
     let response = app
-        .oneshot(
-            Request::post("/device/gpg_key")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
         .await
         .unwrap();
 
@@ -457,9 +403,10 @@ async fn delete_gpg_key_concurrent_modification_conflict() {
         "/device/gpg_key/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
     );
     let response = app
-        .oneshot(delete_gpg_key_request(
-            &token,
+        .oneshot(delete_device_item_request(
+            "/device/gpg_key",
             "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            &token,
         ))
         .await
         .unwrap();
@@ -470,15 +417,15 @@ async fn delete_gpg_key_concurrent_modification_conflict() {
 #[tokio::test]
 async fn delete_gpg_key_invalid_keygrip_format() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
+    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key/invalid-format");
     let response = app
-        .oneshot(delete_gpg_key_request(&token, "invalid-format"))
+        .oneshot(delete_device_item_request(
+            "/device/gpg_key",
+            "invalid-format",
+            &token,
+        ))
         .await
         .unwrap();
 
