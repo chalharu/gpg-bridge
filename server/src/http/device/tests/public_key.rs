@@ -59,6 +59,27 @@ fn assert_public_key_state_unchanged(
     );
 }
 
+fn has_public_key_kid(keys: &[serde_json::Value], kid: &str) -> bool {
+    keys.iter().any(|key| key["kid"].as_str() == Some(kid))
+}
+
+fn has_public_key(keys: &[serde_json::Value], key_use: &str, alg: &str, kid: &str) -> bool {
+    keys.iter().any(|key| {
+        key["use"].as_str() == Some(key_use)
+            && key["alg"].as_str() == Some(alg)
+            && key["kid"].as_str() == Some(kid)
+    })
+}
+
+async fn stored_public_keys(
+    repo: &(impl ClientRepository + ?Sized),
+    client_id: &str,
+) -> (Vec<serde_json::Value>, String) {
+    let client = repo.get_client_by_id(client_id).await.unwrap().unwrap();
+    let keys: Vec<serde_json::Value> = serde_json::from_str(&client.public_keys).unwrap();
+    (keys, client.default_kid)
+}
+
 struct DeleteFailureCase<'a> {
     name: &'a str,
     auth_kid: &'a str,
@@ -292,11 +313,7 @@ async fn list_public_keys_returns_all() {
             .count(),
         1
     );
-    assert!(keys.iter().any(|key| {
-        key["use"].as_str() == Some("enc")
-            && key["alg"].as_str() == Some("ECDH-ES+A256KW")
-            && key["kid"].as_str() == Some(&enc_kid)
-    }));
+    assert!(has_public_key(keys, "enc", "ECDH-ES+A256KW", &enc_kid));
     assert_eq!(json["default_kid"].as_str().unwrap(), enc_kid);
 }
 
@@ -449,22 +466,10 @@ async fn delete_public_key_auto_reassign_default_kid() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     // Reassignment picks the first remaining enc key in array order.
-    let c = repo
-        .get_client_by_id("fid-reassign")
-        .await
-        .unwrap()
-        .unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(
-        keys.iter()
-            .all(|key| key["kid"].as_str() != Some("enc-del"))
-    );
-    assert!(
-        keys.iter()
-            .any(|key| key["kid"].as_str() == Some("enc-keep"))
-    );
-    assert_eq!(c.default_kid, "enc-keep");
+    let (keys, default_kid) = stored_public_keys(repo.as_ref(), "fid-reassign").await;
+    assert!(!has_public_key_kid(&keys, "enc-del"));
+    assert!(has_public_key_kid(&keys, "enc-keep"));
+    assert_eq!(default_kid, "enc-keep");
 }
 
 // ---------------------------------------------------------------------------

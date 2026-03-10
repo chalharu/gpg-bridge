@@ -33,6 +33,18 @@ fn make_sign_jwt(
     sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
+async fn sign_result_status(app: Router, token: &str) -> StatusCode {
+    app.oneshot(
+        Request::get("/sign-result")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .status()
+}
+
 // ---- Tests ----
 
 #[tokio::test]
@@ -43,17 +55,7 @@ async fn valid_sign_jwt_succeeds() {
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
-    let response = app
-        .oneshot(
-            Request::get("/sign-result")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(sign_result_status(app, &token).await, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -78,17 +80,10 @@ async fn wrong_key_returns_401() {
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
-    let response = app
-        .oneshot(
-            Request::get("/sign-result")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sign_result_status(app, &token).await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -106,17 +101,10 @@ async fn expired_sign_jwt_returns_401() {
     };
     let token = sign_jws(&claims, &priv_jwk, &kid).unwrap();
 
-    let response = app
-        .oneshot(
-            Request::get("/sign-result")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sign_result_status(app, &token).await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -128,15 +116,8 @@ async fn expired_signing_key_returns_401() {
     let app = build_app(state);
 
     let token = make_sign_jwt(&priv_jwk, &kid, "req-1", "client-1");
-    let response = app
-        .oneshot(
-            Request::get("/sign-result")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sign_result_status(app, &token).await,
+        StatusCode::UNAUTHORIZED
+    );
 }

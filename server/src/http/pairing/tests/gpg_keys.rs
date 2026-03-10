@@ -8,29 +8,50 @@ use crate::test_support::{MockRepository, make_client_jwt, make_signing_key_row}
 
 use super::{add_client_pairings, build_test_app, make_client_row, query_gpg_keys_request};
 
-#[tokio::test]
-async fn query_gpg_keys_returns_aggregated_keys() {
+fn gpg_key_value(keygrip: &str, key_id: &str, crv: &str) -> serde_json::Value {
+    json!({
+        "keygrip": keygrip,
+        "key_id": key_id,
+        "public_key": { "kty": "EC", "crv": crv }
+    })
+}
+
+fn build_query_gpg_keys_app(
+    clients: Vec<crate::repository::ClientRow>,
+    pairings: &[(&str, &str)],
+) -> (axum::Router, josekit::jwk::Jwk, josekit::jwk::Jwk, String) {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-
-    let gpg_keys_1 = json!([{
-        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "key_id": "0xABCD1234",
-        "public_key": { "kty": "EC", "crv": "P-256" }
-    }]);
-    let gpg_keys_2 = json!([{
-        "keygrip": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-        "key_id": "0xEF567890",
-        "public_key": { "kty": "EC", "crv": "P-384" }
-    }]);
-
-    let client1 = make_client_row("fid-1", &gpg_keys_1.to_string());
-    let client2 = make_client_row("fid-2", &gpg_keys_2.to_string());
-
     let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().extend(vec![client1, client2]);
-    add_client_pairings(&repo, &[("fid-1", "pair-1"), ("fid-2", "pair-2")]);
-    let app = build_test_app(repo);
+    repo.clients.lock().unwrap().extend(clients);
+    add_client_pairings(&repo, pairings);
+    (build_test_app(repo), priv_jwk, pub_jwk, kid)
+}
+
+#[tokio::test]
+async fn query_gpg_keys_returns_aggregated_keys() {
+    let client1 = make_client_row(
+        "fid-1",
+        &json!([gpg_key_value(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "0xABCD1234",
+            "P-256",
+        )])
+        .to_string(),
+    );
+    let client2 = make_client_row(
+        "fid-2",
+        &json!([gpg_key_value(
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "0xEF567890",
+            "P-384",
+        )])
+        .to_string(),
+    );
+    let (app, priv_jwk, pub_jwk, kid) = build_query_gpg_keys_app(
+        vec![client1, client2],
+        &[("fid-1", "pair-1"), ("fid-2", "pair-2")],
+    );
 
     let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-2", "pair-2");
@@ -75,25 +96,20 @@ async fn query_gpg_keys_returns_empty_when_no_keys() {
 
 #[tokio::test]
 async fn query_gpg_keys_missing_client_returns_remaining_keys() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_jwk, &pub_jwk, &kid);
-
-    let gpg_keys_1 = json!([{
-        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "key_id": "0xABCD1234",
-        "public_key": { "kty": "EC", "crv": "P-256" }
-    }]);
-
     // Only client1 exists in the DB; client2 (fid-deleted) is missing
-    let client1 = make_client_row("fid-1", &gpg_keys_1.to_string());
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client1);
-    add_client_pairings(
-        &repo,
+    let client1 = make_client_row(
+        "fid-1",
+        &json!([gpg_key_value(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "0xABCD1234",
+            "P-256",
+        )])
+        .to_string(),
+    );
+    let (app, priv_jwk, pub_jwk, kid) = build_query_gpg_keys_app(
+        vec![client1],
         &[("fid-1", "pair-1"), ("fid-deleted", "pair-deleted")],
     );
-    let app = build_test_app(repo);
 
     let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
     let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-deleted", "pair-deleted");

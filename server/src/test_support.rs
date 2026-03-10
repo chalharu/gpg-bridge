@@ -15,8 +15,8 @@ use crate::http::pairing::notifier::PairingNotifier;
 use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
 use crate::http::signing::notifier::SignEventNotifier;
 use crate::jwt::{
-    ClientInnerClaims, ClientOuterClaims, PayloadType, encrypt_jwe_direct, encrypt_private_key,
-    jwk_to_json, sign_jws,
+    ClientInnerClaims, ClientOuterClaims, DeviceAssertionClaims, PayloadType, encrypt_jwe_direct,
+    encrypt_private_key, jwk_to_json, sign_jws,
 };
 use crate::repository::{
     AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
@@ -810,6 +810,24 @@ pub fn make_client_jwt(
         exp: 1_900_000_000,
     };
     sign_jws(&outer, priv_jwk, kid).unwrap()
+}
+
+/// Build a device assertion JWT for authenticated device and signing tests.
+pub fn make_device_assertion(
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    sub: &str,
+    path: &str,
+) -> String {
+    let claims = DeviceAssertionClaims {
+        iss: sub.to_owned(),
+        sub: sub.to_owned(),
+        aud: format!("{BASE_URL}{path}"),
+        exp: 1_900_000_000,
+        iat: 1_900_000_000 - 30,
+        jti: uuid::Uuid::new_v4().to_string(),
+    };
+    sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
 /// Decode a JSON response body for HTTP handler tests.

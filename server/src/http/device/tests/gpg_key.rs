@@ -15,6 +15,22 @@ use super::{
     make_gpg_test_setup, post_device_json_request,
 };
 
+fn gpg_key_value(
+    keygrip: &str,
+    key_id: impl Into<String>,
+    public_key: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "keygrip": keygrip,
+        "key_id": key_id.into(),
+        "public_key": public_key,
+    })
+}
+
+fn gpg_keys_body(gpg_keys: Vec<serde_json::Value>) -> serde_json::Value {
+    json!({ "gpg_keys": gpg_keys })
+}
+
 fn assert_gpg_device_state_unchanged(
     before: &crate::repository::ClientRow,
     after: &crate::repository::ClientRow,
@@ -70,13 +86,11 @@ async fn add_gpg_key_success() {
     let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
-    let body = json!({
-        "gpg_keys": [{
-            "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "key_id": "0xABCD1234EF567890",
-            "public_key": { "kty": "EC", "crv": "P-256", "x": "abc", "y": "def" }
-        }]
-    });
+    let body = gpg_keys_body(vec![gpg_key_value(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "0xABCD1234EF567890",
+        json!({ "kty": "EC", "crv": "P-256", "x": "abc", "y": "def" }),
+    )]);
     let response = fixture
         .app
         .oneshot(post_device_json_request("/device/gpg_key", &token, &body))
@@ -96,67 +110,57 @@ async fn add_gpg_key_bad_request_cases() {
     let cases = [
         Case {
             name: "empty keys",
-            build_body: || json!({ "gpg_keys": [] }),
+            build_body: || gpg_keys_body(vec![]),
         },
         Case {
             name: "invalid keygrip",
             build_body: || {
-                json!({
-                    "gpg_keys": [{
-                        "keygrip": "TOOSHORT",
-                        "key_id": "0xABCD",
-                        "public_key": { "kty": "EC" }
-                    }]
-                })
+                gpg_keys_body(vec![gpg_key_value(
+                    "TOOSHORT",
+                    "0xABCD",
+                    json!({ "kty": "EC" }),
+                )])
             },
         },
         Case {
             name: "invalid key id",
             build_body: || {
-                json!({
-                    "gpg_keys": [{
-                        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "key_id": "not-hex!",
-                        "public_key": { "kty": "EC" }
-                    }]
-                })
+                gpg_keys_body(vec![gpg_key_value(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "not-hex!",
+                    json!({ "kty": "EC" }),
+                )])
             },
         },
         Case {
             name: "empty public key",
             build_body: || {
-                json!({
-                    "gpg_keys": [{
-                        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "key_id": "0xABCD",
-                        "public_key": {}
-                    }]
-                })
+                gpg_keys_body(vec![gpg_key_value(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "0xABCD",
+                    json!({}),
+                )])
             },
         },
         Case {
             name: "non object public key",
             build_body: || {
-                json!({
-                    "gpg_keys": [{
-                        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "key_id": "0xABCD",
-                        "public_key": "not-an-object"
-                    }]
-                })
+                gpg_keys_body(vec![gpg_key_value(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "0xABCD",
+                    json!("not-an-object"),
+                )])
             },
         },
         Case {
             name: "key id too long",
             build_body: || {
                 let long_key_id = format!("0x{}", "A".repeat(41));
-                json!({
-                    "gpg_keys": [{
-                        "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "key_id": long_key_id,
-                        "public_key": { "kty": "EC" }
-                    }]
-                })
+                gpg_keys_body(vec![gpg_key_value(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    long_key_id,
+                    json!({ "kty": "EC" }),
+                )])
             },
         },
     ];
@@ -226,11 +230,11 @@ async fn add_gpg_key_upsert_overwrites_existing() {
 #[tokio::test]
 async fn list_gpg_keys_returns_registered() {
     let (priv_jwk, kid, _sk, enc_kid, keys) = make_device_key_test_setup();
-    let gpg = json!([{
-        "keygrip": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-        "key_id": "0xEF",
-        "public_key": { "kty": "EC" }
-    }]);
+    let gpg = json!([gpg_key_value(
+        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "0xEF",
+        json!({ "kty": "EC" }),
+    )]);
     let client = make_gpg_client_row("fid-list", &keys, &enc_kid, &gpg.to_string());
     let fixture = DeviceAppFixture::with_client(&client).await;
 

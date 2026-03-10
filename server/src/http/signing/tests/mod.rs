@@ -7,12 +7,13 @@ use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
-    DaemonAuthClaims, DeviceAssertionClaims, PayloadType, RequestClaims, SignClaims,
-    generate_signing_key_pair, jwk_to_json, sign_jws,
+    DaemonAuthClaims, PayloadType, RequestClaims, SignClaims, generate_signing_key_pair,
+    jwk_to_json, sign_jws,
 };
 use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
 use crate::test_support::{
-    MockRepository, make_signing_key_row, make_test_client_pairing_row, make_test_client_row,
+    MockRepository, make_device_assertion, make_signing_key_row, make_test_client_pairing_row,
+    make_test_client_row,
 };
 
 use super::{get_sign_request, post_sign_request, post_sign_result};
@@ -263,18 +264,6 @@ fn post_json(body: &serde_json::Value) -> Request<Body> {
 
 async fn response_status(app: Router, req: Request<Body>) -> StatusCode {
     app.oneshot(req).await.unwrap().status()
-}
-
-fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, path: &str) -> String {
-    let claims = DeviceAssertionClaims {
-        iss: sub.to_owned(),
-        sub: sub.to_owned(),
-        aud: format!("https://api.example.com{path}"),
-        exp: 1_900_000_000,
-        iat: 1_900_000_000 - 30,
-        jti: uuid::Uuid::new_v4().to_string(),
-    };
-    sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
 fn get_request_with_auth(token: &str) -> Request<Body> {

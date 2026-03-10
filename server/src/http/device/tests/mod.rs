@@ -9,11 +9,12 @@ use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
-    DeviceAssertionClaims, build_signing_key_row, generate_signing_key_pair, jwk_to_json, sign_jws,
+    build_signing_key_row, generate_signing_key_pair, jwk_to_json,
 };
 use crate::repository::{ClientRepository, ClientRow, SigningKeyRepository, SigningKeyRow};
 use crate::test_support::{
-    build_test_sqlite_repo, make_test_app_state_arc, make_test_client_row_with_issued_at,
+    build_test_sqlite_repo, make_device_assertion, make_test_app_state_arc,
+    make_test_client_row_with_issued_at,
 };
 
 use super::{
@@ -31,7 +32,6 @@ mod register_mutations;
 // ---------------------------------------------------------------------------
 
 const SECRET: &str = "test-secret-key!";
-const BASE_URL: &str = "https://api.example.com";
 const X_COORD: &str = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU";
 const Y_COORD: &str = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0";
 
@@ -98,19 +98,6 @@ fn register_body(fid: &str, token: &str) -> serde_json::Value {
             }
         }
     })
-}
-
-/// Build a DeviceAssertion JWT for authenticated endpoints.
-fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, path: &str) -> String {
-    let claims = DeviceAssertionClaims {
-        iss: sub.to_owned(),
-        sub: sub.to_owned(),
-        aud: format!("{BASE_URL}{path}"),
-        exp: 1_900_000_000,
-        iat: 1_900_000_000 - 30,
-        jti: uuid::Uuid::new_v4().to_string(),
-    };
-    sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
 pub fn build_test_router(state: AppState) -> Router {
