@@ -208,41 +208,131 @@ async fn register_device_public_keys_contains_all_keys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn update_device_only_token_succeeds() {
-    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
-    let client = make_client_row("fid-ot", "old-tok", &keys, &enc_kid);
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+async fn update_device_single_field_success_cases() {
+    struct Case {
+        name: &'static str,
+        client_id: &'static str,
+        initial_device_token: &'static str,
+        initial_default_kid: Option<&'static str>,
+        body: serde_json::Value,
+        expected_device_token: &'static str,
+        expected_default_kid: &'static str,
+    }
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-ot", "/device");
-    let body = json!({ "device_token": "new-tok" });
-    let response = app
-        .oneshot(patch_device_request(&token, &body))
-        .await
-        .unwrap();
+    let cases = [
+        Case {
+            name: "only device_token",
+            client_id: "fid-ot",
+            initial_device_token: "old-tok",
+            initial_default_kid: None,
+            body: json!({ "device_token": "new-tok" }),
+            expected_device_token: "new-tok",
+            expected_default_kid: "enc-1",
+        },
+        Case {
+            name: "only default_kid",
+            client_id: "fid-ok",
+            initial_device_token: "tok-ok",
+            initial_default_kid: Some("enc-2"),
+            body: json!({ "default_kid": "enc-1" }),
+            expected_device_token: "tok-ok",
+            expected_default_kid: "enc-1",
+        },
+    ];
 
-    assert_eq!(
-        response.status(),
-        StatusCode::NO_CONTENT,
-        "sending only device_token must succeed (not 400)"
-    );
-}
+    for case in cases {
+        let (priv_jwk, kid, sk, enc_kid, mut keys) = make_device_key_test_setup();
+        if let Some(extra_enc_kid) = case.initial_default_kid {
+            let mut parsed_keys: Vec<serde_json::Value> = serde_json::from_str(&keys).unwrap();
+            parsed_keys.push(json!({
+                "kty": "EC",
+                "use": "enc",
+                "crv": "P-256",
+                "alg": "ECDH-ES+A256KW",
+                "kid": extra_enc_kid,
+                "x": X_COORD,
+                "y": Y_COORD,
+            }));
+            keys = serde_json::to_string(&parsed_keys).unwrap();
+        }
 
-#[tokio::test]
-async fn update_device_only_default_kid_succeeds() {
-    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
-    let client = make_client_row("fid-ok", "tok-ok", &keys, &enc_kid);
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+        let initial_default_kid = case.initial_default_kid.unwrap_or(enc_kid.as_str());
+        let client = make_client_row(
+            case.client_id,
+            case.initial_device_token,
+            &keys,
+            initial_default_kid,
+        );
+        let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+        let before = repo
+            .get_client_by_id(case.client_id)
+            .await
+            .unwrap()
+            .unwrap();
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-ok", "/device");
-    let body = json!({ "default_kid": "enc-1" });
-    let response = app
-        .oneshot(patch_device_request(&token, &body))
-        .await
-        .unwrap();
+        let token = make_device_assertion(&priv_jwk, &kid, case.client_id, "/device");
+        let response = app
+            .oneshot(patch_device_request(&token, &case.body))
+            .await
+            .unwrap();
 
-    assert_eq!(
-        response.status(),
-        StatusCode::NO_CONTENT,
-        "sending only default_kid must succeed (not 400)"
-    );
+        assert_eq!(
+            response.status(),
+            StatusCode::NO_CONTENT,
+            "case failed: {}",
+            case.name
+        );
+
+        let after = repo
+            .get_client_by_id(case.client_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after.client_id, before.client_id,
+            "case failed: {}",
+            case.name
+        );
+        assert_eq!(
+            after.public_keys, before.public_keys,
+            "case failed: {}",
+            case.name
+        );
+        assert_eq!(
+            after.device_token, case.expected_device_token,
+            "case failed: {}",
+            case.name
+        );
+        assert_eq!(
+            after.default_kid, case.expected_default_kid,
+            "case failed: {}",
+            case.name
+        );
+
+        if case.body.get("device_token").is_some() {
+            assert_ne!(
+                before.device_token, after.device_token,
+                "case failed: {}",
+                case.name
+            );
+            assert_eq!(
+                before.default_kid, after.default_kid,
+                "case failed: {}",
+                case.name
+            );
+        }
+
+        if case.body.get("default_kid").is_some() {
+            assert_ne!(
+                before.default_kid, after.default_kid,
+                "case failed: {}",
+                case.name
+            );
+            assert_eq!(
+                before.device_token, after.device_token,
+                "case failed: {}",
+                case.name
+            );
+        }
+    }
 }
