@@ -34,6 +34,36 @@ const BASE_URL: &str = "https://api.example.com";
 const X_COORD: &str = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU";
 const Y_COORD: &str = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0";
 
+fn ec_public_key_value(key_use: &str, alg: &str, kid: Option<&str>) -> serde_json::Value {
+    let mut key = json!({
+        "kty": "EC",
+        "use": key_use,
+        "crv": "P-256",
+        "alg": alg,
+        "x": X_COORD,
+        "y": Y_COORD,
+    });
+    if let Some(kid) = kid {
+        key["kid"] = json!(kid);
+    }
+    key
+}
+
+fn ec_public_key_json(key_use: &str, alg: &str, kid: &str) -> String {
+    serde_json::to_string(&ec_public_key_value(key_use, alg, Some(kid))).unwrap()
+}
+
+fn signing_public_key_json(pub_jwk: &josekit::jwk::Jwk) -> String {
+    let mut key: serde_json::Value = serde_json::from_str(&jwk_to_json(pub_jwk).unwrap()).unwrap();
+    key["use"] = json!("sig");
+    key["alg"] = json!("ES256");
+    serde_json::to_string(&key).unwrap()
+}
+
+fn public_keys_json(keys: &[String]) -> String {
+    format!("[{}]", keys.join(","))
+}
+
 fn make_signing_key_row() -> (SigningKeyRow, josekit::jwk::Jwk) {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let row = build_signing_key_row(&priv_jwk, &pub_jwk, &kid, SECRET, 90).unwrap();
@@ -187,11 +217,12 @@ pub fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Re
 fn make_device_key_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, String, String) {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
     let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
+    let pub_json = signing_public_key_json(&pub_jwk);
     let enc_kid = "enc-1".to_owned();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"{enc_kid}\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
+    let keys = public_keys_json(&[
+        pub_json,
+        ec_public_key_json("enc", "ECDH-ES+A256KW", &enc_kid),
+    ]);
     (priv_jwk, kid, sk, enc_kid, keys)
 }
 
