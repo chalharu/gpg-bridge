@@ -184,6 +184,17 @@ pub fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Re
     authed_request(Method::DELETE, &format!("{resource}/{item}"), token)
 }
 
+fn make_device_key_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, String, String) {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let (sk, _) = make_signing_key_row();
+    let pub_json = jwk_to_json(&pub_jwk).unwrap();
+    let enc_kid = "enc-1".to_owned();
+    let keys = format!(
+        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"{enc_kid}\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
+    );
+    (priv_jwk, kid, sk, enc_kid, keys)
+}
+
 // ---------------------------------------------------------------------------
 // POST /device tests
 // ---------------------------------------------------------------------------
@@ -200,15 +211,9 @@ fn make_pk_test_setup() -> (
     String,
     String,
 ) {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let enc_kid = "enc-1";
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"{enc_kid}\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_client_row("fid-pk", "tok-pk", &keys, enc_kid);
-    (priv_jwk, kid, sk, client, enc_kid.to_owned(), keys)
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_client_row("fid-pk", "tok-pk", &keys, &enc_kid);
+    (priv_jwk, kid, sk, client, enc_kid, keys)
 }
 
 // ---------------------------------------------------------------------------
@@ -236,12 +241,7 @@ fn make_gpg_client_row(
 }
 
 fn make_gpg_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, ClientRow) {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_gpg_client_row("fid-gpg", &keys, "enc-1", "[]");
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_gpg_client_row("fid-gpg", &keys, &enc_kid, "[]");
     (priv_jwk, kid, sk, client)
 }
