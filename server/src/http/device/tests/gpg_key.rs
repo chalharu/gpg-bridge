@@ -3,14 +3,13 @@ use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::ClientRepository;
 use crate::test_support::{MockRepository, make_test_app_state};
 
 use super::{
-    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client, build_test_router,
-    delete_device_item_request, get_device_request, make_device_assertion, make_gpg_client_row,
-    make_gpg_test_setup, make_signing_key_row, post_device_json_request,
+    DeviceAppFixture, build_sqlite_device_app_with_client, build_test_router,
+    delete_device_item_request, get_device_request, make_device_assertion,
+    make_device_key_test_setup, make_gpg_client_row, make_gpg_test_setup, post_device_json_request,
 };
 
 #[tokio::test]
@@ -119,18 +118,13 @@ async fn add_gpg_key_empty_public_key_rejected() {
 
 #[tokio::test]
 async fn add_gpg_key_upsert_overwrites_existing() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (_sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
+    let (priv_jwk, kid, _sk, enc_kid, keys) = make_device_key_test_setup();
     let existing_gpg = json!([{
         "keygrip": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "key_id": "0xAABB",
         "public_key": { "kty": "EC", "crv": "P-256" }
     }]);
-    let client = make_gpg_client_row("fid-upsert", &keys, "enc-1", &existing_gpg.to_string());
+    let client = make_gpg_client_row("fid-upsert", &keys, &enc_kid, &existing_gpg.to_string());
     let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-upsert", "/device/gpg_key");
@@ -166,18 +160,13 @@ async fn add_gpg_key_upsert_overwrites_existing() {
 
 #[tokio::test]
 async fn list_gpg_keys_returns_registered() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (_sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
+    let (priv_jwk, kid, _sk, enc_kid, keys) = make_device_key_test_setup();
     let gpg = json!([{
         "keygrip": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         "key_id": "0xEF",
         "public_key": { "kty": "EC" }
     }]);
-    let client = make_gpg_client_row("fid-list", &keys, "enc-1", &gpg.to_string());
+    let client = make_gpg_client_row("fid-list", &keys, &enc_kid, &gpg.to_string());
     let fixture = DeviceAppFixture::with_client(&client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-list", "/device/gpg_key");
@@ -220,18 +209,13 @@ async fn list_gpg_keys_empty() {
 
 #[tokio::test]
 async fn delete_gpg_key_success() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
     let gpg = json!([{
         "keygrip": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
         "key_id": "0xDEAD",
         "public_key": { "kty": "EC" }
     }]);
-    let client = make_gpg_client_row("fid-del-gpg", &keys, "enc-1", &gpg.to_string());
+    let client = make_gpg_client_row("fid-del-gpg", &keys, &enc_kid, &gpg.to_string());
     let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(
@@ -377,18 +361,13 @@ async fn add_gpg_key_key_id_too_long_rejected() {
 
 #[tokio::test]
 async fn delete_gpg_key_concurrent_modification_conflict() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
     let gpg = json!([{
         "keygrip": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
         "key_id": "0xDEAD",
         "public_key": { "kty": "EC" }
     }]);
-    let client = make_gpg_client_row("fid-del-conflict", &keys, "enc-1", &gpg.to_string());
+    let client = make_gpg_client_row("fid-del-conflict", &keys, &enc_kid, &gpg.to_string());
     let mut repo = MockRepository::with_client(sk, client);
     repo.force_gpg_update_conflict = true;
     let state = make_test_app_state(repo);

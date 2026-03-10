@@ -3,13 +3,12 @@ use axum::http::{Method, Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::ClientRepository;
 
 use super::{
     X_COORD, Y_COORD, authed_json_request, build_sqlite_device_app,
     build_sqlite_device_app_with_client, json_request, make_client_row, make_device_assertion,
-    make_signing_key_row, register_body,
+    make_device_key_test_setup, make_signing_key_row, register_body,
 };
 
 fn post_device_request(body: &serde_json::Value) -> Request<Body> {
@@ -210,13 +209,8 @@ async fn register_device_public_keys_contains_all_keys() {
 
 #[tokio::test]
 async fn update_device_only_token_succeeds() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_client_row("fid-ot", "old-tok", &keys, "enc-1");
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_client_row("fid-ot", "old-tok", &keys, &enc_kid);
     let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ot", "/device");
@@ -235,13 +229,8 @@ async fn update_device_only_token_succeeds() {
 
 #[tokio::test]
 async fn update_device_only_default_kid_succeeds() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_client_row("fid-ok", "tok-ok", &keys, "enc-1");
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_client_row("fid-ok", "tok-ok", &keys, &enc_kid);
     let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-ok", "/device");
