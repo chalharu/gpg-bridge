@@ -1,13 +1,10 @@
-use std::sync::Arc;
-
 use axum::body::{self, Body};
 use axum::http::{Method, Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{build_test_sqlite_repo, make_test_app_state_arc};
+use crate::repository::ClientRepository;
 
 use super::{
     X_COORD, Y_COORD, authed_json_request, build_sqlite_device_app,

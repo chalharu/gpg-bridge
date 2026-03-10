@@ -1,16 +1,18 @@
 use std::sync::{Arc, Mutex};
 
-use axum::body::{self, Body};
-use axum::http::{Method, Request, StatusCode, header};
+use axum::body;
+use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{MockRepository, make_test_app_state};
+use crate::test_support::{
+    MockRepository, build_test_sqlite_repo, make_test_app_state, make_test_app_state_arc,
+};
 
 use super::{
-    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client,
+    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client, build_test_router,
     delete_device_item_request, get_device_request, make_client_row, make_device_assertion,
     make_pk_test_setup, make_signing_key_row, post_device_json_request,
 };
@@ -26,7 +28,11 @@ async fn add_public_key_sig_success() {
     });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -44,7 +50,11 @@ async fn add_public_key_enc_success() {
     });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -63,7 +73,11 @@ async fn add_public_key_with_default_kid_change() {
     });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -81,7 +95,11 @@ async fn add_public_key_invalid_key_rejected() {
     });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -97,7 +115,11 @@ async fn add_public_key_empty_keys_rejected() {
     let body = json!({ "keys": [] });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -115,7 +137,11 @@ async fn add_public_key_unsupported_use_rejected() {
     });
     let response = fixture
         .app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -170,7 +196,11 @@ async fn delete_public_key_success() {
 
     let token = make_device_assertion(&priv_jwk, &kid, "fid-del", "/device/public_key/sig-2");
     let response = app
-        .oneshot(delete_device_item_request("/device/public_key", "sig-2", &token))
+        .oneshot(delete_device_item_request(
+            "/device/public_key",
+            "sig-2",
+            &token,
+        ))
         .await
         .unwrap();
 
@@ -189,7 +219,11 @@ async fn delete_public_key_last_sig_returns_409() {
         &format!("/device/public_key/{kid}"),
     );
     let response = app
-        .oneshot(delete_device_item_request("/device/public_key", &kid, &token))
+        .oneshot(delete_device_item_request(
+            "/device/public_key",
+            &kid,
+            &token,
+        ))
         .await
         .unwrap();
 
@@ -324,7 +358,11 @@ async fn add_public_key_default_kid_referencing_sig_key_rejected() {
         "default_kid": kid
     });
     let response = app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -342,7 +380,11 @@ async fn add_public_key_default_kid_nonexistent_rejected() {
         "default_kid": "nonexistent-kid"
     });
     let response = app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 
@@ -407,7 +449,11 @@ async fn add_public_key_duplicate_kid_rejected() {
         "keys": [{ "kty": "EC", "use": "enc", "crv": "P-256", "alg": "ECDH-ES+A256KW", "kid": enc_kid, "x": X_COORD, "y": Y_COORD }]
     });
     let response = app
-        .oneshot(post_device_json_request("/device/public_key", &token, &body))
+        .oneshot(post_device_json_request(
+            "/device/public_key",
+            &token,
+            &body,
+        ))
         .await
         .unwrap();
 

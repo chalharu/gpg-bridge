@@ -1,16 +1,14 @@
-use std::sync::Arc;
-
-use axum::body::{self, Body};
-use axum::http::{Method, Request, StatusCode, header};
+use axum::body;
+use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
+use crate::repository::ClientRepository;
+use crate::test_support::{MockRepository, make_test_app_state};
 
 use super::{
-    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client,
+    DeviceAppFixture, X_COORD, Y_COORD, build_sqlite_device_app_with_client, build_test_router,
     delete_device_item_request, get_device_request, make_device_assertion, make_gpg_client_row,
     make_gpg_test_setup, make_signing_key_row, post_device_json_request,
 };

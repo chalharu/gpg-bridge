@@ -82,7 +82,7 @@ fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, pat
     sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
-fn build_test_router(state: AppState) -> Router {
+pub fn build_test_router(state: AppState) -> Router {
     Router::new()
         .route("/device", post(register_device))
         .route("/device", patch(update_device))
@@ -157,7 +157,7 @@ fn authed_request(method: Method, uri: &str, token: &str) -> Request<Body> {
         .unwrap()
 }
 
-fn authed_json_request(
+pub fn authed_json_request(
     method: Method,
     uri: &str,
     token: &str,
@@ -172,19 +172,15 @@ fn authed_json_request(
         .unwrap()
 }
 
-fn post_device_json_request(
-    uri: &str,
-    token: &str,
-    body: &serde_json::Value,
-) -> Request<Body> {
+pub fn post_device_json_request(uri: &str, token: &str, body: &serde_json::Value) -> Request<Body> {
     authed_json_request(Method::POST, uri, token, body)
 }
 
-fn get_device_request(uri: &str, token: &str) -> Request<Body> {
+pub fn get_device_request(uri: &str, token: &str) -> Request<Body> {
     authed_request(Method::GET, uri, token)
 }
 
-fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Request<Body> {
+pub fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Request<Body> {
     authed_request(Method::DELETE, &format!("{resource}/{item}"), token)
 }
 
