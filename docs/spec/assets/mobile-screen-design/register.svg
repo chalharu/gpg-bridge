@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 860" role="img" aria-labelledby="title desc">
-  <title id="title">Register screen mockup</title>
-  <desc id="desc">Unregistered device entry screen with a complete registration button and startup notes.</desc>
+  <title id="title">Register screen mockup proposal</title>
+  <desc id="desc">Unregistered device entry screen proposal with runtime server URL selection, validation state, and registration button.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0%" stop-color="#e0f2fe"/>
@@ -18,33 +18,40 @@
       .body { font-size: 13px; fill: #334155; }
       .small { font-size: 12px; fill: #475569; }
       .button { font-size: 15px; font-weight: 700; fill: #ffffff; }
+      .label { font-size: 11px; fill: #64748b; letter-spacing: 0.9px; }
     </style>
   </defs>
   <rect width="420" height="860" fill="url(#bg)"/>
-  <text x="34" y="54" class="eyebrow">UNREGISTERED FLOW</text>
+  <text x="34" y="54" class="eyebrow">UNREGISTERED FLOW PROPOSAL</text>
   <text x="34" y="88" class="heading">Register</text>
   <text x="34" y="114" class="body">Route: /register</text>
   <rect x="62" y="146" width="296" height="622" rx="38" fill="#0f172a"/>
   <rect x="76" y="160" width="268" height="594" rx="30" fill="#f8fafc"/>
   <rect x="178" y="170" width="64" height="8" rx="4" fill="#94a3b8"/>
   <text x="96" y="212" class="screen-title">Register</text>
-  <rect x="96" y="236" width="228" height="160" rx="24" fill="url(#hero)"/>
-  <text x="118" y="286" class="small" fill="#dbeafe">Device registration</text>
-  <text x="118" y="322" class="heading" fill="#ffffff">Initial</text>
-  <text x="118" y="352" class="heading" fill="#ffffff">device setup</text>
-  <text x="118" y="382" class="body" fill="#e0f2fe">
-    <tspan x="118" dy="0">Other routes stay blocked until</tspan>
-    <tspan x="118" dy="18">registration succeeds.</tspan>
+  <rect x="96" y="236" width="228" height="132" rx="24" fill="url(#hero)"/>
+  <text x="118" y="282" class="small" fill="#dbeafe">Device registration</text>
+  <text x="118" y="318" class="heading" fill="#ffffff">Choose</text>
+  <text x="118" y="348" class="heading" fill="#ffffff">server first</text>
+  <text x="118" y="374" class="body" fill="#e0f2fe">
+    <tspan x="118" dy="0">Use API_BASE_URL as default,</tspan>
+    <tspan x="118" dy="18">then override when needed.</tspan>
   </text>
-  <circle cx="210" cy="466" r="54" fill="#dbeafe"/>
-  <path d="M188 467l15 15 29-36" fill="none" stroke="#2563eb" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
-  <text x="210" y="555" class="body" text-anchor="middle">未登録端末の初期到達先</text>
-  <rect x="104" y="594" width="212" height="54" rx="27" fill="#2563eb"/>
-  <text x="210" y="627" class="button" text-anchor="middle">Complete registration</text>
-  <rect x="98" y="666" width="224" height="64" rx="18" fill="#ffffff" stroke="#93c5fd" stroke-width="2" stroke-dasharray="8 8"/>
-  <text x="210" y="691" class="small" text-anchor="middle">Success path</text>
-  <text x="210" y="710" class="body" text-anchor="middle">
-    <tspan x="210" dy="0">Start token refresh</tspan>
-    <tspan x="210" dy="16">listener</tspan>
+  <text x="104" y="414" class="label">SERVER URL</text>
+  <rect x="104" y="426" width="212" height="58" rx="16" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="120" y="452" class="small">https://api.example.com</text>
+  <text x="120" y="472" class="body">初期値は API_BASE_URL</text>
+  <rect x="104" y="500" width="212" height="42" rx="14" fill="#ecfeff" stroke="#22c55e" stroke-width="2"/>
+  <circle cx="126" cy="521" r="8" fill="#22c55e"/>
+  <path d="M122 521l3 3 6-7" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4"/>
+  <text x="142" y="526" class="body">検証済みのサーバーに登録</text>
+  <rect x="104" y="562" width="212" height="54" rx="27" fill="#2563eb"/>
+  <text x="210" y="595" class="button" text-anchor="middle">Complete registration</text>
+  <rect x="98" y="634" width="224" height="96" rx="18" fill="#ffffff" stroke="#93c5fd" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="210" y="660" class="small" text-anchor="middle">Success path</text>
+  <text x="210" y="680" class="body" text-anchor="middle">
+    <tspan x="210" dy="0">Persist selected server URL</tspan>
+    <tspan x="210" dy="16">and start token refresh listener</tspan>
   </text>
+  <text x="210" y="748" class="body" text-anchor="middle">提案 UI: 入力・検証・登録を 1 画面に集約</text>
 </svg>
