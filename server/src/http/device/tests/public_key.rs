@@ -6,10 +6,8 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
-use crate::repository::{ClientRepository, SignatureRepository, SigningKeyRepository};
-use crate::test_support::{
-    MockRepository, build_test_sqlite_repo, make_test_app_state, make_test_app_state_arc,
-};
+use crate::repository::{ClientRepository, SignatureRepository};
+use crate::test_support::{MockRepository, make_test_app_state_arc};
 
 use super::{
     DeviceAppFixture, build_sqlite_device_app_with_client, build_test_router,
@@ -18,180 +16,300 @@ use super::{
     post_device_json_request, public_keys_json, signing_public_key_json,
 };
 
-#[tokio::test]
-async fn add_public_key_sig_success() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("sig", "ES256", None)]
-    });
+async fn post_public_keys_success(
+    fixture: &DeviceAppFixture,
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    body: &serde_json::Value,
+) -> (Vec<serde_json::Value>, String) {
+    let token = make_device_assertion(priv_jwk, kid, "fid-pk", "/device/public_key");
     let response = fixture
         .app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
+        .clone()
+        .oneshot(post_device_json_request("/device/public_key", &token, body))
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let c = fixture
+    let client = fixture
         .repo
         .get_client_by_id("fid-pk")
         .await
         .unwrap()
         .unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(keys.iter().any(|key| {
-        key["use"].as_str() == Some("sig")
-            && key["alg"].as_str() == Some("ES256")
-            && key["x"].as_str() == Some("f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU")
-            && key["y"].as_str() == Some("x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0")
-    }));
+    let keys: Vec<serde_json::Value> = serde_json::from_str(&client.public_keys).unwrap();
+
+    (keys, client.default_kid)
 }
 
-#[tokio::test]
-async fn add_public_key_enc_success() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
+async fn assert_add_public_key_bad_request_keeps_db_state(
+    case_name: &str,
+    app: &axum::Router,
+    repo: &(impl ClientRepository + ?Sized),
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    body: &serde_json::Value,
+) {
+    let before = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
+    let token = make_device_assertion(priv_jwk, kid, "fid-pk", "/device/public_key");
+    let response = app
+        .clone()
+        .oneshot(post_device_json_request("/device/public_key", &token, body))
+        .await
+        .unwrap();
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", None)]
-    });
-    let response = fixture
-        .app
-        .oneshot(post_device_json_request(
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "case failed: {case_name}"
+    );
+
+    let after = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
+    assert_eq!(
+        after.public_keys, before.public_keys,
+        "case failed: {case_name}"
+    );
+    assert_eq!(
+        after.default_kid, before.default_kid,
+        "case failed: {case_name}"
+    );
+}
+
+async fn assert_delete_public_key_status(
+    app: &axum::Router,
+    priv_jwk: &josekit::jwk::Jwk,
+    auth_kid: &str,
+    client_id: &str,
+    delete_kid: &str,
+    expected_status: StatusCode,
+) {
+    let token = make_device_assertion(
+        priv_jwk,
+        auth_kid,
+        client_id,
+        &format!("/device/public_key/{delete_kid}"),
+    );
+    let response = app
+        .clone()
+        .oneshot(delete_device_item_request(
             "/device/public_key",
+            delete_kid,
             &token,
-            &body,
         ))
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.status(), expected_status);
+}
 
-    let c = fixture
-        .repo
-        .get_client_by_id("fid-pk")
+struct DeleteFailureCase<'a> {
+    name: &'a str,
+    auth_kid: &'a str,
+    client_id: &'a str,
+    delete_kid: &'a str,
+    expected_status: StatusCode,
+}
+
+async fn assert_delete_public_key_failure_keeps_db_state(
+    app: &axum::Router,
+    repo: &(impl ClientRepository + ?Sized),
+    priv_jwk: &josekit::jwk::Jwk,
+    case: DeleteFailureCase<'_>,
+) {
+    let before = repo
+        .get_client_by_id(case.client_id)
         .await
         .unwrap()
         .unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(keys.iter().any(|key| {
-        key["use"].as_str() == Some("enc")
-            && key["alg"].as_str() == Some("ECDH-ES+A256KW")
-            && key["x"].as_str() == Some("f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU")
-            && key["y"].as_str() == Some("x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0")
-    }));
-}
 
-#[tokio::test]
-async fn add_public_key_with_default_kid_change() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
+    assert_delete_public_key_status(
+        app,
+        priv_jwk,
+        case.auth_kid,
+        case.client_id,
+        case.delete_kid,
+        case.expected_status,
+    )
+    .await;
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
-        "default_kid": "enc-new"
-    });
-    let response = fixture
-        .app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    let c = fixture
-        .repo
-        .get_client_by_id("fid-pk")
+    let after = repo
+        .get_client_by_id(case.client_id)
         .await
         .unwrap()
         .unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(keys.iter().any(|key| {
-        key["use"].as_str() == Some("enc")
-            && key["alg"].as_str() == Some("ECDH-ES+A256KW")
-            && key["kid"].as_str() == Some("enc-new")
-    }));
-    assert_eq!(c.default_kid, "enc-new");
+    assert_eq!(
+        after.public_keys, before.public_keys,
+        "case failed: {}",
+        case.name
+    );
+    assert_eq!(
+        after.default_kid, before.default_kid,
+        "case failed: {}",
+        case.name
+    );
 }
 
 #[tokio::test]
-async fn add_public_key_invalid_key_rejected() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
+async fn add_public_key_success_cases() {
+    struct Case {
+        name: &'static str,
+        body: serde_json::Value,
+        expected_use: &'static str,
+        expected_alg: &'static str,
+        expected_kid: Option<&'static str>,
+        expected_default_kid: Option<&'static str>,
+    }
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("sig", "RS256", None)]
-    });
-    let response = fixture
-        .app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
+    let cases = [
+        Case {
+            name: "sig key",
+            body: json!({
+                "keys": [ec_public_key_value("sig", "ES256", None)]
+            }),
+            expected_use: "sig",
+            expected_alg: "ES256",
+            expected_kid: None,
+            expected_default_kid: None,
+        },
+        Case {
+            name: "enc key",
+            body: json!({
+                "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", None)]
+            }),
+            expected_use: "enc",
+            expected_alg: "ECDH-ES+A256KW",
+            expected_kid: None,
+            expected_default_kid: None,
+        },
+        Case {
+            name: "enc key with default_kid change",
+            body: json!({
+                "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
+                "default_kid": "enc-new"
+            }),
+            expected_use: "enc",
+            expected_alg: "ECDH-ES+A256KW",
+            expected_kid: Some("enc-new"),
+            expected_default_kid: Some("enc-new"),
+        },
+    ];
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    for case in cases {
+        let (priv_jwk, kid, _sk, client, enc_kid, _keys) = make_pk_test_setup();
+        let initial_keys: Vec<serde_json::Value> =
+            serde_json::from_str(&client.public_keys).unwrap();
+        let fixture = DeviceAppFixture::with_client(&client).await;
+        let (keys, default_kid) =
+            post_public_keys_success(&fixture, &priv_jwk, &kid, &case.body).await;
+
+        assert_eq!(
+            keys.len(),
+            initial_keys.len() + 1,
+            "case failed: {}",
+            case.name
+        );
+        assert!(
+            keys.iter().any(|key| {
+                key["use"].as_str() == Some(case.expected_use)
+                    && key["alg"].as_str() == Some(case.expected_alg)
+                    && key["x"].as_str().is_some()
+                    && key["y"].as_str().is_some()
+                    && case
+                        .expected_kid
+                        .is_none_or(|expected_kid| key["kid"].as_str() == Some(expected_kid))
+            }),
+            "case failed: {}",
+            case.name
+        );
+        assert_eq!(
+            default_kid,
+            case.expected_default_kid.unwrap_or(enc_kid.as_str()),
+            "case failed: {}",
+            case.name
+        );
+    }
 }
 
 #[tokio::test]
-async fn add_public_key_empty_keys_rejected() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
+async fn add_public_key_bad_request_cases() {
+    struct Case {
+        name: &'static str,
+        build_body: fn(&str, &str) -> serde_json::Value,
+    }
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({ "keys": [] });
-    let response = fixture
-        .app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
+    let cases = [
+        Case {
+            name: "invalid key",
+            build_body: |_, _| {
+                json!({
+                    "keys": [ec_public_key_value("sig", "RS256", None)]
+                })
+            },
+        },
+        Case {
+            name: "empty keys",
+            build_body: |_, _| json!({ "keys": [] }),
+        },
+        Case {
+            name: "unsupported use",
+            build_body: |_, _| {
+                json!({
+                    "keys": [ec_public_key_value("other", "ES256", None)]
+                })
+            },
+        },
+        Case {
+            name: "default_kid referencing sig key",
+            build_body: |kid, _| {
+                json!({
+                    "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
+                    "default_kid": kid
+                })
+            },
+        },
+        Case {
+            name: "default_kid nonexistent",
+            build_body: |_, _| {
+                json!({
+                    "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
+                    "default_kid": "nonexistent-kid"
+                })
+            },
+        },
+        Case {
+            name: "duplicate kid",
+            build_body: |_, enc_kid| {
+                json!({
+                    "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some(enc_kid))]
+                })
+            },
+        },
+        Case {
+            name: "cross-type duplicate kid",
+            build_body: |_, enc_kid| {
+                json!({
+                    "keys": [ec_public_key_value("sig", "ES256", Some(enc_kid))]
+                })
+            },
+        },
+    ];
+
+    for case in cases {
+        let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
+        let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+        let body = (case.build_body)(&kid, &enc_kid);
+
+        assert_add_public_key_bad_request_keeps_db_state(
+            case.name,
+            &app,
+            repo.as_ref(),
+            &priv_jwk,
+            &kid,
             &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn add_public_key_unsupported_use_rejected() {
-    let (priv_jwk, kid, _sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let fixture = DeviceAppFixture::with_client(&client).await;
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("other", "ES256", None)]
-    });
-    let response = fixture
-        .app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        )
+        .await;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,67 +392,54 @@ async fn delete_public_key_success() {
 }
 
 #[tokio::test]
-async fn delete_public_key_last_sig_returns_409() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+async fn delete_public_key_failure_cases() {
+    struct Case {
+        name: &'static str,
+        delete_kid: &'static str,
+        expected_status: StatusCode,
+    }
 
-    let token = make_device_assertion(
-        &priv_jwk,
-        &kid,
-        "fid-pk",
-        &format!("/device/public_key/{kid}"),
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            &kid,
-            &token,
-        ))
-        .await
-        .unwrap();
+    let cases = [
+        Case {
+            name: "last sig",
+            delete_kid: "__auth_kid__",
+            expected_status: StatusCode::CONFLICT,
+        },
+        Case {
+            name: "last enc",
+            delete_kid: "__enc_kid__",
+            expected_status: StatusCode::CONFLICT,
+        },
+        Case {
+            name: "not found",
+            delete_kid: "nonexistent",
+            expected_status: StatusCode::NOT_FOUND,
+        },
+    ];
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
+    for case in cases {
+        let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
+        let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+        let delete_kid = match case.delete_kid {
+            "__auth_kid__" => kid.as_str(),
+            "__enc_kid__" => enc_kid.as_str(),
+            other => other,
+        };
 
-#[tokio::test]
-async fn delete_public_key_last_enc_returns_409() {
-    let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(
-        &priv_jwk,
-        &kid,
-        "fid-pk",
-        &format!("/device/public_key/{enc_kid}"),
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            &enc_kid,
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn delete_public_key_not_found_returns_404() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key/nonexistent");
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "nonexistent",
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_delete_public_key_failure_keeps_db_state(
+            &app,
+            repo.as_ref(),
+            &priv_jwk,
+            DeleteFailureCase {
+                name: case.name,
+                auth_kid: &kid,
+                client_id: "fid-pk",
+                delete_kid,
+                expected_status: case.expected_status,
+            },
+        )
+        .await;
+    }
 }
 
 #[tokio::test]
@@ -350,25 +455,23 @@ async fn delete_public_key_in_flight_returns_409() {
     // This path needs MockRepository so the test can mark a kid as in-flight directly.
     let mut repo = MockRepository::with_client(sk, client);
     repo.in_flight_kids = Mutex::new(vec!["sig-flight".to_owned()]);
-    let state = make_test_app_state(repo);
+    let repo = Arc::new(repo);
+    let state = make_test_app_state_arc(repo.clone() as Arc<dyn SignatureRepository>);
     let app = build_test_router(state);
 
-    let token = make_device_assertion(
+    assert_delete_public_key_failure_keeps_db_state(
+        &app,
+        repo.as_ref(),
         &priv_jwk,
-        &kid,
-        "fid-flight",
-        "/device/public_key/sig-flight",
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "sig-flight",
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+        DeleteFailureCase {
+            name: "in flight",
+            auth_kid: &kid,
+            client_id: "fid-flight",
+            delete_kid: "sig-flight",
+            expected_status: StatusCode::CONFLICT,
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -424,72 +527,22 @@ async fn delete_public_key_auto_reassign_default_kid() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn add_public_key_default_kid_referencing_sig_key_rejected() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    // default_kid points to the sig key (kid), which is not an enc key
-    let body = json!({
-        "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
-        "default_kid": kid
-    });
-    let response = app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn add_public_key_default_kid_nonexistent_rejected() {
-    let (priv_jwk, kid, sk, client, _enc_kid, _keys) = make_pk_test_setup();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some("enc-new"))],
-        "default_kid": "nonexistent-kid"
-    });
-    let response = app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
 async fn add_public_key_default_kid_existing_enc_accepted_for_new_sig_key() {
-    let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+    let (priv_jwk, kid, _sk, client, enc_kid, _keys) = make_pk_test_setup();
+    let fixture = DeviceAppFixture::with_client(&client).await;
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
     let body = json!({
         "keys": [ec_public_key_value("sig", "ES256", Some("sig-new"))],
         "default_kid": enc_kid
     });
-    let response = app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
+    let (_keys, _default_kid) = post_public_keys_success(&fixture, &priv_jwk, &kid, &body).await;
+
+    let c = fixture
+        .repo
+        .get_client_by_id("fid-pk")
         .await
+        .unwrap()
         .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    let c = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
     let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
     let keys = keys.as_array().unwrap();
     assert!(keys.iter().any(|key| key["kid"].as_str() == Some(&kid)));
@@ -589,55 +642,4 @@ async fn delete_non_default_enc_key_keeps_default_kid_when_other_enc_remains() {
             .any(|key| key["kid"].as_str() == Some("enc-default"))
     );
     assert_eq!(c.default_kid, "enc-default");
-}
-
-#[tokio::test]
-async fn add_public_key_duplicate_kid_rejected() {
-    let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    // Try to add a key with the same kid as the existing enc key
-    let body = json!({
-        "keys": [ec_public_key_value("enc", "ECDH-ES+A256KW", Some(&enc_kid))]
-    });
-    let response = app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn add_public_key_cross_type_duplicate_kid_rejected() {
-    let (priv_jwk, kid, sk, client, enc_kid, _keys) = make_pk_test_setup();
-    let repo = build_test_sqlite_repo().await;
-    repo.store_signing_key(&sk).await.unwrap();
-    repo.create_client(&client).await.unwrap();
-    let state = make_test_app_state_arc(repo as Arc<dyn SignatureRepository>);
-    let app = build_test_router(state);
-
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
-    let body = json!({
-        "keys": [ec_public_key_value("sig", "ES256", Some(&enc_kid))]
-    });
-    let response = app
-        .oneshot(post_device_json_request(
-            "/device/public_key",
-            &token,
-            &body,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
