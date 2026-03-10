@@ -9,44 +9,17 @@ use crate::repository::ClientRepository;
 use crate::test_support::{MockRepository, make_test_app_state, make_test_app_state_arc};
 
 use super::{
-    DeviceAppFixture, build_sqlite_device_app_with_client, build_test_router,
-    delete_device_item_request, get_device_request, make_device_assertion,
-    make_device_key_test_setup, make_gpg_client_row, make_gpg_test_setup, post_device_json_request,
+    DeviceAppFixture, assert_device_request_status_keeps_client_state,
+    build_sqlite_device_app_with_client, build_test_router, delete_device_item_request,
+    get_device_request, make_device_assertion, make_device_key_test_setup, make_gpg_client_row,
+    make_gpg_test_setup, post_device_json_request,
 };
 
-async fn assert_add_gpg_key_bad_request_keeps_db_state(
+fn assert_gpg_device_state_unchanged(
+    before: &crate::repository::ClientRow,
+    after: &crate::repository::ClientRow,
     case_name: &str,
-    fixture: &DeviceAppFixture,
-    priv_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-    body: &serde_json::Value,
 ) {
-    let before = fixture
-        .repo
-        .get_client_by_id("fid-gpg")
-        .await
-        .unwrap()
-        .unwrap();
-    let token = make_device_assertion(priv_jwk, kid, "fid-gpg", "/device/gpg_key");
-    let response = fixture
-        .app
-        .clone()
-        .oneshot(post_device_json_request("/device/gpg_key", &token, body))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        response.status(),
-        StatusCode::BAD_REQUEST,
-        "case failed: {case_name}"
-    );
-
-    let after = fixture
-        .repo
-        .get_client_by_id("fid-gpg")
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(after.gpg_keys, before.gpg_keys, "case failed: {case_name}");
     assert_eq!(
         after.public_keys, before.public_keys,
@@ -56,33 +29,6 @@ async fn assert_add_gpg_key_bad_request_keeps_db_state(
         after.default_kid, before.default_kid,
         "case failed: {case_name}"
     );
-}
-
-async fn assert_delete_gpg_key_status(
-    app: &axum::Router,
-    priv_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-    client_id: &str,
-    keygrip: &str,
-    expected_status: StatusCode,
-) {
-    let token = make_device_assertion(
-        priv_jwk,
-        kid,
-        client_id,
-        &format!("/device/gpg_key/{keygrip}"),
-    );
-    let response = app
-        .clone()
-        .oneshot(delete_device_item_request(
-            "/device/gpg_key",
-            keygrip,
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), expected_status);
 }
 
 struct DeleteFailureCase<'a> {
@@ -99,42 +45,23 @@ async fn assert_delete_gpg_key_failure_keeps_db_state(
     kid: &str,
     case: DeleteFailureCase<'_>,
 ) {
-    let before = repo
-        .get_client_by_id(case.client_id)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_delete_gpg_key_status(
-        app,
+    let token = make_device_assertion(
         priv_jwk,
         kid,
         case.client_id,
-        case.keygrip,
+        &format!("/device/gpg_key/{}", case.keygrip),
+    );
+
+    assert_device_request_status_keeps_client_state(
+        case.name,
+        app,
+        repo,
+        case.client_id,
+        delete_device_item_request("/device/gpg_key", case.keygrip, &token),
         case.expected_status,
+        assert_gpg_device_state_unchanged,
     )
     .await;
-
-    let after = repo
-        .get_client_by_id(case.client_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        after.gpg_keys, before.gpg_keys,
-        "case failed: {}",
-        case.name
-    );
-    assert_eq!(
-        after.public_keys, before.public_keys,
-        "case failed: {}",
-        case.name
-    );
-    assert_eq!(
-        after.default_kid, before.default_kid,
-        "case failed: {}",
-        case.name
-    );
 }
 
 #[tokio::test]
@@ -239,8 +166,18 @@ async fn add_gpg_key_bad_request_cases() {
         let fixture = DeviceAppFixture::with_client(&client).await;
         let body = (case.build_body)();
 
-        assert_add_gpg_key_bad_request_keeps_db_state(case.name, &fixture, &priv_jwk, &kid, &body)
-            .await;
+        let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
+
+        assert_device_request_status_keeps_client_state(
+            case.name,
+            &fixture.app,
+            fixture.repo.as_ref(),
+            "fid-gpg",
+            post_device_json_request("/device/gpg_key", &token, &body),
+            StatusCode::BAD_REQUEST,
+            assert_gpg_device_state_unchanged,
+        )
+        .await;
     }
 }
 

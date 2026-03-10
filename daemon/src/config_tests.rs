@@ -23,6 +23,20 @@ fn sample_file_config() -> FileConfig {
     }
 }
 
+fn sample_env_lookup(key: &str) -> Option<String> {
+    match key {
+        "DAEMON_SERVER_URL" => Some("https://env.example".to_owned()),
+        "DAEMON_SOCKET_PATH" => Some("tmp/env.sock".to_owned()),
+        "DAEMON_LOG_LEVEL" => Some("debug".to_owned()),
+        _ => None,
+    }
+}
+
+fn assert_supported_file_config_parses(suffix: &str, contents: &str, log_level: &str) {
+    let config = load_temp_file_config(suffix, contents);
+    assert_basic_file_config(config, log_level);
+}
+
 fn assert_runtime_config(
     config: AppConfig,
     server_url: &str,
@@ -86,22 +100,20 @@ fn build_env_filter_rejects_invalid_log_level() {
 
 #[test]
 fn parse_toml_file_config() {
-    let config = load_temp_file_config(
+    assert_supported_file_config_parses(
         ".toml",
         "server_url = 'https://daemon.example'\nsocket_path = 'tmp/daemon.sock'\nlog_level = 'debug'\n",
+        "debug",
     );
-
-    assert_basic_file_config(config, "debug");
 }
 
 #[test]
 fn parse_yaml_file_config() {
-    let config = load_temp_file_config(
+    assert_supported_file_config_parses(
         ".yaml",
         "server_url: https://daemon.example\nsocket_path: tmp/daemon.sock\nlog_level: warn\n",
+        "warn",
     );
-
-    assert_basic_file_config(config, "warn");
 }
 
 #[test]
@@ -118,14 +130,7 @@ fn cli_overrides_env_and_file_config() {
 
     let file = sample_file_config();
 
-    let lookup = |key: &str| match key {
-        "DAEMON_SERVER_URL" => Some("https://env.example".to_owned()),
-        "DAEMON_SOCKET_PATH" => Some("tmp/env.sock".to_owned()),
-        "DAEMON_LOG_LEVEL" => Some("debug".to_owned()),
-        _ => None,
-    };
-
-    let config = build_app_config(&cli, &file, &lookup, None).unwrap();
+    let config = build_app_config(&cli, &file, &sample_env_lookup, None).unwrap();
 
     assert_runtime_config(
         config,
@@ -141,14 +146,7 @@ fn env_overrides_file_config() {
     let cli = parse_cli_from(["gpg-bridge-daemon"]);
     let file = sample_file_config();
 
-    let lookup = |key: &str| match key {
-        "DAEMON_SERVER_URL" => Some("https://env.example".to_owned()),
-        "DAEMON_SOCKET_PATH" => Some("tmp/env.sock".to_owned()),
-        "DAEMON_LOG_LEVEL" => Some("debug".to_owned()),
-        _ => None,
-    };
-
-    let config = build_app_config(&cli, &file, &lookup, None).unwrap();
+    let config = build_app_config(&cli, &file, &sample_env_lookup, None).unwrap();
 
     assert_runtime_config(
         config,

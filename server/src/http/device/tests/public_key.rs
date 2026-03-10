@@ -10,10 +10,11 @@ use crate::repository::{ClientRepository, SignatureRepository};
 use crate::test_support::{MockRepository, make_test_app_state_arc};
 
 use super::{
-    DeviceAppFixture, build_sqlite_device_app_with_client, build_test_router,
-    delete_device_item_request, ec_public_key_json, ec_public_key_value, get_device_request,
-    make_client_row, make_device_assertion, make_pk_test_setup, make_signing_key_row,
-    post_device_json_request, public_keys_json, signing_public_key_json,
+    DeviceAppFixture, assert_device_request_status_keeps_client_state,
+    build_sqlite_device_app_with_client, build_test_router, delete_device_item_request,
+    ec_public_key_json, ec_public_key_value, get_device_request, make_client_row,
+    make_device_assertion, make_pk_test_setup, make_signing_key_row, post_device_json_request,
+    public_keys_json, signing_public_key_json,
 };
 
 async fn post_public_keys_success(
@@ -43,29 +44,11 @@ async fn post_public_keys_success(
     (keys, client.default_kid)
 }
 
-async fn assert_add_public_key_bad_request_keeps_db_state(
+fn assert_public_key_state_unchanged(
+    before: &crate::repository::ClientRow,
+    after: &crate::repository::ClientRow,
     case_name: &str,
-    app: &axum::Router,
-    repo: &(impl ClientRepository + ?Sized),
-    priv_jwk: &josekit::jwk::Jwk,
-    kid: &str,
-    body: &serde_json::Value,
 ) {
-    let before = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
-    let token = make_device_assertion(priv_jwk, kid, "fid-pk", "/device/public_key");
-    let response = app
-        .clone()
-        .oneshot(post_device_json_request("/device/public_key", &token, body))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        response.status(),
-        StatusCode::BAD_REQUEST,
-        "case failed: {case_name}"
-    );
-
-    let after = repo.get_client_by_id("fid-pk").await.unwrap().unwrap();
     assert_eq!(
         after.public_keys, before.public_keys,
         "case failed: {case_name}"
@@ -74,33 +57,6 @@ async fn assert_add_public_key_bad_request_keeps_db_state(
         after.default_kid, before.default_kid,
         "case failed: {case_name}"
     );
-}
-
-async fn assert_delete_public_key_status(
-    app: &axum::Router,
-    priv_jwk: &josekit::jwk::Jwk,
-    auth_kid: &str,
-    client_id: &str,
-    delete_kid: &str,
-    expected_status: StatusCode,
-) {
-    let token = make_device_assertion(
-        priv_jwk,
-        auth_kid,
-        client_id,
-        &format!("/device/public_key/{delete_kid}"),
-    );
-    let response = app
-        .clone()
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            delete_kid,
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), expected_status);
 }
 
 struct DeleteFailureCase<'a> {
@@ -117,37 +73,23 @@ async fn assert_delete_public_key_failure_keeps_db_state(
     priv_jwk: &josekit::jwk::Jwk,
     case: DeleteFailureCase<'_>,
 ) {
-    let before = repo
-        .get_client_by_id(case.client_id)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_delete_public_key_status(
-        app,
+    let token = make_device_assertion(
         priv_jwk,
         case.auth_kid,
         case.client_id,
-        case.delete_kid,
+        &format!("/device/public_key/{}", case.delete_kid),
+    );
+
+    assert_device_request_status_keeps_client_state(
+        case.name,
+        app,
+        repo,
+        case.client_id,
+        delete_device_item_request("/device/public_key", case.delete_kid, &token),
         case.expected_status,
+        assert_public_key_state_unchanged,
     )
     .await;
-
-    let after = repo
-        .get_client_by_id(case.client_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        after.public_keys, before.public_keys,
-        "case failed: {}",
-        case.name
-    );
-    assert_eq!(
-        after.default_kid, before.default_kid,
-        "case failed: {}",
-        case.name
-    );
 }
 
 #[tokio::test]
@@ -300,13 +242,16 @@ async fn add_public_key_bad_request_cases() {
         let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
         let body = (case.build_body)(&kid, &enc_kid);
 
-        assert_add_public_key_bad_request_keeps_db_state(
+        let token = make_device_assertion(&priv_jwk, &kid, "fid-pk", "/device/public_key");
+
+        assert_device_request_status_keeps_client_state(
             case.name,
             &app,
             repo.as_ref(),
-            &priv_jwk,
-            &kid,
-            &body,
+            "fid-pk",
+            post_device_json_request("/device/public_key", &token, &body),
+            StatusCode::BAD_REQUEST,
+            assert_public_key_state_unchanged,
         )
         .await;
     }

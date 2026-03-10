@@ -28,42 +28,31 @@ mod unit_tests;
 
 const VALID_COORD: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-fn make_client_row_with_enc_key(client_id: &str, enc_kid: &str) -> ClientRow {
-    let enc_key = json!({
-        "kid": enc_kid,
+fn make_client_row_with_key(client_id: &str, kid: &str, key_use: &str, alg: &str) -> ClientRow {
+    let key = json!({
+        "kid": kid,
         "kty": "EC",
         "crv": "P-256",
         "x": VALID_COORD,
         "y": VALID_COORD,
-        "use": "enc",
-        "alg": "ECDH-ES+A256KW"
+        "use": key_use,
+        "alg": alg
     });
     make_test_client_row(
         client_id,
         "tok",
-        serde_json::to_string(&vec![enc_key]).unwrap(),
-        enc_kid,
+        serde_json::to_string(&vec![key]).unwrap(),
+        kid,
         "[]",
     )
 }
 
+fn make_client_row_with_enc_key(client_id: &str, enc_kid: &str) -> ClientRow {
+    make_client_row_with_key(client_id, enc_kid, "enc", "ECDH-ES+A256KW")
+}
+
 fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
-    let sig_key = json!({
-        "kid": "sig-kid",
-        "kty": "EC",
-        "crv": "P-256",
-        "x": VALID_COORD,
-        "y": VALID_COORD,
-        "use": "sig",
-        "alg": "ES256"
-    });
-    make_test_client_row(
-        client_id,
-        "tok",
-        serde_json::to_string(&vec![sig_key]).unwrap(),
-        "sig-kid",
-        "[]",
-    )
+    make_client_row_with_key(client_id, "sig-kid", "sig", "ES256")
 }
 
 fn build_app(state: AppState) -> Router {
@@ -131,6 +120,24 @@ fn make_daemon_auth_full_request_row(
     signature: Option<&str>,
     daemon_public_key: impl Into<String>,
 ) -> FullRequestRow {
+    make_single_client_full_request_row(
+        request_id,
+        status,
+        expired,
+        signature,
+        daemon_public_key,
+        "{}",
+    )
+}
+
+fn make_single_client_full_request_row(
+    request_id: &str,
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+    daemon_public_key: impl Into<String>,
+    daemon_enc_public_key: impl Into<String>,
+) -> FullRequestRow {
     FullRequestRow {
         request_id: request_id.into(),
         status: status.into(),
@@ -138,7 +145,7 @@ fn make_daemon_auth_full_request_row(
         signature: signature.map(str::to_owned),
         client_ids: r#"["client-1"]"#.into(),
         daemon_public_key: daemon_public_key.into(),
-        daemon_enc_public_key: "{}".into(),
+        daemon_enc_public_key: daemon_enc_public_key.into(),
         pairing_ids: "{}".into(),
         e2e_kids: "{}".into(),
         encrypted_payloads: None,
@@ -215,19 +222,14 @@ fn make_pending_request(
 }
 
 fn make_full_request(request_id: &str, status: &str, signature: Option<&str>) -> FullRequestRow {
-    FullRequestRow {
-        request_id: request_id.into(),
-        status: status.into(),
-        expired: "2027-01-01T00:00:00Z".into(),
-        signature: signature.map(str::to_owned),
-        client_ids: r#"["client-1"]"#.into(),
-        daemon_public_key: "{}".into(),
-        daemon_enc_public_key: "{}".into(),
-        pairing_ids: "{}".into(),
-        e2e_kids: "{}".into(),
-        encrypted_payloads: None,
-        unavailable_client_ids: "[]".into(),
-    }
+    make_single_client_full_request_row(
+        request_id,
+        status,
+        "2027-01-01T00:00:00Z",
+        signature,
+        "{}",
+        "{}",
+    )
 }
 
 fn valid_request_body(client_jwts: Vec<String>) -> serde_json::Value {

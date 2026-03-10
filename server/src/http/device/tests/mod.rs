@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
-use axum::http::{Method, Request, header};
+use axum::http::{Method, Request, StatusCode, header};
 use axum::routing::{delete, get, patch, post};
 use serde_json::json;
+use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
@@ -212,6 +213,30 @@ pub fn get_device_request(uri: &str, token: &str) -> Request<Body> {
 
 pub fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Request<Body> {
     authed_request(Method::DELETE, &format!("{resource}/{item}"), token)
+}
+
+pub async fn assert_device_request_status_keeps_client_state<F>(
+    case_name: &str,
+    app: &Router,
+    repo: &(impl ClientRepository + ?Sized),
+    client_id: &str,
+    request: Request<Body>,
+    expected_status: StatusCode,
+    assert_unchanged: F,
+) where
+    F: Fn(&ClientRow, &ClientRow, &str),
+{
+    let before = repo.get_client_by_id(client_id).await.unwrap().unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        expected_status,
+        "case failed: {case_name}"
+    );
+
+    let after = repo.get_client_by_id(client_id).await.unwrap().unwrap();
+    assert_unchanged(&before, &after, case_name);
 }
 
 fn make_device_key_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, String, String) {
