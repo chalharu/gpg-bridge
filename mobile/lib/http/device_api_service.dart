@@ -4,11 +4,13 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'api_exception.dart';
 import 'auth_interceptor.dart';
 import 'http_client_provider.dart';
+import 'server_url_interceptor.dart';
 
 part 'device_api_service.g.dart';
 
 const _devicePath = '/device';
 const _deviceRefreshPath = '$_devicePath/refresh';
+const _healthPath = '/health';
 
 class DeviceApiException implements Exception {
   DeviceApiException(this.message, {this.cause});
@@ -18,14 +20,12 @@ class DeviceApiException implements Exception {
 
   @override
   String toString() {
-    if (cause == null) {
-      return 'DeviceApiException: $message';
-    }
-    return 'DeviceApiException: $message ($cause)';
+    return cause == null
+        ? 'DeviceApiException: $message'
+        : 'DeviceApiException: $message ($cause)';
   }
 }
 
-/// Response from POST /device.
 class DeviceResponse {
   DeviceResponse({required this.deviceJwt});
 
@@ -40,7 +40,6 @@ class DeviceResponse {
   final String deviceJwt;
 }
 
-/// Response from POST /device/refresh.
 class DeviceRefreshResponse {
   DeviceRefreshResponse({required this.deviceJwt});
 
@@ -55,10 +54,11 @@ class DeviceRefreshResponse {
   final String deviceJwt;
 }
 
-/// Abstraction for device registration API endpoints.
 abstract interface class DeviceApiService {
-  /// POST /device — initial registration (no auth required).
+  Future<void> validateServerConnection({required String serverUrl});
+
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -66,13 +66,10 @@ abstract interface class DeviceApiService {
     String? defaultKid,
   });
 
-  /// PATCH /device — update device info (device_assertion_jwt auth).
   Future<void> updateDevice({String? deviceToken, String? defaultKid});
 
-  /// DELETE /device — unregister device (device_assertion_jwt auth).
   Future<void> deleteDevice();
 
-  /// POST /device/refresh — refresh device JWT (device_assertion_jwt auth).
   Future<DeviceRefreshResponse> refreshDeviceJwt({
     required String currentDeviceJwt,
   });
@@ -84,7 +81,22 @@ class DefaultDeviceApiService implements DeviceApiService {
   final Dio _dio;
 
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {
+    try {
+      await _dio.get<Map<String, dynamic>>(
+        _healthPath,
+        options: Options(
+          extra: {skipAuthExtraKey: true, serverUrlOverrideExtraKey: serverUrl},
+        ),
+      );
+    } catch (error) {
+      _rethrowOrWrap(error, 'validate server connection');
+    }
+  }
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -99,11 +111,12 @@ class DefaultDeviceApiService implements DeviceApiService {
         encKeys: encKeys,
         defaultKid: defaultKid,
       );
-      // POST /device has no auth — use skipAuth flag.
       final response = await _dio.post<Map<String, dynamic>>(
         _devicePath,
         data: body,
-        options: Options(extra: {skipAuthExtraKey: true}),
+        options: Options(
+          extra: {skipAuthExtraKey: true, serverUrlOverrideExtraKey: serverUrl},
+        ),
       );
       return DeviceResponse.fromJson(response.data!);
     } catch (error) {
