@@ -117,6 +117,83 @@ void main() {
       );
     });
 
+    testWidgets(
+      'clears validation feedback when the server URL becomes valid',
+      (tester) async {
+        final api = _StubDeviceApiService(
+          validateHandler: ({required serverUrl}) async {
+            throw DeviceApiException('health check failed');
+          },
+        );
+        final registration = _StubDeviceRegistrationService();
+        final serverUrlService = _StubRegisterServerUrlService(
+          savedValue: 'https://runtime.example.com/api',
+        );
+
+        await tester.pumpWidget(
+          _buildApp(
+            api: api,
+            registration: registration,
+            serverUrlService: serverUrlService,
+          ),
+        );
+        await tester.pump();
+
+        await tester.tap(find.text('Complete registration'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Unable to reach https://runtime.example.com/api'),
+          findsOneWidget,
+        );
+
+        await tester.enterText(
+          find.byType(TextField),
+          'https://runtime.example.com/next',
+        );
+        await tester.pump();
+
+        expect(
+          find.text('Unable to reach https://runtime.example.com/api'),
+          findsNothing,
+        );
+        expect(find.text('health check failed'), findsOneWidget);
+      },
+    );
+
+    testWidgets('shows a field error when submit normalizes an invalid value', (
+      tester,
+    ) async {
+      final api = _StubDeviceApiService();
+      final registration = _StubDeviceRegistrationService();
+      final serverUrlService = _StubRegisterServerUrlService(
+        savedValue: 'https://runtime.example.com/api',
+      );
+
+      await tester.pumpWidget(
+        _buildApp(
+          api: api,
+          registration: registration,
+          serverUrlService: serverUrlService,
+        ),
+      );
+      await tester.pump();
+
+      final editable = tester.widget<EditableText>(find.byType(EditableText));
+      editable.controller.text = 'http://runtime.example.com';
+      await tester.pump();
+
+      final button = tester.widget<ElevatedButton>(find.byType(ElevatedButton));
+      expect(button.onPressed, isNotNull);
+
+      await tester.tap(find.text('Complete registration'));
+      await tester.pump();
+
+      expect(find.text('server URL must start with https://'), findsOneWidget);
+      expect(api.validatedUrls, isEmpty);
+      expect(registration.registeredUrls, isEmpty);
+    });
+
     testWidgets('validates connectivity then registers the device', (
       tester,
     ) async {

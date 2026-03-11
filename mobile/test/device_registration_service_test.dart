@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gpg_bridge_mobile/fcm/fcm_token_service.dart';
 import 'package:gpg_bridge_mobile/http/device_api_service.dart';
 import 'package:gpg_bridge_mobile/http/server_url_service.dart';
 import 'package:gpg_bridge_mobile/security/crypto_utils.dart';
+import 'package:gpg_bridge_mobile/security/device_assertion_jwt_service.dart';
 import 'package:gpg_bridge_mobile/security/keystore_platform_service.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
+import 'package:gpg_bridge_mobile/state/auth_state.dart';
 import 'package:gpg_bridge_mobile/state/device_registration_service.dart';
 import 'package:gpg_bridge_mobile/state/fid_service.dart';
 
@@ -354,6 +357,32 @@ void main() {
 
       expect(mockApi.updateCalled, isFalse);
     });
+
+    test(
+      'deviceRegistrationProvider wires dependencies and updates auth state',
+      () async {
+        final container = ProviderContainer(
+          overrides: [
+            keystorePlatformProvider.overrideWithValue(mockKeystore),
+            fcmTokenProvider.overrideWithValue(mockFcm),
+            fidServiceProvider.overrideWithValue(mockFid),
+            deviceApiProvider.overrideWithValue(mockApi),
+            secureStorageProvider.overrideWithValue(storageService),
+            serverUrlServiceProvider.overrideWithValue(serverUrlService),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        expect(await container.read(authStateProvider.future), isFalse);
+
+        final service = container.read(deviceRegistrationProvider);
+        expect(service, isA<DefaultDeviceRegistrationService>());
+
+        await service.register(serverUrl: 'https://server.example.com');
+
+        expect(container.read(authStateProvider).requireValue, isTrue);
+      },
+    );
   });
 }
 
