@@ -4,16 +4,15 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::jwt::generate_signing_key_pair;
-use crate::repository::ClientPairingRow;
 use crate::test_support::{
     MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
 };
 
 use super::{
     add_client_pairing, add_client_pairings, add_client_with_assertion_key, build_app,
-    build_test_app, delete_pairing_by_daemon_request, get_pairing_token_request, make_client_row,
-    make_client_with_public_key, make_device_assertion_token, make_pairing_repo,
-    make_pairing_token, pair_device_request,
+    build_test_app, delete_pairing_by_daemon_request, delete_pairing_by_phone_request_for,
+    get_pairing_token_request, make_client_row, make_client_with_public_key,
+    make_device_assertion_token, make_pairing_repo, make_pairing_token, pair_device_request,
 };
 
 // ===========================================================================
@@ -193,29 +192,20 @@ async fn delete_by_daemon_last_pairing_deletes_client() {
 
 #[tokio::test]
 async fn delete_by_phone_last_pairing_deletes_client() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
     add_client_pairings(&repo, &[("fid-1", "pair-only")]);
 
     let state = make_test_app_state(repo);
     let app = build_app(state.clone());
 
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/pair-only");
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing/pair-only")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_phone_request_for(
+            "pair-only",
+            &priv_client,
+            &client_kid,
+            "fid-1",
+        ))
         .await
         .unwrap();
 
@@ -294,41 +284,20 @@ async fn refresh_invalid_jwt_returns_401() {
 
 #[tokio::test]
 async fn delete_by_phone_preserves_client_with_remaining_pairings() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-
-    let (priv_client, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let client = make_client_with_public_key("fid-1", &pub_client, &client_kid);
-
-    let repo = MockRepository::new(sk);
-    repo.clients.lock().unwrap().push(client);
-    {
-        let mut cp = repo.client_pairings_data.lock().unwrap();
-        cp.push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-a".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
-        cp.push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-b".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
-    }
+    let (_priv_server, _pub_server, _server_kid, repo) = make_pairing_repo();
+    let (priv_client, client_kid) = add_client_with_assertion_key(&repo, "fid-1");
+    add_client_pairings(&repo, &[("fid-1", "pair-a"), ("fid-1", "pair-b")]);
 
     let state = make_test_app_state(repo);
     let app = build_app(state.clone());
 
-    let device_assertion =
-        make_device_assertion_token(&priv_client, &client_kid, "fid-1", "/pairing/pair-a");
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing/pair-a")
-                .header(header::AUTHORIZATION, format!("Bearer {device_assertion}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_phone_request_for(
+            "pair-a",
+            &priv_client,
+            &client_kid,
+            "fid-1",
+        ))
         .await
         .unwrap();
 

@@ -236,6 +236,13 @@ fn make_device_key_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, St
     (priv_jwk, kid, sk, enc_kid, keys)
 }
 
+fn make_device_sig_only_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, String) {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let (sk, _) = make_signing_key_row();
+    let keys = public_keys_json(&[signing_public_key_json(&pub_jwk)]);
+    (priv_jwk, kid.clone(), sk, keys)
+}
+
 // ---------------------------------------------------------------------------
 // POST /device tests
 // ---------------------------------------------------------------------------
