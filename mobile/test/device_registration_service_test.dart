@@ -55,6 +55,7 @@ void main() {
 
     DefaultDeviceRegistrationService createService({
       _MockFcmTokenProvider? fcm,
+      ServerUrlService? serverUrlServiceOverride,
     }) {
       return DefaultDeviceRegistrationService(
         keystoreService: mockKeystore,
@@ -62,7 +63,7 @@ void main() {
         fidService: mockFid,
         deviceApiService: mockApi,
         storageService: storageService,
-        serverUrlService: serverUrlService,
+        serverUrlService: serverUrlServiceOverride ?? serverUrlService,
         onRegistrationChanged: (v) => registeredState = v,
       );
     }
@@ -114,6 +115,22 @@ void main() {
       expect(
         () => service.register(serverUrl: 'https://server.example.com'),
         throwsA(isA<DeviceRegistrationException>()),
+      );
+    });
+
+    test('register wraps server URL persistence failures', () async {
+      final service = createService(
+        serverUrlServiceOverride: _FailingSaveServerUrlService(storageService),
+      );
+
+      expect(
+        () => service.register(serverUrl: 'https://server.example.com'),
+        throwsA(isA<DeviceRegistrationException>()),
+      );
+      expect(registeredState, isFalse);
+      expect(
+        await storageService.readValue(key: SecureStorageKeys.serverUrl),
+        isNull,
       );
     });
 
@@ -472,5 +489,37 @@ class _MockDeviceApiService implements DeviceApiService {
     if (shouldFail) throw DeviceApiException('mock refresh failure');
     refreshJwtCalled = true;
     return DeviceRefreshResponse(deviceJwt: 'refreshed-jwt');
+  }
+}
+
+class _FailingSaveServerUrlService implements ServerUrlService {
+  _FailingSaveServerUrlService(SecureStorageService storageService)
+    : _delegate = DefaultServerUrlService(storageService);
+
+  final DefaultServerUrlService _delegate;
+
+  @override
+  String buildEndpointUrl({required String baseUrl, required String path}) {
+    return _delegate.buildEndpointUrl(baseUrl: baseUrl, path: path);
+  }
+
+  @override
+  Future<void> clear() {
+    return _delegate.clear();
+  }
+
+  @override
+  Future<String> getSavedOrDefault() {
+    return _delegate.getSavedOrDefault();
+  }
+
+  @override
+  String normalize(String input) {
+    return _delegate.normalize(input);
+  }
+
+  @override
+  Future<void> save(String serverUrl) async {
+    throw ServerUrlException('failed to save server URL');
   }
 }

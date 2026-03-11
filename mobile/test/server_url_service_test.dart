@@ -6,6 +6,21 @@ import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
 import 'helpers/in_memory_secure_storage_backend.dart';
 
 void main() {
+  group('ServerUrlException', () {
+    test('toString includes message without cause', () {
+      final error = ServerUrlException('invalid');
+
+      expect(error.toString(), 'ServerUrlException: invalid');
+    });
+
+    test('toString includes message and cause', () {
+      final error = ServerUrlException('invalid', cause: Exception('inner'));
+
+      expect(error.toString(), contains('invalid'));
+      expect(error.toString(), contains('inner'));
+    });
+  });
+
   late SecureStorageService storageService;
   late DefaultServerUrlService service;
 
@@ -69,6 +84,14 @@ void main() {
     );
   });
 
+  test('clear removes saved URL and falls back to API_BASE_URL', () async {
+    await service.save('https://runtime.example.com/api/');
+
+    await service.clear();
+
+    expect(await service.getSavedOrDefault(), ApiConfig.baseUrl);
+  });
+
   test('getSavedOrDefault reflects external storage changes', () async {
     await storageService.writeValue(
       key: SecureStorageKeys.serverUrl,
@@ -92,6 +115,24 @@ void main() {
     expect(
       () => service.getSavedOrDefault(),
       throwsA(isA<ServerUrlException>()),
+    );
+  });
+
+  test('normalize rejects relative or hostless URLs', () {
+    expect(() => service.normalize('/api'), throwsA(isA<ServerUrlException>()));
+    expect(
+      () => service.normalize('https:///missing-host'),
+      throwsA(isA<ServerUrlException>()),
+    );
+  });
+
+  test('buildEndpointUrl normalizes base URL without a path', () {
+    expect(
+      service.buildEndpointUrl(
+        baseUrl: 'https://runtime.example.com/',
+        path: 'health',
+      ),
+      'https://runtime.example.com/health',
     );
   });
 }

@@ -11,6 +11,7 @@ part 'device_api_service.g.dart';
 const _devicePath = '/device';
 const _deviceRefreshPath = '$_devicePath/refresh';
 const _healthPath = '/health';
+const healthCheckAcceptHeader = 'application/vnd.gpg-sign.v1+json';
 
 class DeviceApiException implements Exception {
   DeviceApiException(this.message, {this.cause});
@@ -86,6 +87,7 @@ class DefaultDeviceApiService implements DeviceApiService {
       await _dio.get<Map<String, dynamic>>(
         _healthPath,
         options: Options(
+          headers: const {'Accept': healthCheckAcceptHeader},
           extra: {skipAuthExtraKey: true, serverUrlOverrideExtraKey: serverUrl},
         ),
       );

@@ -291,10 +291,12 @@ void main() {
       () async {
         String? capturedPath;
         Map<String, dynamic>? capturedExtra;
+        Map<String, dynamic>? capturedHeaders;
 
         dio.httpClientAdapter = _MockAdapter((options, _, cancelFuture) async {
           capturedPath = options.path;
           capturedExtra = options.extra;
+          capturedHeaders = options.headers;
           return ResponseBody.fromString(
             '{"status":"ok"}',
             200,
@@ -312,6 +314,7 @@ void main() {
 
         expect(capturedPath, '/health');
         expect(capturedExtra?[skipAuthExtraKey], isTrue);
+        expect(capturedHeaders?['Accept'], healthCheckAcceptHeader);
         expect(
           capturedExtra?[serverUrlOverrideExtraKey],
           'https://runtime.example.com',
