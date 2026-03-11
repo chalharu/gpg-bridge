@@ -47,6 +47,28 @@ fn assert_gpg_device_state_unchanged(
     );
 }
 
+async fn list_gpg_keys_success(
+    app: &axum::Router,
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    client_id: &str,
+) -> Vec<serde_json::Value> {
+    let token = make_device_assertion(priv_jwk, kid, client_id, "/device/gpg_key");
+    let response = app
+        .clone()
+        .oneshot(get_device_request("/device/gpg_key", &token))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+
+    json["gpg_keys"].as_array().unwrap().to_vec()
+}
+
 struct DeleteFailureCase<'a> {
     name: &'a str,
     client_id: &'a str,
@@ -238,19 +260,9 @@ async fn list_gpg_keys_returns_registered() {
     let client = make_gpg_client_row("fid-list", &keys, &enc_kid, &gpg.to_string());
     let fixture = DeviceAppFixture::with_client(&client).await;
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-list", "/device/gpg_key");
-    let response = fixture
-        .app
-        .oneshot(get_device_request("/device/gpg_key", &token))
-        .await
-        .unwrap();
+    let gpg_keys = list_gpg_keys_success(&fixture.app, &priv_jwk, &kid, "fid-list").await;
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-    assert_eq!(json["gpg_keys"].as_array().unwrap().len(), 1);
+    assert_eq!(gpg_keys.len(), 1);
 }
 
 #[tokio::test]
@@ -258,18 +270,9 @@ async fn list_gpg_keys_empty() {
     let (priv_jwk, kid, sk, client) = make_gpg_test_setup();
     let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-gpg", "/device/gpg_key");
-    let response = app
-        .oneshot(get_device_request("/device/gpg_key", &token))
-        .await
-        .unwrap();
+    let gpg_keys = list_gpg_keys_success(&app, &priv_jwk, &kid, "fid-gpg").await;
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-    assert!(json["gpg_keys"].as_array().unwrap().is_empty());
+    assert!(gpg_keys.is_empty());
 }
 
 // ---------------------------------------------------------------------------

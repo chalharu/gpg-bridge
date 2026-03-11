@@ -28,48 +28,84 @@ fn build_query_gpg_keys_app(
     (build_test_app(repo), priv_jwk, pub_jwk, kid)
 }
 
-#[tokio::test]
-async fn query_gpg_keys_returns_aggregated_keys() {
-    let client1 = make_client_row(
-        "fid-1",
-        &json!([gpg_key_value(
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "0xABCD1234",
-            "P-256",
-        )])
-        .to_string(),
-    );
-    let client2 = make_client_row(
-        "fid-2",
-        &json!([gpg_key_value(
-            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-            "0xEF567890",
-            "P-384",
-        )])
-        .to_string(),
-    );
-    let (app, priv_jwk, pub_jwk, kid) = build_query_gpg_keys_app(
-        vec![client1, client2],
-        &[("fid-1", "pair-1"), ("fid-2", "pair-2")],
-    );
+async fn query_gpg_keys_client_ids(
+    clients: Vec<crate::repository::ClientRow>,
+    pairings: &[(&str, &str)],
+    request_clients: &[(&str, &str)],
+) -> Vec<String> {
+    let (app, priv_jwk, pub_jwk, kid) = build_query_gpg_keys_app(clients, pairings);
+    let tokens: Vec<String> = request_clients
+        .iter()
+        .map(|(client_id, pairing_id)| {
+            make_client_jwt(&priv_jwk, &pub_jwk, &kid, client_id, pairing_id)
+        })
+        .collect();
 
-    let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
-    let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-2", "pair-2");
-
-    let response = app
-        .oneshot(query_gpg_keys_request(&[t1, t2]))
-        .await
-        .unwrap();
+    let response = app.oneshot(query_gpg_keys_request(&tokens)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let resp_body = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-    let keys = json["gpg_keys"].as_array().unwrap();
-    assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0]["client_id"], "fid-1");
-    assert_eq!(keys[1]["client_id"], "fid-2");
+
+    json["gpg_keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key["client_id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn query_gpg_keys_returns_aggregated_keys() {
+    let client_ids = query_gpg_keys_client_ids(
+        vec![
+            make_client_row(
+                "fid-1",
+                &json!([gpg_key_value(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "0xABCD1234",
+                    "P-256",
+                )])
+                .to_string(),
+            ),
+            make_client_row(
+                "fid-2",
+                &json!([gpg_key_value(
+                    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                    "0xEF567890",
+                    "P-384",
+                )])
+                .to_string(),
+            ),
+        ],
+        &[("fid-1", "pair-1"), ("fid-2", "pair-2")],
+        &[("fid-1", "pair-1"), ("fid-2", "pair-2")],
+    )
+    .await;
+
+    assert_eq!(client_ids, vec!["fid-1".to_owned(), "fid-2".to_owned()]);
+}
+
+#[tokio::test]
+async fn query_gpg_keys_missing_client_returns_remaining_keys() {
+    let client_ids = query_gpg_keys_client_ids(
+        vec![make_client_row(
+            "fid-1",
+            &json!([gpg_key_value(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "0xABCD1234",
+                "P-256",
+            )])
+            .to_string(),
+        )],
+        &[("fid-1", "pair-1"), ("fid-deleted", "pair-deleted")],
+        &[("fid-1", "pair-1"), ("fid-deleted", "pair-deleted")],
+    )
+    .await;
+
+    assert_eq!(client_ids, vec!["fid-1".to_owned()]);
 }
 
 #[tokio::test]
@@ -92,42 +128,6 @@ async fn query_gpg_keys_returns_empty_when_no_keys() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
     assert!(json["gpg_keys"].as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn query_gpg_keys_missing_client_returns_remaining_keys() {
-    // Only client1 exists in the DB; client2 (fid-deleted) is missing
-    let client1 = make_client_row(
-        "fid-1",
-        &json!([gpg_key_value(
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "0xABCD1234",
-            "P-256",
-        )])
-        .to_string(),
-    );
-    let (app, priv_jwk, pub_jwk, kid) = build_query_gpg_keys_app(
-        vec![client1],
-        &[("fid-1", "pair-1"), ("fid-deleted", "pair-deleted")],
-    );
-
-    let t1 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-1", "pair-1");
-    let t2 = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "fid-deleted", "pair-deleted");
-
-    let response = app
-        .oneshot(query_gpg_keys_request(&[t1, t2]))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let resp_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-    let keys = json["gpg_keys"].as_array().unwrap();
-    // Only keys from existing client fid-1; deleted client contributes nothing
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0]["client_id"], "fid-1");
 }
 
 #[tokio::test]

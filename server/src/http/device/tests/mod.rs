@@ -8,9 +8,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::http::AppState;
-use crate::jwt::{
-    build_signing_key_row, generate_signing_key_pair, jwk_to_json,
-};
+use crate::jwt::{build_signing_key_row, generate_signing_key_pair, jwk_to_json};
 use crate::repository::{ClientRepository, ClientRow, SigningKeyRepository, SigningKeyRow};
 use crate::test_support::{
     build_test_sqlite_repo, make_device_assertion, make_test_app_state_arc,

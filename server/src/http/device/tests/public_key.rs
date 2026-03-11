@@ -88,6 +88,35 @@ struct DeleteFailureCase<'a> {
     expected_status: StatusCode,
 }
 
+async fn delete_public_key_and_load_state(
+    app: &axum::Router,
+    repo: &(impl ClientRepository + ?Sized),
+    priv_jwk: &josekit::jwk::Jwk,
+    auth_kid: &str,
+    client_id: &str,
+    delete_kid: &str,
+) -> (Vec<serde_json::Value>, String) {
+    let token = make_device_assertion(
+        priv_jwk,
+        auth_kid,
+        client_id,
+        &format!("/device/public_key/{delete_kid}"),
+    );
+    let response = app
+        .clone()
+        .oneshot(delete_device_item_request(
+            "/device/public_key",
+            delete_kid,
+            &token,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    stored_public_keys(repo, client_id).await
+}
+
 async fn assert_delete_public_key_failure_keeps_db_state(
     app: &axum::Router,
     repo: &(impl ClientRepository + ?Sized),
@@ -111,6 +140,68 @@ async fn assert_delete_public_key_failure_keeps_db_state(
         assert_public_key_state_unchanged,
     )
     .await;
+}
+
+fn delete_sig_keys(pub_jwk: &josekit::jwk::Jwk) -> String {
+    public_keys_json(&[
+        signing_public_key_json(pub_jwk),
+        ec_public_key_json("sig", "ES256", "sig-2"),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-1"),
+    ])
+}
+
+fn reassign_default_keys(pub_jwk: &josekit::jwk::Jwk) -> String {
+    public_keys_json(&[
+        signing_public_key_json(pub_jwk),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-del"),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-keep"),
+    ])
+}
+
+fn non_default_sig_keys(pub_jwk: &josekit::jwk::Jwk) -> String {
+    public_keys_json(&[
+        signing_public_key_json(pub_jwk),
+        ec_public_key_json("sig", "ES256", "sig-extra"),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-1"),
+    ])
+}
+
+fn non_default_enc_keys(pub_jwk: &josekit::jwk::Jwk) -> String {
+    public_keys_json(&[
+        signing_public_key_json(pub_jwk),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-default"),
+        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-other"),
+    ])
+}
+
+async fn assert_delete_public_key_success(
+    client_id: &str,
+    token: &str,
+    delete_kid: &str,
+    initial_default_kid: &str,
+    expected_present_kid: &str,
+    expected_default_kid: &str,
+    build_keys: fn(&josekit::jwk::Jwk) -> String,
+) {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let (sk, _) = make_signing_key_row();
+    let keys = build_keys(&pub_jwk);
+    let client = make_client_row(client_id, token, &keys, initial_default_kid);
+    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+
+    let (keys, default_kid) = delete_public_key_and_load_state(
+        &app,
+        repo.as_ref(),
+        &priv_jwk,
+        &kid,
+        client_id,
+        delete_kid,
+    )
+    .await;
+
+    assert!(!has_public_key_kid(&keys, delete_kid));
+    assert!(has_public_key_kid(&keys, expected_present_kid));
+    assert_eq!(default_kid, expected_default_kid);
 }
 
 #[tokio::test]
@@ -323,34 +414,58 @@ async fn list_public_keys_returns_all() {
 
 #[tokio::test]
 async fn delete_public_key_success() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let keys = public_keys_json(&[
-        signing_public_key_json(&pub_jwk),
-        ec_public_key_json("sig", "ES256", "sig-2"),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-1"),
-    ]);
-    let client = make_client_row("fid-del", "tok-del", &keys, "enc-1");
-    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+    assert_delete_public_key_success(
+        "fid-del",
+        "tok-del",
+        "sig-2",
+        "enc-1",
+        "enc-1",
+        "enc-1",
+        delete_sig_keys,
+    )
+    .await;
+}
 
-    let token = make_device_assertion(&priv_jwk, &kid, "fid-del", "/device/public_key/sig-2");
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "sig-2",
-            &token,
-        ))
-        .await
-        .unwrap();
+#[tokio::test]
+async fn delete_public_key_auto_reassign_default_kid() {
+    assert_delete_public_key_success(
+        "fid-reassign",
+        "tok-reassign",
+        "enc-del",
+        "enc-del",
+        "enc-keep",
+        "enc-keep",
+        reassign_default_keys,
+    )
+    .await;
+}
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+#[tokio::test]
+async fn delete_public_key_no_default_kid_reassign_when_not_affected() {
+    assert_delete_public_key_success(
+        "fid-noreassign",
+        "tok-noreassign",
+        "sig-extra",
+        "enc-1",
+        "enc-1",
+        "enc-1",
+        non_default_sig_keys,
+    )
+    .await;
+}
 
-    let c = repo.get_client_by_id("fid-del").await.unwrap().unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(keys.iter().all(|key| key["kid"].as_str() != Some("sig-2")));
-    assert!(keys.iter().any(|key| key["kid"].as_str() == Some("enc-1")));
-    assert_eq!(c.default_kid, "enc-1");
+#[tokio::test]
+async fn delete_non_default_enc_key_keeps_default_kid_when_other_enc_remains() {
+    assert_delete_public_key_success(
+        "fid-enc-keep-default",
+        "tok-enc-keep-default",
+        "enc-other",
+        "enc-default",
+        "enc-default",
+        "enc-default",
+        non_default_enc_keys,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -436,42 +551,6 @@ async fn delete_public_key_in_flight_returns_409() {
     .await;
 }
 
-#[tokio::test]
-async fn delete_public_key_auto_reassign_default_kid() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let keys = public_keys_json(&[
-        signing_public_key_json(&pub_jwk),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-del"),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-keep"),
-    ]);
-    let client = make_client_row("fid-reassign", "tok-reassign", &keys, "enc-del");
-    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(
-        &priv_jwk,
-        &kid,
-        "fid-reassign",
-        "/device/public_key/enc-del",
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "enc-del",
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    // Reassignment picks the first remaining enc key in array order.
-    let (keys, default_kid) = stored_public_keys(repo.as_ref(), "fid-reassign").await;
-    assert!(!has_public_key_kid(&keys, "enc-del"));
-    assert!(has_public_key_kid(&keys, "enc-keep"));
-    assert_eq!(default_kid, "enc-keep");
-}
-
 // ---------------------------------------------------------------------------
 // Edge-case tests (FINDING-11)
 // ---------------------------------------------------------------------------
@@ -501,95 +580,4 @@ async fn add_public_key_default_kid_existing_enc_accepted_for_new_sig_key() {
             .any(|key| key["kid"].as_str() == Some("sig-new"))
     );
     assert_eq!(c.default_kid, enc_kid);
-}
-
-#[tokio::test]
-async fn delete_public_key_no_default_kid_reassign_when_not_affected() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let keys = public_keys_json(&[
-        signing_public_key_json(&pub_jwk),
-        ec_public_key_json("sig", "ES256", "sig-extra"),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-1"),
-    ]);
-    let client = make_client_row("fid-noreassign", "tok-noreassign", &keys, "enc-1");
-    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    // Delete a sig key that is NOT the default_kid
-    let token = make_device_assertion(
-        &priv_jwk,
-        &kid,
-        "fid-noreassign",
-        "/device/public_key/sig-extra",
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "sig-extra",
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    // Verify default_kid is unchanged
-    let c = repo
-        .get_client_by_id("fid-noreassign")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(c.default_kid, "enc-1");
-}
-
-#[tokio::test]
-async fn delete_non_default_enc_key_keeps_default_kid_when_other_enc_remains() {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let keys = public_keys_json(&[
-        signing_public_key_json(&pub_jwk),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-default"),
-        ec_public_key_json("enc", "ECDH-ES+A256KW", "enc-other"),
-    ]);
-    let client = make_client_row(
-        "fid-enc-keep-default",
-        "tok-enc-keep-default",
-        &keys,
-        "enc-default",
-    );
-    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let token = make_device_assertion(
-        &priv_jwk,
-        &kid,
-        "fid-enc-keep-default",
-        "/device/public_key/enc-other",
-    );
-    let response = app
-        .oneshot(delete_device_item_request(
-            "/device/public_key",
-            "enc-other",
-            &token,
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    let c = repo
-        .get_client_by_id("fid-enc-keep-default")
-        .await
-        .unwrap()
-        .unwrap();
-    let keys: serde_json::Value = serde_json::from_str(&c.public_keys).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert!(
-        keys.iter()
-            .all(|key| key["kid"].as_str() != Some("enc-other"))
-    );
-    assert!(
-        keys.iter()
-            .any(|key| key["kid"].as_str() == Some("enc-default"))
-    );
-    assert_eq!(c.default_kid, "enc-default");
 }
