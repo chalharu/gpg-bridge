@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 860" role="img" aria-labelledby="title desc">
+  <title id="title">Settings screen mockup</title>
+  <desc id="desc">Settings screen proposal with connected server summary and theme mode selection.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #0f172a; }
+      .eyebrow { font-size: 14px; letter-spacing: 1.4px; fill: #475569; }
+      .heading { font-size: 28px; font-weight: 700; }
+      .screen-title { font-size: 20px; font-weight: 700; }
+      .body { font-size: 13px; fill: #334155; }
+      .small { font-size: 12px; fill: #475569; }
+      .nav { font-size: 11px; fill: #475569; }
+      .nav-active { font-size: 11px; font-weight: 700; fill: #1d4ed8; }
+    </style>
+  </defs>
+  <rect width="420" height="860" fill="url(#bg)"/>
+  <text x="34" y="54" class="eyebrow">MAIN SHELL</text>
+  <text x="34" y="88" class="heading">Settings</text>
+  <text x="34" y="114" class="body">Route: /settings</text>
+  <rect x="62" y="146" width="296" height="622" rx="38" fill="#0f172a"/>
+  <rect x="76" y="160" width="268" height="594" rx="30" fill="#ffffff"/>
+  <rect x="178" y="170" width="64" height="8" rx="4" fill="#94a3b8"/>
+  <text x="96" y="212" class="screen-title">設定</text>
+  <text x="96" y="250" class="body">接続サーバー</text>
+  <rect x="94" y="268" width="232" height="86" rx="18" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="114" y="295" class="small">Connected server</text>
+  <text x="114" y="321" class="body">https://api.example.com</text>
+  <text x="114" y="341" class="small">変更時は再登録フローへ誘導</text>
+  <text x="96" y="390" class="body">テーマ</text>
+  <rect x="94" y="410" width="232" height="58" rx="18" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <circle cx="120" cy="439" r="11" fill="#2563eb"/>
+  <circle cx="120" cy="439" r="5" fill="#ffffff"/>
+  <text x="146" y="444" class="body">システム設定に従う</text>
+  <rect x="94" y="482" width="232" height="58" rx="18" fill="#f8fafc" stroke="#cbd5e1"/>
+  <circle cx="120" cy="511" r="11" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <text x="146" y="516" class="body">ライト</text>
+  <rect x="94" y="554" width="232" height="58" rx="18" fill="#0f172a"/>
+  <circle cx="120" cy="583" r="11" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="146" y="588" class="body" fill="#e2e8f0">ダーク</text>
+  <rect x="94" y="630" width="232" height="80" rx="20" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="114" y="658" class="small">
+    <tspan x="114" dy="0">themeModeStateProvider</tspan>
+    <tspan x="114" dy="16">+ 保存済み server URL を表示</tspan>
+  </text>
+  <rect x="76" y="696" width="268" height="58" fill="#f8fafc"/>
+  <line x1="76" y1="696" x2="344" y2="696" stroke="#cbd5e1"/>
+  <text x="109" y="730" class="nav">Home</text>
+  <text x="171" y="730" class="nav">Keys</text>
+  <text x="232" y="730" class="nav">Pairing</text>
+  <text x="303" y="730" class="nav-active">Settings</text>
+</svg>

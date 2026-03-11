@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 860" role="img" aria-labelledby="title desc">
+  <title id="title">QR scan screen mockup</title>
+  <desc id="desc">QR pairing scan screen with camera area, JWT validation, and snackbar outcomes.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="100%" stop-color="#fffbeb"/>
+    </linearGradient>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #0f172a; }
+      .eyebrow { font-size: 14px; letter-spacing: 1.4px; fill: #9a3412; }
+      .heading { font-size: 28px; font-weight: 700; }
+      .screen-title { font-size: 20px; font-weight: 700; }
+      .body { font-size: 13px; fill: #7c2d12; }
+      .small { font-size: 12px; fill: #9a3412; }
+      .tiny { font-size: 11px; fill: #c2410c; }
+    </style>
+  </defs>
+  <rect width="420" height="860" fill="url(#bg)"/>
+  <text x="34" y="54" class="eyebrow">PUSHED FROM PAIRING</text>
+  <text x="34" y="88" class="heading">QR Scan</text>
+  <text x="34" y="114" class="body">Route: /pairing/scan</text>
+  <rect x="62" y="146" width="296" height="622" rx="38" fill="#0f172a"/>
+  <rect x="76" y="160" width="268" height="594" rx="30" fill="#ffffff"/>
+  <rect x="178" y="170" width="64" height="8" rx="4" fill="#94a3b8"/>
+  <text x="96" y="212" class="screen-title">QRコードスキャン</text>
+  <rect x="104" y="252" width="212" height="212" rx="26" fill="#111827"/>
+  <rect x="126" y="274" width="168" height="168" rx="22" fill="#0f172a" stroke="#f8fafc" stroke-width="3" stroke-dasharray="10 8"/>
+  <path d="M142 290h26v26M252 290h26v26M142 400h26v26M252 400h26v26" fill="none" stroke="#38bdf8" stroke-width="6" stroke-linecap="round"/>
+  <text x="210" y="485" class="small" text-anchor="middle">MobileScanner(onDetect)</text>
+  <rect x="94" y="516" width="232" height="92" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="114" y="546" class="body">JWT format check</text>
+  <text x="114" y="568" class="tiny">
+    <tspan x="114" dy="0">three Base64url segments</tspan>
+    <tspan x="114" dy="14">separated by dots</tspan>
+  </text>
+  <text x="114" y="596" class="tiny">invalid value -&gt; SnackBar</text>
+  <rect x="94" y="620" width="232" height="76" rx="18" fill="#ecfdf5" stroke="#86efac" stroke-width="2"/>
+  <text x="114" y="648" class="body" fill="#166534">pair(rawValue) on success</text>
+  <text x="114" y="670" class="tiny" fill="#166534">
+    <tspan x="114" dy="0">show success SnackBar,</tspan>
+    <tspan x="114" dy="14">then Navigator.pop()</tspan>
+  </text>
+</svg>
