@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:gpg_bridge_mobile/http/api_config.dart';
+import 'package:gpg_bridge_mobile/http/device_api_service.dart';
+import 'package:gpg_bridge_mobile/http/server_url_service.dart';
 import 'package:gpg_bridge_mobile/main.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
 import 'package:gpg_bridge_mobile/state/auth_state.dart';
@@ -24,14 +27,14 @@ class _MockDeviceRegistrationService implements DeviceRegistrationService {
     this.unregisterError,
   });
 
-  final VoidCallback? onRegisterCalled;
+  final void Function(String serverUrl)? onRegisterCalled;
   final DeviceRegistrationException? registerError;
   final DeviceRegistrationException? unregisterError;
 
   @override
-  Future<void> register() async {
+  Future<void> register({required String serverUrl}) async {
     if (registerError != null) throw registerError!;
-    onRegisterCalled?.call();
+    onRegisterCalled?.call(serverUrl);
   }
 
   @override
@@ -49,6 +52,65 @@ class _MockDeviceRegistrationService implements DeviceRegistrationService {
   }
 }
 
+class _MockDeviceApiService implements DeviceApiService {
+  _MockDeviceApiService({this.validationError});
+
+  final DeviceApiException? validationError;
+
+  @override
+  Future<void> validateServerConnection({required String serverUrl}) async {
+    if (validationError != null) {
+      throw validationError!;
+    }
+  }
+
+  @override
+  Future<DeviceResponse> registerDevice({
+    required String serverUrl,
+    required String deviceToken,
+    required String firebaseInstallationId,
+    required List<Map<String, dynamic>> sigKeys,
+    required List<Map<String, dynamic>> encKeys,
+    String? defaultKid,
+  }) async {
+    throw UnsupportedError('not used in widget tests');
+  }
+
+  @override
+  Future<void> updateDevice({String? deviceToken, String? defaultKid}) async {}
+
+  @override
+  Future<void> deleteDevice() async {}
+
+  @override
+  Future<DeviceRefreshResponse> refreshDeviceJwt({
+    required String currentDeviceJwt,
+  }) async {
+    throw UnsupportedError('not used in widget tests');
+  }
+}
+
+class _ThrowingServerUrlService implements ServerUrlService {
+  @override
+  Future<void> clear() async {}
+
+  @override
+  String buildEndpointUrl({required String baseUrl, required String path}) {
+    return '$baseUrl$path';
+  }
+
+  @override
+  Future<String> getSavedOrDefault() {
+    throw ServerUrlException('stored server URL is invalid');
+  }
+
+  @override
+  String normalize(String input) => input;
+
+  @override
+  Future<void> save(String serverUrl) async {}
+}
+
 void main() {
   testWidgets('Registration flow routes to home', (WidgetTester tester) async {
     final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
@@ -57,9 +119,11 @@ void main() {
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
           deviceRegistrationProvider.overrideWith((ref) {
             return _MockDeviceRegistrationService(
-              onRegisterCalled: () {
+              onRegisterCalled: (serverUrl) {
+                expect(serverUrl, ApiConfig.baseUrl);
                 ref.read(authStateProvider.notifier).setRegistered(true);
               },
             );
@@ -89,6 +153,7 @@ void main() {
       ProviderScope(
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
           deviceRegistrationProvider.overrideWith((ref) {
             return _MockDeviceRegistrationService(
               registerError: DeviceRegistrationException('registration failed'),
@@ -107,6 +172,92 @@ void main() {
     expect(find.text('Register'), findsOneWidget);
   });
 
+  testWidgets('Disables registration for invalid server URL', (
+    WidgetTester tester,
+  ) async {
+    final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService();
+          }),
+        ],
+        child: const GpgBridgeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'http://insecure.example');
+    await tester.pumpAndSettle();
+
+    final button = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Complete registration'),
+    );
+    expect(button.onPressed, isNull);
+    expect(find.text('server URL must start with https://'), findsOneWidget);
+  });
+
+  testWidgets('Register page falls back when stored server URL is corrupt', (
+    WidgetTester tester,
+  ) async {
+    final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          serverUrlServiceProvider.overrideWithValue(
+            _ThrowingServerUrlService(),
+          ),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService();
+          }),
+        ],
+        child: const GpgBridgeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('stored server URL is invalid'), findsOneWidget);
+    final textField = tester.widget<TextField>(find.byType(TextField));
+    expect(textField.controller?.text, ApiConfig.baseUrl);
+  });
+
+  testWidgets('Shows snackbar when server validation fails', (
+    WidgetTester tester,
+  ) async {
+    final secureStorage = SecureStorageService(InMemorySecureStorageBackend());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          deviceApiProvider.overrideWithValue(
+            _MockDeviceApiService(
+              validationError: DeviceApiException('health check failed'),
+            ),
+          ),
+          deviceRegistrationProvider.overrideWith((ref) {
+            return _MockDeviceRegistrationService();
+          }),
+        ],
+        child: const GpgBridgeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Complete registration'));
+    await tester.pump();
+
+    expect(find.text('health check failed'), findsOneWidget);
+    expect(find.textContaining('Unable to reach'), findsOneWidget);
+  });
+
   testWidgets('Shows snackbar when unregistration fails', (
     WidgetTester tester,
   ) async {
@@ -117,6 +268,7 @@ void main() {
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
           deviceRegistrationProvider.overrideWith((ref) {
             return _MockDeviceRegistrationService(
               unregisterError: DeviceRegistrationException(
@@ -149,6 +301,7 @@ void main() {
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
           deviceRegistrationProvider.overrideWith((ref) {
             return _MockDeviceRegistrationService();
           }),
@@ -192,6 +345,7 @@ void main() {
         overrides: [
           secureStorageProvider.overrideWithValue(secureStorage),
           authStateProvider.overrideWith(() => _TestAuthState(true)),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
           deviceRegistrationProvider.overrideWith((ref) {
             return _MockDeviceRegistrationService();
           }),
@@ -242,7 +396,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [secureStorageProvider.overrideWithValue(secureStorage)],
+        overrides: [
+          secureStorageProvider.overrideWithValue(secureStorage),
+          deviceApiProvider.overrideWithValue(_MockDeviceApiService()),
+        ],
         child: const GpgBridgeApp(),
       ),
     );

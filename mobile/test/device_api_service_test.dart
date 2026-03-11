@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gpg_bridge_mobile/http/api_exception.dart';
+import 'package:gpg_bridge_mobile/http/auth_interceptor.dart';
 import 'package:gpg_bridge_mobile/http/device_api_service.dart';
+import 'package:gpg_bridge_mobile/http/server_url_interceptor.dart';
 
 void main() {
   group('DeviceApiException', () {
@@ -72,9 +74,11 @@ void main() {
 
     test('registerDevice sends correct POST body', () async {
       Map<String, dynamic>? capturedBody;
+      Map<String, dynamic>? capturedExtra;
 
       dio.httpClientAdapter = _MockAdapter((options, _, cancelFuture) async {
         capturedBody = options.data as Map<String, dynamic>?;
+        capturedExtra = options.extra;
         return ResponseBody.fromString(
           '{"device_jwt":"new-jwt"}',
           201,
@@ -87,6 +91,7 @@ void main() {
       final service = DefaultDeviceApiService(dio: dio);
 
       final response = await service.registerDevice(
+        serverUrl: 'https://runtime.example.com',
         deviceToken: 'fcm-token',
         firebaseInstallationId: 'fid-123',
         sigKeys: [
@@ -104,6 +109,10 @@ void main() {
       expect(capturedBody!['default_kid'], 'kid-uuid');
       expect(capturedBody!['public_key']['keys']['sig'], isNotEmpty);
       expect(capturedBody!['public_key']['keys']['enc'], isNotEmpty);
+      expect(
+        capturedExtra?[serverUrlOverrideExtraKey],
+        'https://runtime.example.com',
+      );
     });
 
     test('registerDevice sets skipAuth extra flag', () async {
@@ -123,6 +132,7 @@ void main() {
       final service = DefaultDeviceApiService(dio: dio);
 
       await service.registerDevice(
+        serverUrl: 'https://runtime.example.com',
         deviceToken: 'tok',
         firebaseInstallationId: 'fid',
         sigKeys: [{}],
@@ -149,6 +159,7 @@ void main() {
       final service = DefaultDeviceApiService(dio: dio);
 
       await service.registerDevice(
+        serverUrl: 'https://runtime.example.com',
         deviceToken: 'tok',
         firebaseInstallationId: 'fid',
         sigKeys: [{}],
@@ -236,6 +247,7 @@ void main() {
 
       expect(
         () => service.registerDevice(
+          serverUrl: 'https://runtime.example.com',
           deviceToken: 'tok',
           firebaseInstallationId: 'fid',
           sigKeys: [{}],
@@ -260,6 +272,7 @@ void main() {
 
       expect(
         () => service.registerDevice(
+          serverUrl: 'https://runtime.example.com',
           deviceToken: 'test',
           firebaseInstallationId: 'fid',
           sigKeys: [
@@ -268,6 +281,60 @@ void main() {
           encKeys: [
             {'kty': 'EC'},
           ],
+        ),
+        throwsA(anyOf(isA<ApiException>(), isA<DeviceApiException>())),
+      );
+    });
+
+    test(
+      'validateServerConnection sends unauthenticated health check',
+      () async {
+        String? capturedPath;
+        Map<String, dynamic>? capturedExtra;
+
+        dio.httpClientAdapter = _MockAdapter((options, _, cancelFuture) async {
+          capturedPath = options.path;
+          capturedExtra = options.extra;
+          return ResponseBody.fromString(
+            '{"status":"ok"}',
+            200,
+            headers: {
+              'content-type': ['application/json'],
+            },
+          );
+        });
+
+        final service = DefaultDeviceApiService(dio: dio);
+
+        await service.validateServerConnection(
+          serverUrl: 'https://runtime.example.com',
+        );
+
+        expect(capturedPath, '/health');
+        expect(capturedExtra?[skipAuthExtraKey], isTrue);
+        expect(
+          capturedExtra?[serverUrlOverrideExtraKey],
+          'https://runtime.example.com',
+        );
+      },
+    );
+
+    test('validateServerConnection wraps failures as API exceptions', () async {
+      dio.httpClientAdapter = _MockAdapter((options, _, cancelFuture) async {
+        return ResponseBody.fromString(
+          '{"error":"unavailable"}',
+          503,
+          headers: {
+            'content-type': ['application/json'],
+          },
+        );
+      });
+
+      final service = DefaultDeviceApiService(dio: dio);
+
+      expect(
+        () => service.validateServerConnection(
+          serverUrl: 'https://runtime.example.com',
         ),
         throwsA(anyOf(isA<ApiException>(), isA<DeviceApiException>())),
       );

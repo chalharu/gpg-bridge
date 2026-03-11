@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gpg_bridge_mobile/fcm/fcm_token_service.dart';
 import 'package:gpg_bridge_mobile/http/device_api_service.dart';
+import 'package:gpg_bridge_mobile/http/server_url_service.dart';
 import 'package:gpg_bridge_mobile/security/crypto_utils.dart';
 import 'package:gpg_bridge_mobile/security/keystore_platform_service.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
@@ -36,6 +37,7 @@ void main() {
     late _MockFcmTokenProvider mockFcm;
     late _MockFidProvider mockFid;
     late _MockDeviceApiService mockApi;
+    late ServerUrlService serverUrlService;
     late SecureStorageService storageService;
     late InMemorySecureStorageBackend storageBackend;
     late bool registeredState;
@@ -47,6 +49,7 @@ void main() {
       mockApi = _MockDeviceApiService();
       storageBackend = InMemorySecureStorageBackend();
       storageService = SecureStorageService(storageBackend);
+      serverUrlService = DefaultServerUrlService(storageService);
       registeredState = false;
     });
 
@@ -59,6 +62,7 @@ void main() {
         fidService: mockFid,
         deviceApiService: mockApi,
         storageService: storageService,
+        serverUrlService: serverUrlService,
         onRegistrationChanged: (v) => registeredState = v,
       );
     }
@@ -68,7 +72,7 @@ void main() {
       () async {
         final service = createService();
 
-        await service.register();
+        await service.register(serverUrl: 'https://server.example.com');
 
         // Keys generated for both aliases.
         expect(mockKeystore.generatedAliases, contains('device_key'));
@@ -78,6 +82,7 @@ void main() {
         expect(mockApi.registerCalled, isTrue);
         expect(mockApi.lastRegisterDeviceToken, 'fcm-token-123');
         expect(mockApi.lastRegisterFid, 'fid-abc');
+        expect(mockApi.lastRegisterServerUrl, 'https://server.example.com');
 
         // Credentials stored.
         expect(
@@ -92,6 +97,10 @@ void main() {
           await storageService.readValue(key: SecureStorageKeys.fcmToken),
           'fcm-token-123',
         );
+        expect(
+          await storageService.readValue(key: SecureStorageKeys.serverUrl),
+          'https://server.example.com',
+        );
 
         // Auth state updated.
         expect(registeredState, isTrue);
@@ -103,7 +112,7 @@ void main() {
       final service = createService();
 
       expect(
-        () => service.register(),
+        () => service.register(serverUrl: 'https://server.example.com'),
         throwsA(isA<DeviceRegistrationException>()),
       );
     });
@@ -112,7 +121,7 @@ void main() {
       final service = createService();
 
       // First register to populate storage.
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       expect(registeredState, isTrue);
 
       // Now unregister.
@@ -129,6 +138,10 @@ void main() {
       );
       expect(
         await storageService.readValue(key: SecureStorageKeys.fcmToken),
+        isNull,
+      );
+      expect(
+        await storageService.readValue(key: SecureStorageKeys.serverUrl),
         isNull,
       );
       expect(registeredState, isFalse);
@@ -153,7 +166,7 @@ void main() {
       final service = createService(fcm: fcmWithRefresh);
 
       // Register first to store the initial token.
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
 
       // Emit a new token.
@@ -180,7 +193,7 @@ void main() {
       );
       final service = createService(fcm: fcmWithRefresh);
 
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
 
       // Emit the same token — should not call PATCH.
@@ -200,7 +213,7 @@ void main() {
       );
       final service = createService(fcm: fcmWithRefresh);
 
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
       service.startTokenRefreshListener(); // called twice
 
@@ -413,12 +426,17 @@ class _MockDeviceApiService implements DeviceApiService {
   bool shouldFail = false;
   bool deleteShouldFail = false;
   bool refreshJwtCalled = false;
+  String? lastRegisterServerUrl;
   String? lastRegisterDeviceToken;
   String? lastRegisterFid;
   String? lastUpdateDeviceToken;
 
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {}
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -427,6 +445,7 @@ class _MockDeviceApiService implements DeviceApiService {
   }) async {
     if (shouldFail) throw DeviceApiException('mock register failure');
     registerCalled = true;
+    lastRegisterServerUrl = serverUrl;
     lastRegisterDeviceToken = deviceToken;
     lastRegisterFid = firebaseInstallationId;
     return DeviceResponse(deviceJwt: 'mock-device-jwt');

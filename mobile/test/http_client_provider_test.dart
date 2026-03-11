@@ -9,6 +9,7 @@ import 'package:gpg_bridge_mobile/http/device_api_service.dart';
 import 'package:gpg_bridge_mobile/http/device_jwt_refresh_interceptor.dart';
 import 'package:gpg_bridge_mobile/http/error_interceptor.dart';
 import 'package:gpg_bridge_mobile/http/http_client_provider.dart';
+import 'package:gpg_bridge_mobile/http/server_url_interceptor.dart';
 import 'package:gpg_bridge_mobile/http/token_refresh_interceptor.dart';
 import 'package:gpg_bridge_mobile/security/device_assertion_jwt_service.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
@@ -50,19 +51,143 @@ void main() {
       final dio = container.read(httpClientProvider);
       final interceptors = dio.interceptors;
 
-      // Dio adds ImplyContentTypeInterceptor by default, plus our 5.
-      expect(interceptors.length, 6);
-      expect(interceptors[1], isA<DebugLogInterceptor>());
-      expect(interceptors[2], isA<DeviceJwtRefreshInterceptor>());
-      expect(interceptors[3], isA<AuthInterceptor>());
-      expect(interceptors[4], isA<ErrorInterceptor>());
-      expect(interceptors[5], isA<TokenRefreshInterceptor>());
+      // Dio adds ImplyContentTypeInterceptor by default, plus our 6.
+      expect(interceptors.length, 7);
+      expect(interceptors[1], isA<ServerUrlInterceptor>());
+      expect(interceptors[2], isA<DebugLogInterceptor>());
+      expect(interceptors[3], isA<DeviceJwtRefreshInterceptor>());
+      expect(interceptors[4], isA<AuthInterceptor>());
+      expect(interceptors[5], isA<ErrorInterceptor>());
+      expect(interceptors[6], isA<TokenRefreshInterceptor>());
     });
 
     test('tokenProvider returns null when no device_id stored', () async {
       final tokenProvider = container.read(tokenProviderProvider);
       final token = await tokenProvider(RequestOptions(path: '/test'));
       expect(token, isNull);
+    });
+
+    test('tokenProvider uses saved server URL for audience', () async {
+      final backend = InMemorySecureStorageBackend();
+      final storage = SecureStorageService(backend);
+      await storage.writeValue(
+        key: SecureStorageKeys.deviceId,
+        value: 'device-id',
+      );
+      await storage.writeValue(key: SecureStorageKeys.sigKid, value: 'sig-kid');
+      await storage.writeValue(
+        key: SecureStorageKeys.serverUrl,
+        value: 'https://runtime.example.com/api',
+      );
+
+      final jwtService = _CapturingDeviceAssertionJwtService();
+      final localContainer = ProviderContainer(
+        overrides: [
+          secureStorageProvider.overrideWithValue(storage),
+          deviceAssertionJwtProvider.overrideWithValue(jwtService),
+          deviceApiProvider.overrideWithValue(_StubDeviceApiService()),
+        ],
+      );
+      addTearDown(localContainer.dispose);
+
+      final tokenProvider = localContainer.read(tokenProviderProvider);
+      final token = await tokenProvider(RequestOptions(path: '/device'));
+
+      expect(token, 'captured-jwt');
+      expect(jwtService.lastAudience, 'https://runtime.example.com/api/device');
+    });
+
+    test(
+      'server URL interceptor rewrites requests with saved base URL',
+      () async {
+        final backend = InMemorySecureStorageBackend();
+        final storage = SecureStorageService(backend);
+        await storage.writeValue(
+          key: SecureStorageKeys.serverUrl,
+          value: 'https://runtime.example.com/api',
+        );
+
+        final localContainer = ProviderContainer(
+          overrides: [
+            secureStorageProvider.overrideWithValue(storage),
+            deviceAssertionJwtProvider.overrideWithValue(
+              _StubDeviceAssertionJwtService(),
+            ),
+            deviceApiProvider.overrideWithValue(_StubDeviceApiService()),
+          ],
+        );
+        addTearDown(localContainer.dispose);
+
+        final dio = localContainer.read(httpClientProvider);
+        String? requestedPath;
+        dio.httpClientAdapter = _MockAdapter((
+          options,
+          requestStream,
+          cancelFuture,
+        ) async {
+          requestedPath = options.path;
+          return ResponseBody.fromString(
+            '{}',
+            200,
+            headers: {
+              'content-type': ['application/json'],
+            },
+          );
+        });
+
+        await dio.get<Map<String, dynamic>>('/device');
+
+        expect(requestedPath, 'https://runtime.example.com/api/device');
+      },
+    );
+
+    test('full interceptor chain uses runtime URL in auth audience', () async {
+      final backend = InMemorySecureStorageBackend();
+      final storage = SecureStorageService(backend);
+      await storage.writeValue(
+        key: SecureStorageKeys.deviceId,
+        value: 'device-id',
+      );
+      await storage.writeValue(key: SecureStorageKeys.sigKid, value: 'sig-kid');
+      await storage.writeValue(
+        key: SecureStorageKeys.serverUrl,
+        value: 'https://runtime.example.com/api',
+      );
+
+      final jwtService = _CapturingDeviceAssertionJwtService();
+      final localContainer = ProviderContainer(
+        overrides: [
+          secureStorageProvider.overrideWithValue(storage),
+          deviceAssertionJwtProvider.overrideWithValue(jwtService),
+          deviceApiProvider.overrideWithValue(_StubDeviceApiService()),
+        ],
+      );
+      addTearDown(localContainer.dispose);
+
+      final dio = localContainer.read(httpClientProvider);
+      String? requestedPath;
+      String? authorizationHeader;
+      dio.httpClientAdapter = _MockAdapter((
+        options,
+        requestStream,
+        cancelFuture,
+      ) async {
+        requestedPath = options.path;
+        authorizationHeader = options.headers['Authorization'] as String?;
+        return ResponseBody.fromString(
+          '{}',
+          200,
+          headers: {
+            'content-type': ['application/json'],
+          },
+        );
+      });
+
+      await dio.get<Map<String, dynamic>>('/device');
+
+      expect(requestedPath, 'https://runtime.example.com/api/device');
+      expect(authorizationHeader, 'Bearer captured-jwt');
+      expect(jwtService.lastAudience, 'https://runtime.example.com/api/device');
     });
 
     test('tokenRefresher returns false when no device_jwt stored', () async {
@@ -203,9 +328,27 @@ class _StubDeviceAssertionJwtService implements DeviceAssertionJwtService {
   }
 }
 
+class _CapturingDeviceAssertionJwtService implements DeviceAssertionJwtService {
+  String? lastAudience;
+
+  @override
+  Future<String> generate({
+    required String firebaseInstallationId,
+    required String audience,
+    required String kid,
+  }) async {
+    lastAudience = audience;
+    return 'captured-jwt';
+  }
+}
+
 class _StubDeviceApiService implements DeviceApiService {
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {}
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -231,7 +374,13 @@ class _StubDeviceApiService implements DeviceApiService {
 
 class _SuccessDeviceApiService implements DeviceApiService {
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {
+    throw UnsupportedError('not used in this test');
+  }
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -261,7 +410,13 @@ class _SuccessDeviceApiService implements DeviceApiService {
 
 class _Failing401DeviceApiService implements DeviceApiService {
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {
+    throw UnsupportedError('not used in this test');
+  }
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -297,7 +452,13 @@ class _Failing401DeviceApiService implements DeviceApiService {
 
 class _FailingNetworkDeviceApiService implements DeviceApiService {
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {
+    throw UnsupportedError('not used in this test');
+  }
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -323,4 +484,29 @@ class _FailingNetworkDeviceApiService implements DeviceApiService {
   }) async {
     throw Exception('network error');
   }
+}
+
+typedef _AdapterCallback =
+    Future<ResponseBody> Function(
+      RequestOptions options,
+      Stream<List<int>>? requestStream,
+      Future<void>? cancelFuture,
+    );
+
+class _MockAdapter implements HttpClientAdapter {
+  _MockAdapter(this._callback);
+
+  final _AdapterCallback _callback;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<List<int>>? requestStream,
+    Future<void>? cancelFuture,
+  ) {
+    return _callback(options, requestStream, cancelFuture);
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
