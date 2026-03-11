@@ -12,8 +12,8 @@ use crate::jwt::{
 };
 use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
 use crate::test_support::{
-    MockRepository, make_device_assertion, make_signing_key_row, make_test_client_pairing_row,
-    make_test_client_row,
+    MockRepository, make_client_jwt, make_device_assertion, make_signing_key_row,
+    make_test_app_state, make_test_client_pairing_row, make_test_client_row,
 };
 
 use super::{get_sign_request, post_sign_request, post_sign_result};
@@ -322,6 +322,12 @@ fn setup_happy_path() -> (josekit::jwk::Jwk, josekit::jwk::Jwk, String, MockRepo
         .push(make_client_row_with_enc_key("client-1", "enc-kid-1"));
 
     (priv_jwk, pub_jwk, kid, repo)
+}
+
+fn build_happy_path_app_and_token() -> (Router, String) {
+    let (priv_jwk, pub_jwk, kid, repo) = setup_happy_path();
+    let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "client-1", "pair-1");
+    (build_app(make_test_app_state(repo)), token)
 }
 
 // ---------------------------------------------------------------------------

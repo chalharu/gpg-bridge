@@ -97,20 +97,8 @@ async fn register_device_uses_first_enc_kid_when_none_specified() {
     let (sk, _) = make_signing_key_row();
     let (repo, app) = build_sqlite_device_app(&sk).await;
 
-    // Body without explicit default_kid — should use the enc key's kid
-    let body = json!({
-        "device_token": "tok-dk",
-        "firebase_installation_id": "fid-dk",
-        "public_key": {
-            "keys": {
-                "sig": [{ "kty": "EC", "use": "sig", "crv": "P-256", "alg": "ES256",
-                           "x": X_COORD, "y": Y_COORD }],
-                "enc": [{ "kty": "EC", "use": "enc", "crv": "P-256",
-                           "alg": "ECDH-ES+A256KW", "kid": "my-enc-kid",
-                           "x": X_COORD, "y": Y_COORD }]
-            }
-        }
-    });
+    let mut body = register_body("fid-dk", "tok-dk");
+    body["public_key"]["keys"]["enc"][0]["kid"] = json!("my-enc-kid");
     let response = app.oneshot(post_device_request(&body)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -156,20 +144,9 @@ async fn register_device_invalid_default_kid_returns_400() {
     let (sk, _) = make_signing_key_row();
     let (_repo, app) = build_sqlite_device_app(&sk).await;
 
-    let body = json!({
-        "device_token": "tok-bad",
-        "firebase_installation_id": "fid-bad",
-        "default_kid": "nonexistent-kid",
-        "public_key": {
-            "keys": {
-                "sig": [{ "kty": "EC", "use": "sig", "crv": "P-256", "alg": "ES256",
-                           "x": X_COORD, "y": Y_COORD }],
-                "enc": [{ "kty": "EC", "use": "enc", "crv": "P-256",
-                           "alg": "ECDH-ES+A256KW", "kid": "enc-kid",
-                           "x": X_COORD, "y": Y_COORD }]
-            }
-        }
-    });
+    let mut body = register_body("fid-bad", "tok-bad");
+    body["default_kid"] = json!("nonexistent-kid");
+    body["public_key"]["keys"]["enc"][0]["kid"] = json!("enc-kid");
     let response = app
         .oneshot(
             Request::post("/device")

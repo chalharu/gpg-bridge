@@ -14,8 +14,9 @@ use crate::test_support::{
 };
 
 use super::{
-    add_client_with_assertion_key, make_pairing_token, pairing_session_bearer_request,
-    pairing_session_bearer_request_without_ip, response_json,
+    add_client_with_assertion_key, make_pairing_repo, make_pairing_token,
+    pairing_session_bearer_request, pairing_session_bearer_request_without_ip,
+    pairing_session_request, response_json,
 };
 
 // ===========================================================================
@@ -70,20 +71,12 @@ async fn session_missing_auth_returns_401() {
 
 #[tokio::test]
 async fn session_invalid_bearer_scheme_returns_401() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (_, _, _, repo) = make_pairing_repo();
     let state = make_test_app_state(repo);
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(
-            Request::get("/pairing-session")
-                .header(header::AUTHORIZATION, "Basic abc123")
-                .header("X-Forwarded-For", "10.0.0.1")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(pairing_session_request(Some("Basic abc123")))
         .await
         .unwrap();
 
@@ -121,20 +114,12 @@ async fn session_invalid_authorization_header_returns_401() {
 
 #[tokio::test]
 async fn session_invalid_jwt_returns_401() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (_, _, _, repo) = make_pairing_repo();
     let state = make_test_app_state(repo);
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(
-            Request::get("/pairing-session")
-                .header(header::AUTHORIZATION, "Bearer not-a-valid-jwt")
-                .header("X-Forwarded-For", "10.0.0.1")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(pairing_session_bearer_request("not-a-valid-jwt"))
         .await
         .unwrap();
 
@@ -328,23 +313,13 @@ async fn session_invalid_pairing_expiry_returns_500_with_instance() {
 
 #[tokio::test]
 async fn session_signing_key_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-1");
-
-    let repo = MockRepository::new(sk);
+    let (pairing_token, repo) = make_pairing_sse_repo("pair-1", "2099-01-01T00:00:00+00:00", None);
     repo.force_error("get_signing_key_by_kid");
     let state = make_test_app_state(repo);
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(
-            Request::get("/pairing-session")
-                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
-                .header("X-Forwarded-For", "10.0.0.1")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -353,28 +328,13 @@ async fn session_signing_key_db_error_returns_500() {
 
 #[tokio::test]
 async fn session_get_pairing_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let pairing_token = make_pairing_token(&priv_server, &server_kid, "pair-1");
-
-    let repo = MockRepository::new(sk);
-    repo.pairings.lock().unwrap().push(PairingRow {
-        pairing_id: "pair-1".to_owned(),
-        expired: "2099-01-01T00:00:00+00:00".to_owned(),
-        client_id: None,
-    });
+    let (pairing_token, repo) = make_pairing_sse_repo("pair-1", "2099-01-01T00:00:00+00:00", None);
     repo.force_error("get_pairing_by_id");
     let state = make_test_app_state(repo);
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(
-            Request::get("/pairing-session")
-                .header(header::AUTHORIZATION, format!("Bearer {pairing_token}"))
-                .header("X-Forwarded-For", "10.0.0.1")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 

@@ -13,8 +13,8 @@ use crate::test_support::{
 };
 
 use super::{
-    VALID_COORD, body_json, build_app, make_client_row_no_enc_key, make_client_row_with_enc_key,
-    post_json, response_status, setup_happy_path, valid_request_body,
+    body_json, build_app, build_happy_path_app_and_token, make_client_row_no_enc_key,
+    make_client_row_with_enc_key, post_json, response_status, setup_happy_path, valid_request_body,
 };
 
 #[tokio::test]
@@ -74,54 +74,18 @@ async fn empty_client_jwts_returns_401() {
 
 #[tokio::test]
 async fn invalid_daemon_public_key_returns_400() {
-    let (priv_jwk, pub_jwk, kid, repo) = setup_happy_path();
-    let app = build_app(make_test_app_state(repo));
-
-    let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "client-1", "pair-1");
-    let body = json!({
-        "client_jwts": [token],
-        "daemon_public_key": {
-            "kty": "RSA",
-            "crv": "P-256",
-            "x": VALID_COORD,
-            "y": VALID_COORD,
-            "alg": "ES256"
-        },
-        "daemon_enc_public_key": {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": VALID_COORD,
-            "y": VALID_COORD,
-            "alg": "ECDH-ES+A256KW"
-        }
-    });
+    let (app, token) = build_happy_path_app_and_token();
+    let mut body = valid_request_body(vec![token]);
+    body["daemon_public_key"]["kty"] = json!("RSA");
     let status = response_status(app, post_json(&body)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn invalid_daemon_enc_public_key_returns_400() {
-    let (priv_jwk, pub_jwk, kid, repo) = setup_happy_path();
-    let app = build_app(make_test_app_state(repo));
-
-    let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "client-1", "pair-1");
-    let body = json!({
-        "client_jwts": [token],
-        "daemon_public_key": {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": VALID_COORD,
-            "y": VALID_COORD,
-            "alg": "ES256"
-        },
-        "daemon_enc_public_key": {
-            "kty": "EC",
-            "crv": "P-384",
-            "x": VALID_COORD,
-            "y": VALID_COORD,
-            "alg": "ECDH-ES+A256KW"
-        }
-    });
+    let (app, token) = build_happy_path_app_and_token();
+    let mut body = valid_request_body(vec![token]);
+    body["daemon_enc_public_key"]["crv"] = json!("P-384");
     let status = response_status(app, post_json(&body)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
@@ -323,20 +287,11 @@ async fn malformed_json_returns_400() {
 
 #[tokio::test]
 async fn missing_daemon_enc_public_key_returns_422() {
-    let (priv_jwk, pub_jwk, kid, repo) = setup_happy_path();
-    let app = build_app(make_test_app_state(repo));
-
-    let token = make_client_jwt(&priv_jwk, &pub_jwk, &kid, "client-1", "pair-1");
-    let body = json!({
-        "client_jwts": [token],
-        "daemon_public_key": {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": VALID_COORD,
-            "y": VALID_COORD,
-            "alg": "ES256"
-        }
-    });
+    let (app, token) = build_happy_path_app_and_token();
+    let mut body = valid_request_body(vec![token]);
+    body.as_object_mut()
+        .unwrap()
+        .remove("daemon_enc_public_key");
     let status = response_status(app, post_json(&body)).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

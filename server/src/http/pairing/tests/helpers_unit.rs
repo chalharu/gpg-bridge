@@ -1,18 +1,18 @@
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
-use serde_json::json;
+use axum::http::StatusCode;
 use tower::ServiceExt;
 
 use crate::http::pairing::helpers::{
     build_client_jwt_token, remove_pairing_and_cleanup, verify_pairing_ownership,
 };
 use crate::jwt::{encrypt_private_key, generate_signing_key_pair, jwk_to_json};
-use crate::repository::{ClientPairingRow, SigningKeyRow};
+use crate::repository::SigningKeyRow;
 use crate::test_support::{
     MockRepository, TEST_SECRET, make_client_jwt, make_signing_key_row, make_test_app_state,
 };
 
-use super::build_app;
+use super::{
+    add_client_pairing, build_test_app, delete_pairing_by_daemon_request, make_pairing_repo,
+};
 
 // ===========================================================================
 // helpers.rs – direct unit tests for error paths
@@ -83,18 +83,9 @@ async fn build_client_jwt_invalid_public_key_returns_500() {
 
 #[tokio::test]
 async fn verify_ownership_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (_, _, _, repo) = make_pairing_repo();
     repo.force_error("get_client_pairings");
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-1".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+    add_client_pairing(&repo, "fid-1", "pair-1");
     let state = make_test_app_state(repo);
 
     let result = verify_pairing_ownership(&state, "fid-1", "pair-1", "/pairing").await;
@@ -119,23 +110,13 @@ async fn remove_cleanup_db_error_returns_500() {
 
 #[tokio::test]
 async fn delete_by_daemon_ownership_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
     repo.force_error("get_client_pairings");
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    let app = build_test_app(repo);
 
     let client_jwt = make_client_jwt(&priv_server, &pub_server, &server_kid, "fid-1", "pair-1");
-    let body_json = json!({ "client_jwt": client_jwt });
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_daemon_request(&client_jwt))
         .await
         .unwrap();
 
@@ -146,31 +127,14 @@ async fn delete_by_daemon_ownership_db_error_returns_500() {
 
 #[tokio::test]
 async fn delete_by_daemon_cleanup_db_error_returns_500() {
-    let (priv_server, pub_server, server_kid) = generate_signing_key_pair().unwrap();
-    let sk = make_signing_key_row(&priv_server, &pub_server, &server_kid);
-    let repo = MockRepository::new(sk);
+    let (priv_server, pub_server, server_kid, repo) = make_pairing_repo();
     repo.force_error("delete_client_pairing_and_cleanup");
-    repo.client_pairings_data
-        .lock()
-        .unwrap()
-        .push(ClientPairingRow {
-            client_id: "fid-1".into(),
-            pairing_id: "pair-1".into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
-    let state = make_test_app_state(repo);
-    let app = build_app(state);
+    add_client_pairing(&repo, "fid-1", "pair-1");
+    let app = build_test_app(repo);
 
     let client_jwt = make_client_jwt(&priv_server, &pub_server, &server_kid, "fid-1", "pair-1");
-    let body_json = json!({ "client_jwt": client_jwt });
-
     let response = app
-        .oneshot(
-            Request::delete("/pairing")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
-                .unwrap(),
-        )
+        .oneshot(delete_pairing_by_daemon_request(&client_jwt))
         .await
         .unwrap();
 
