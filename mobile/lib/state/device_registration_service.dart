@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../fcm/fcm_token_service.dart';
 import '../http/device_api_service.dart';
 import '../http/device_jwt_checker.dart';
+import '../http/server_url_service.dart';
 import '../security/device_assertion_jwt_service.dart';
 import '../security/keystore_platform_service.dart';
 import '../security/secure_storage_service.dart';
@@ -24,12 +25,14 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     required FidService fidService,
     required DeviceApiService deviceApiService,
     required SecureStorageService storageService,
+    required ServerUrlService serverUrlService,
     required void Function(bool) onRegistrationChanged,
   }) : _keystoreService = keystoreService,
        _fcmTokenService = fcmTokenService,
        _fidService = fidService,
        _deviceApiService = deviceApiService,
        _storageService = storageService,
+       _serverUrlService = serverUrlService,
        _onRegistrationChanged = onRegistrationChanged;
 
   final KeystorePlatformService _keystoreService;
@@ -37,15 +40,16 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
   final FidService _fidService;
   final DeviceApiService _deviceApiService;
   final SecureStorageService _storageService;
+  final ServerUrlService _serverUrlService;
   final void Function(bool) _onRegistrationChanged;
 
   StreamSubscription<String>? _tokenRefreshSubscription;
   bool _isRefreshing = false;
 
   @override
-  Future<void> register() async {
+  Future<void> register({required String serverUrl}) async {
     try {
-      await _registerInternal();
+      await _registerInternal(serverUrl: serverUrl);
     } catch (error) {
       if (error is DeviceRegistrationException) rethrow;
       throw DeviceRegistrationException(
@@ -81,19 +85,15 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     }
   }
 
-  // If a prior registration succeeded at the server but storage writes failed,
-  // the next call generates new keys and may receive 409.
-  // Recovery for that partial-failure case should be added in a follow-up.
-  Future<void> _registerInternal() async {
-    // 1. Generate key pairs
+  // If the server accepts registration but a later storage write fails,
+  // the next attempt may hit 409 until local state is reconciled.
+  Future<void> _registerInternal({required String serverUrl}) async {
     await _keystoreService.generateKeyPair(alias: KeystoreAliases.deviceKey);
     await _keystoreService.generateKeyPair(alias: KeystoreAliases.e2eKey);
 
-    // 2. Get FCM token and FID
     final fcmToken = await _fcmTokenService.getToken();
     final fid = await _fidService.getId();
 
-    // 3. Get public keys and add kid
     final sigKid = const Uuid().v4();
     final encKid = const Uuid().v4();
 
@@ -107,8 +107,8 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     final sigJwkWithKid = {...sigJwk, 'kid': sigKid};
     final encJwkWithKid = {...encJwk, 'kid': encKid};
 
-    // 4. POST /device
     final response = await _deviceApiService.registerDevice(
+      serverUrl: serverUrl,
       deviceToken: fcmToken,
       firebaseInstallationId: fid,
       sigKeys: [sigJwkWithKid],
@@ -116,7 +116,6 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
       defaultKid: encKid,
     );
 
-    // 5. Store credentials and sigKid
     final credentials = {
       SecureStorageKeys.deviceJwt: response.deviceJwt,
       SecureStorageKeys.deviceId: fid,
@@ -126,6 +125,7 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     for (final entry in credentials.entries) {
       await _storageService.writeValue(key: entry.key, value: entry.value);
     }
+    await _serverUrlService.save(serverUrl);
 
     _onRegistrationChanged(true);
   }
@@ -145,7 +145,6 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
         value: newToken,
       );
     } catch (_) {
-      // Token refresh is best-effort; will retry on next refresh event.
     } finally {
       _isRefreshing = false;
     }
@@ -174,9 +173,7 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
         key: SecureStorageKeys.deviceJwt,
         value: response.deviceJwt,
       );
-    } catch (_) {
-      // Best-effort; will retry on next check.
-    }
+    } catch (_) {}
   }
 
   @override
@@ -195,9 +192,7 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
         key: SecureStorageKeys.fcmToken,
         value: currentToken,
       );
-    } catch (_) {
-      // Best-effort; will retry on next startup.
-    }
+    } catch (_) {}
   }
 
   static const _storageKeys = [
@@ -205,13 +200,14 @@ class DefaultDeviceRegistrationService implements DeviceRegistrationService {
     SecureStorageKeys.deviceId,
     SecureStorageKeys.fcmToken,
     SecureStorageKeys.sigKid,
-    SecureStorageKeys.deviceToken, // legacy key
+    SecureStorageKeys.deviceToken,
   ];
 
   Future<void> _clearStorage() async {
     for (final key in _storageKeys) {
       await _storageService.deleteValue(key: key);
     }
+    await _serverUrlService.clear();
   }
 }
 
@@ -223,6 +219,7 @@ DeviceRegistrationService deviceRegistration(Ref ref) {
     fidService: ref.read(fidServiceProvider),
     deviceApiService: ref.read(deviceApiProvider),
     storageService: ref.read(secureStorageProvider),
+    serverUrlService: ref.read(serverUrlServiceProvider),
     onRegistrationChanged: (registered) {
       ref.read(authStateProvider.notifier).setRegistered(registered);
     },

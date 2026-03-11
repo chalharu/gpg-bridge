@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gpg_bridge_mobile/fcm/fcm_token_service.dart';
 import 'package:gpg_bridge_mobile/http/device_api_service.dart';
+import 'package:gpg_bridge_mobile/http/server_url_service.dart';
 import 'package:gpg_bridge_mobile/security/crypto_utils.dart';
+import 'package:gpg_bridge_mobile/security/device_assertion_jwt_service.dart';
 import 'package:gpg_bridge_mobile/security/keystore_platform_service.dart';
 import 'package:gpg_bridge_mobile/security/secure_storage_service.dart';
+import 'package:gpg_bridge_mobile/state/auth_state.dart';
 import 'package:gpg_bridge_mobile/state/device_registration_service.dart';
 import 'package:gpg_bridge_mobile/state/fid_service.dart';
 
@@ -36,6 +40,7 @@ void main() {
     late _MockFcmTokenProvider mockFcm;
     late _MockFidProvider mockFid;
     late _MockDeviceApiService mockApi;
+    late ServerUrlService serverUrlService;
     late SecureStorageService storageService;
     late InMemorySecureStorageBackend storageBackend;
     late bool registeredState;
@@ -47,11 +52,13 @@ void main() {
       mockApi = _MockDeviceApiService();
       storageBackend = InMemorySecureStorageBackend();
       storageService = SecureStorageService(storageBackend);
+      serverUrlService = DefaultServerUrlService(storageService);
       registeredState = false;
     });
 
     DefaultDeviceRegistrationService createService({
       _MockFcmTokenProvider? fcm,
+      ServerUrlService? serverUrlServiceOverride,
     }) {
       return DefaultDeviceRegistrationService(
         keystoreService: mockKeystore,
@@ -59,6 +66,7 @@ void main() {
         fidService: mockFid,
         deviceApiService: mockApi,
         storageService: storageService,
+        serverUrlService: serverUrlServiceOverride ?? serverUrlService,
         onRegistrationChanged: (v) => registeredState = v,
       );
     }
@@ -68,7 +76,7 @@ void main() {
       () async {
         final service = createService();
 
-        await service.register();
+        await service.register(serverUrl: 'https://server.example.com');
 
         // Keys generated for both aliases.
         expect(mockKeystore.generatedAliases, contains('device_key'));
@@ -78,6 +86,7 @@ void main() {
         expect(mockApi.registerCalled, isTrue);
         expect(mockApi.lastRegisterDeviceToken, 'fcm-token-123');
         expect(mockApi.lastRegisterFid, 'fid-abc');
+        expect(mockApi.lastRegisterServerUrl, 'https://server.example.com');
 
         // Credentials stored.
         expect(
@@ -92,6 +101,10 @@ void main() {
           await storageService.readValue(key: SecureStorageKeys.fcmToken),
           'fcm-token-123',
         );
+        expect(
+          await storageService.readValue(key: SecureStorageKeys.serverUrl),
+          'https://server.example.com',
+        );
 
         // Auth state updated.
         expect(registeredState, isTrue);
@@ -103,8 +116,24 @@ void main() {
       final service = createService();
 
       expect(
-        () => service.register(),
+        () => service.register(serverUrl: 'https://server.example.com'),
         throwsA(isA<DeviceRegistrationException>()),
+      );
+    });
+
+    test('register wraps server URL persistence failures', () async {
+      final service = createService(
+        serverUrlServiceOverride: _FailingSaveServerUrlService(storageService),
+      );
+
+      expect(
+        () => service.register(serverUrl: 'https://server.example.com'),
+        throwsA(isA<DeviceRegistrationException>()),
+      );
+      expect(registeredState, isFalse);
+      expect(
+        await storageService.readValue(key: SecureStorageKeys.serverUrl),
+        isNull,
       );
     });
 
@@ -112,7 +141,7 @@ void main() {
       final service = createService();
 
       // First register to populate storage.
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       expect(registeredState, isTrue);
 
       // Now unregister.
@@ -129,6 +158,10 @@ void main() {
       );
       expect(
         await storageService.readValue(key: SecureStorageKeys.fcmToken),
+        isNull,
+      );
+      expect(
+        await storageService.readValue(key: SecureStorageKeys.serverUrl),
         isNull,
       );
       expect(registeredState, isFalse);
@@ -153,7 +186,7 @@ void main() {
       final service = createService(fcm: fcmWithRefresh);
 
       // Register first to store the initial token.
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
 
       // Emit a new token.
@@ -180,7 +213,7 @@ void main() {
       );
       final service = createService(fcm: fcmWithRefresh);
 
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
 
       // Emit the same token — should not call PATCH.
@@ -200,7 +233,7 @@ void main() {
       );
       final service = createService(fcm: fcmWithRefresh);
 
-      await service.register();
+      await service.register(serverUrl: 'https://server.example.com');
       service.startTokenRefreshListener();
       service.startTokenRefreshListener(); // called twice
 
@@ -324,6 +357,32 @@ void main() {
 
       expect(mockApi.updateCalled, isFalse);
     });
+
+    test(
+      'deviceRegistrationProvider wires dependencies and updates auth state',
+      () async {
+        final container = ProviderContainer(
+          overrides: [
+            keystorePlatformProvider.overrideWithValue(mockKeystore),
+            fcmTokenProvider.overrideWithValue(mockFcm),
+            fidServiceProvider.overrideWithValue(mockFid),
+            deviceApiProvider.overrideWithValue(mockApi),
+            secureStorageProvider.overrideWithValue(storageService),
+            serverUrlServiceProvider.overrideWithValue(serverUrlService),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        expect(await container.read(authStateProvider.future), isFalse);
+
+        final service = container.read(deviceRegistrationProvider);
+        expect(service, isA<DefaultDeviceRegistrationService>());
+
+        await service.register(serverUrl: 'https://server.example.com');
+
+        expect(container.read(authStateProvider).requireValue, isTrue);
+      },
+    );
   });
 }
 
@@ -413,12 +472,17 @@ class _MockDeviceApiService implements DeviceApiService {
   bool shouldFail = false;
   bool deleteShouldFail = false;
   bool refreshJwtCalled = false;
+  String? lastRegisterServerUrl;
   String? lastRegisterDeviceToken;
   String? lastRegisterFid;
   String? lastUpdateDeviceToken;
 
   @override
+  Future<void> validateServerConnection({required String serverUrl}) async {}
+
+  @override
   Future<DeviceResponse> registerDevice({
+    required String serverUrl,
     required String deviceToken,
     required String firebaseInstallationId,
     required List<Map<String, dynamic>> sigKeys,
@@ -427,6 +491,7 @@ class _MockDeviceApiService implements DeviceApiService {
   }) async {
     if (shouldFail) throw DeviceApiException('mock register failure');
     registerCalled = true;
+    lastRegisterServerUrl = serverUrl;
     lastRegisterDeviceToken = deviceToken;
     lastRegisterFid = firebaseInstallationId;
     return DeviceResponse(deviceJwt: 'mock-device-jwt');
@@ -453,5 +518,37 @@ class _MockDeviceApiService implements DeviceApiService {
     if (shouldFail) throw DeviceApiException('mock refresh failure');
     refreshJwtCalled = true;
     return DeviceRefreshResponse(deviceJwt: 'refreshed-jwt');
+  }
+}
+
+class _FailingSaveServerUrlService implements ServerUrlService {
+  _FailingSaveServerUrlService(SecureStorageService storageService)
+    : _delegate = DefaultServerUrlService(storageService);
+
+  final DefaultServerUrlService _delegate;
+
+  @override
+  String buildEndpointUrl({required String baseUrl, required String path}) {
+    return _delegate.buildEndpointUrl(baseUrl: baseUrl, path: path);
+  }
+
+  @override
+  Future<void> clear() {
+    return _delegate.clear();
+  }
+
+  @override
+  Future<String> getSavedOrDefault() {
+    return _delegate.getSavedOrDefault();
+  }
+
+  @override
+  String normalize(String input) {
+    return _delegate.normalize(input);
+  }
+
+  @override
+  Future<void> save(String serverUrl) async {
+    throw ServerUrlException('failed to save server URL');
   }
 }

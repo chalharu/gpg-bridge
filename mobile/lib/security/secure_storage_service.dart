@@ -24,6 +24,7 @@ abstract final class SecureStorageKeys {
   static const String deviceId = 'device_id';
   static const String fcmToken = 'fcm_token';
   static const String sigKid = 'sig_kid';
+  static const String serverUrl = 'server_url';
 
   /// Prefix for GPG private key storage. Full key: "gpg_private_{keygrip}".
   static const String gpgPrivateKeyPrefix = 'gpg_private_';

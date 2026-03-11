@@ -17,7 +17,7 @@ class DeviceRegistrationException implements Exception {
 /// Orchestrates device registration, token refresh listening, and
 /// unregistration.
 abstract interface class DeviceRegistrationService {
-  Future<void> register();
+  Future<void> register({required String serverUrl});
   void startTokenRefreshListener();
   Future<void> unregister();
   Future<void> checkAndRefreshDeviceJwt();
