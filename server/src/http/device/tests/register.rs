@@ -5,15 +5,15 @@ use axum::http::{Method, Request, StatusCode};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::jwt::{DeviceClaims, PayloadType, sign_jws};
 use crate::repository::{SignatureRepository, SigningKeyRepository};
 use crate::test_support::{make_test_app_state_arc, response_json};
 
 use super::{
-    DeviceAppFixture, SECRET, X_COORD, Y_COORD, authed_json_request, authed_request,
-    build_sqlite_device_app_with_client, build_test_router, build_test_sqlite_repo, json_request,
-    make_client_row, make_device_assertion, make_device_key_test_setup,
-    make_device_sig_only_test_setup, make_signing_key_row, post_device_json_request, register_body,
+    DeviceAppFixture, X_COORD, Y_COORD, authed_json_request, authed_request,
+    build_refresh_device_jwt_app, build_sqlite_device_app_with_client, build_test_router,
+    build_test_sqlite_repo, json_request, make_client_row, make_device_assertion,
+    make_device_key_test_setup, make_device_sig_only_test_setup, make_signing_key_row,
+    post_device_json_request, register_body, sign_device_jwt,
 };
 
 fn post_device_request(body: serde_json::Value) -> Request<Body> {
@@ -254,19 +254,9 @@ async fn delete_device_success() {
 
 #[tokio::test]
 async fn refresh_device_jwt_success() {
-    let (client_priv, client_kid, sk, keys) = make_device_sig_only_test_setup();
-    let client = make_client_row("fid-4", "tok", &keys, &client_kid);
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    // Issue a device_jwt using the server signing key.
-    let server_priv_json = crate::jwt::decrypt_private_key(&sk.private_key, SECRET).unwrap();
-    let server_priv = crate::jwt::jwk_from_json(&server_priv_json).unwrap();
-    let device_claims = DeviceClaims {
-        sub: "fid-4".into(),
-        payload_type: PayloadType::Device,
-        exp: 1_900_000_000,
-    };
-    let old_device_jwt = sign_jws(&device_claims, &server_priv, &sk.kid).unwrap();
+    let (client_priv, client_kid, sk, _repo, app) =
+        build_refresh_device_jwt_app("fid-4", None).await;
+    let old_device_jwt = sign_device_jwt(&sk, "fid-4");
 
     let assertion = make_device_assertion(&client_priv, &client_kid, "fid-4", "/device/refresh");
     let body = json!({ "device_jwt": old_device_jwt });
@@ -289,18 +279,9 @@ async fn refresh_device_jwt_success() {
 
 #[tokio::test]
 async fn refresh_device_jwt_sub_mismatch_returns_401() {
-    let (client_priv, client_kid, sk, keys) = make_device_sig_only_test_setup();
-    let client = make_client_row("fid-5", "tok", &keys, &client_kid);
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let server_priv_json = crate::jwt::decrypt_private_key(&sk.private_key, SECRET).unwrap();
-    let server_priv = crate::jwt::jwk_from_json(&server_priv_json).unwrap();
-    let device_claims = DeviceClaims {
-        sub: "wrong-fid".into(),
-        payload_type: PayloadType::Device,
-        exp: 1_900_000_000,
-    };
-    let old_jwt = sign_jws(&device_claims, &server_priv, &sk.kid).unwrap();
+    let (client_priv, client_kid, sk, _repo, app) =
+        build_refresh_device_jwt_app("fid-5", None).await;
+    let old_jwt = sign_device_jwt(&sk, "wrong-fid");
 
     let assertion = make_device_assertion(&client_priv, &client_kid, "fid-5", "/device/refresh");
     let body = json!({ "device_jwt": old_jwt });
@@ -318,20 +299,9 @@ async fn refresh_device_jwt_sub_mismatch_returns_401() {
 
 #[tokio::test]
 async fn refresh_device_jwt_expired_issued_at_returns_401() {
-    let (client_priv, client_kid, sk, keys) = make_device_sig_only_test_setup();
-    let mut client = make_client_row("fid-6", "tok", &keys, &client_kid);
-    // Set device_jwt_issued_at far in the past so validity check fails.
-    client.device_jwt_issued_at = "2020-01-01T00:00:00+00:00".to_owned();
-    let (_repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
-
-    let server_priv_json = crate::jwt::decrypt_private_key(&sk.private_key, SECRET).unwrap();
-    let server_priv = crate::jwt::jwk_from_json(&server_priv_json).unwrap();
-    let device_claims = DeviceClaims {
-        sub: "fid-6".into(),
-        payload_type: PayloadType::Device,
-        exp: 1_900_000_000,
-    };
-    let old_jwt = sign_jws(&device_claims, &server_priv, &sk.kid).unwrap();
+    let (client_priv, client_kid, sk, _repo, app) =
+        build_refresh_device_jwt_app("fid-6", Some("2020-01-01T00:00:00+00:00")).await;
+    let old_jwt = sign_device_jwt(&sk, "fid-6");
 
     let assertion = make_device_assertion(&client_priv, &client_kid, "fid-6", "/device/refresh");
     let body = json!({ "device_jwt": old_jwt });

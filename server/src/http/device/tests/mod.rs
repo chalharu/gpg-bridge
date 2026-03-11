@@ -243,6 +243,39 @@ fn make_device_sig_only_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRo
     (priv_jwk, kid.clone(), sk, keys)
 }
 
+async fn build_refresh_device_jwt_app(
+    client_id: &str,
+    device_jwt_issued_at: Option<&str>,
+) -> (
+    josekit::jwk::Jwk,
+    String,
+    SigningKeyRow,
+    Arc<crate::repository::SqliteRepository>,
+    Router,
+) {
+    let (client_priv, client_kid, sk, keys) = make_device_sig_only_test_setup();
+    let mut client = make_client_row(client_id, "tok", &keys, &client_kid);
+    if let Some(device_jwt_issued_at) = device_jwt_issued_at {
+        client.device_jwt_issued_at = device_jwt_issued_at.to_owned();
+    }
+    let (repo, app) = build_sqlite_device_app_with_client(&sk, &client).await;
+
+    (client_priv, client_kid, sk, repo, app)
+}
+
+fn sign_device_jwt(signing_key: &SigningKeyRow, client_id: &str) -> String {
+    let server_priv_json =
+        crate::jwt::decrypt_private_key(&signing_key.private_key, SECRET).unwrap();
+    let server_priv = crate::jwt::jwk_from_json(&server_priv_json).unwrap();
+    let device_claims = crate::jwt::DeviceClaims {
+        sub: client_id.into(),
+        payload_type: crate::jwt::PayloadType::Device,
+        exp: 1_900_000_000,
+    };
+
+    crate::jwt::sign_jws(&device_claims, &server_priv, &signing_key.kid).unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // POST /device tests
 // ---------------------------------------------------------------------------
