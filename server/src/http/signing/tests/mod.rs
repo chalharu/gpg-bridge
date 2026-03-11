@@ -1,18 +1,22 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::routing::post;
+use axum::routing::{get, post};
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::jwt::{
-    DaemonAuthClaims, PayloadType, RequestClaims, generate_signing_key_pair, jwk_to_json, sign_jws,
+    DaemonAuthClaims, PayloadType, RequestClaims, SignClaims, generate_signing_key_pair,
+    jwk_to_json, sign_jws,
 };
 use crate::repository::{ClientPairingRow, ClientRow, FullRequestRow, RequestRow};
-use crate::test_support::{MockRepository, make_signing_key_row};
+use crate::test_support::{
+    MockRepository, make_device_assertion, make_signing_key_row, make_test_client_pairing_row,
+    make_test_client_row,
+};
 
-use super::post_sign_request;
+use super::{get_sign_request, post_sign_request, post_sign_result};
 
 mod delete_request;
 mod get_and_result;
@@ -25,53 +29,48 @@ mod unit_tests;
 
 const VALID_COORD: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-fn make_client_row_with_enc_key(client_id: &str, enc_kid: &str) -> ClientRow {
-    let enc_key = json!({
-        "kid": enc_kid,
+fn make_client_row_with_key(client_id: &str, kid: &str, key_use: &str, alg: &str) -> ClientRow {
+    let key = json!({
+        "kid": kid,
         "kty": "EC",
         "crv": "P-256",
         "x": VALID_COORD,
         "y": VALID_COORD,
-        "use": "enc",
-        "alg": "ECDH-ES+A256KW"
+        "use": key_use,
+        "alg": alg
     });
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: serde_json::to_string(&vec![enc_key]).unwrap(),
-        default_kid: enc_kid.to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row(
+        client_id,
+        "tok",
+        serde_json::to_string(&vec![key]).unwrap(),
+        kid,
+        "[]",
+    )
+}
+
+fn make_client_row_with_enc_key(client_id: &str, enc_kid: &str) -> ClientRow {
+    make_client_row_with_key(client_id, enc_kid, "enc", "ECDH-ES+A256KW")
 }
 
 fn make_client_row_no_enc_key(client_id: &str) -> ClientRow {
-    let sig_key = json!({
-        "kid": "sig-kid",
-        "kty": "EC",
-        "crv": "P-256",
-        "x": VALID_COORD,
-        "y": VALID_COORD,
-        "use": "sig",
-        "alg": "ES256"
-    });
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: serde_json::to_string(&vec![sig_key]).unwrap(),
-        default_kid: "sig-kid".to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_client_row_with_key(client_id, "sig-kid", "sig", "ES256")
 }
 
 fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/sign-request", post(post_sign_request))
+        .with_state(state)
+}
+
+fn build_get_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-request", get(get_sign_request))
+        .with_state(state)
+}
+
+fn build_result_app(state: AppState) -> Router {
+    Router::new()
+        .route("/sign-result", post(post_sign_result))
         .with_state(state)
 }
 
@@ -122,6 +121,24 @@ fn make_daemon_auth_full_request_row(
     signature: Option<&str>,
     daemon_public_key: impl Into<String>,
 ) -> FullRequestRow {
+    make_single_client_full_request_row(
+        request_id,
+        status,
+        expired,
+        signature,
+        daemon_public_key,
+        "{}",
+    )
+}
+
+fn make_single_client_full_request_row(
+    request_id: &str,
+    status: &str,
+    expired: &str,
+    signature: Option<&str>,
+    daemon_public_key: impl Into<String>,
+    daemon_enc_public_key: impl Into<String>,
+) -> FullRequestRow {
     FullRequestRow {
         request_id: request_id.into(),
         status: status.into(),
@@ -129,7 +146,7 @@ fn make_daemon_auth_full_request_row(
         signature: signature.map(str::to_owned),
         client_ids: r#"["client-1"]"#.into(),
         daemon_public_key: daemon_public_key.into(),
-        daemon_enc_public_key: "{}".into(),
+        daemon_enc_public_key: daemon_enc_public_key.into(),
         pairing_ids: "{}".into(),
         e2e_kids: "{}".into(),
         encrypted_payloads: None,
@@ -165,16 +182,13 @@ fn seed_daemon_auth_request(
 fn add_signing_client(repo: &MockRepository, client_id: &str) -> (josekit::jwk::Jwk, String) {
     let (client_priv, client_pub, client_kid) = generate_signing_key_pair().unwrap();
     let pub_json = jwk_to_json(&client_pub).unwrap();
-    repo.clients.lock().unwrap().push(ClientRow {
-        client_id: client_id.into(),
-        created_at: "2026-01-01T00:00:00+00:00".into(),
-        updated_at: "2026-01-01T00:00:00+00:00".into(),
-        device_token: "tok".into(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
-        public_keys: format!("[{pub_json}]"),
-        default_kid: client_kid.clone(),
-        gpg_keys: "[]".into(),
-    });
+    repo.clients.lock().unwrap().push(make_test_client_row(
+        client_id,
+        "tok",
+        format!("[{pub_json}]"),
+        &client_kid,
+        "[]",
+    ));
     (client_priv, client_kid)
 }
 
@@ -182,11 +196,7 @@ fn add_signing_client_pairing(repo: &MockRepository, client_id: &str, pairing_id
     repo.client_pairings_data
         .lock()
         .unwrap()
-        .push(ClientPairingRow {
-            client_id: client_id.into(),
-            pairing_id: pairing_id.into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00+00:00".into(),
-        });
+        .push(make_test_client_pairing_row(client_id, pairing_id));
 }
 
 fn make_pending_request(
@@ -210,6 +220,17 @@ fn make_pending_request(
         }),
         unavailable_client_ids: "[]".into(),
     }
+}
+
+fn make_full_request(request_id: &str, status: &str, signature: Option<&str>) -> FullRequestRow {
+    make_single_client_full_request_row(
+        request_id,
+        status,
+        "2027-01-01T00:00:00Z",
+        signature,
+        "{}",
+        "{}",
+    )
 }
 
 fn valid_request_body(client_jwts: Vec<String>) -> serde_json::Value {
@@ -243,6 +264,41 @@ fn post_json(body: &serde_json::Value) -> Request<Body> {
 
 async fn response_status(app: Router, req: Request<Body>) -> StatusCode {
     app.oneshot(req).await.unwrap().status()
+}
+
+fn get_request_with_auth(token: &str) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-request")
+        .method("GET")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn make_sign_jwt(
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    request_id: &str,
+    client_id: &str,
+) -> String {
+    let exp = chrono::Utc::now().timestamp() + 300;
+    let claims = SignClaims {
+        sub: request_id.to_owned(),
+        client_id: client_id.to_owned(),
+        payload_type: PayloadType::Sign,
+        exp,
+    };
+    sign_jws(&claims, priv_jwk, kid).unwrap()
+}
+
+fn post_result_json(token: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri("/sign-result")
+        .method("POST")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
 }
 
 /// Setup common test fixtures: signing key pair, mock repo with a client + pairing.

@@ -6,14 +6,17 @@ use tower::ServiceExt;
 
 use crate::http::AppState;
 use crate::http::pairing::get_pairing_session;
-use crate::jwt::{generate_signing_key_pair, jwk_to_json};
-use crate::repository::{ClientRow, PairingRow};
+use crate::jwt::generate_signing_key_pair;
+use crate::repository::PairingRow;
 use crate::test_support::{
     MockRepository, assert_problem_details, make_signing_key_row, make_test_app_state,
     response_body_string,
 };
 
-use super::{make_pairing_token, response_json};
+use super::{
+    add_client_with_assertion_key, make_pairing_token, pairing_session_bearer_request,
+    pairing_session_bearer_request_without_ip, response_json,
+};
 
 // ===========================================================================
 // GET /pairing-session  (SSE)
@@ -40,36 +43,6 @@ fn make_pairing_sse_repo(
         client_id: client_id.map(str::to_owned),
     });
     (pairing_token, repo)
-}
-
-fn pairing_session_request(token: &str) -> Request<Body> {
-    Request::get("/pairing-session")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header("X-Forwarded-For", "10.0.0.1")
-        .body(Body::empty())
-        .unwrap()
-}
-
-fn pairing_session_request_without_ip(token: &str) -> Request<Body> {
-    Request::get("/pairing-session")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::empty())
-        .unwrap()
-}
-
-fn add_pairing_client(repo: &MockRepository, client_id: &str) {
-    let (_, pub_client, client_kid) = generate_signing_key_pair().unwrap();
-    let pub_json = jwk_to_json(&pub_client).unwrap();
-    repo.clients.lock().unwrap().push(ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: format!("[{pub_json}]"),
-        default_kid: client_kid,
-        gpg_keys: "[]".to_owned(),
-    });
 }
 
 #[tokio::test]
@@ -228,7 +201,7 @@ async fn session_expired_pairing_returns_410() {
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -239,12 +212,12 @@ async fn session_expired_pairing_returns_410() {
 async fn session_already_paired_returns_sse_with_paired_event() {
     let (pairing_token, repo) =
         make_pairing_sse_repo("pair-done", "2099-01-01T00:00:00+00:00", Some("fid-1"));
-    add_pairing_client(&repo, "fid-1");
+    let _ = add_client_with_assertion_key(&repo, "fid-1");
     let state = make_test_app_state(repo);
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -272,7 +245,7 @@ async fn session_pending_pairing_returns_200_sse_stream() {
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -298,7 +271,7 @@ async fn session_missing_client_ip_returns_500_with_instance() {
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(pairing_session_request_without_ip(&pairing_token))
+        .oneshot(pairing_session_bearer_request_without_ip(&pairing_token))
         .await
         .unwrap();
 
@@ -316,13 +289,13 @@ async fn session_duplicate_connection_returns_429_with_instance() {
 
     let first = app
         .clone()
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
 
     let response = app
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -344,7 +317,7 @@ async fn session_invalid_pairing_expiry_returns_500_with_instance() {
     let app = build_sse_app(state);
 
     let response = app
-        .oneshot(pairing_session_request(&pairing_token))
+        .oneshot(pairing_session_bearer_request(&pairing_token))
         .await
         .unwrap();
 
@@ -412,12 +385,12 @@ async fn session_get_pairing_db_error_returns_500() {
 async fn session_notify_delivers_paired_event_on_waiting_stream() {
     let (pairing_token, repo) =
         make_pairing_sse_repo("pair-wait", "2099-01-01T00:00:00+00:00", None);
-    add_pairing_client(&repo, "fid-w");
+    let _ = add_client_with_assertion_key(&repo, "fid-w");
     let state = make_test_app_state(repo);
     let notifier = state.pairing_notifier.clone();
 
     let app = build_sse_app(state);
-    let request = pairing_session_request(&pairing_token);
+    let request = pairing_session_bearer_request(&pairing_token);
 
     // Send SSE request — spawns the stream.
     let response = app.oneshot(request).await.unwrap();

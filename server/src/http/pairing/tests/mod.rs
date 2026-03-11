@@ -13,6 +13,7 @@ use crate::jwt::{
 use crate::repository::{ClientPairingRow, ClientRow, PairingRow};
 use crate::test_support::{
     MockRepository, make_client_jwt, make_signing_key_row, make_test_app_state,
+    make_test_client_pairing_row, make_test_client_row,
 };
 
 use super::{
@@ -33,16 +34,7 @@ mod sse;
 // ---------------------------------------------------------------------------
 
 fn make_client_row(client_id: &str, gpg_keys: &str) -> ClientRow {
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: "[]".to_owned(),
-        default_kid: "".to_owned(),
-        gpg_keys: gpg_keys.to_owned(),
-    }
+    make_test_client_row(client_id, "tok", "[]", "", gpg_keys.to_owned())
 }
 
 fn build_app(state: AppState) -> Router {
@@ -117,11 +109,19 @@ fn add_client_pairing(repo: &MockRepository, client_id: &str, pairing_id: &str) 
     repo.client_pairings_data
         .lock()
         .unwrap()
-        .push(ClientPairingRow {
-            client_id: client_id.into(),
-            pairing_id: pairing_id.into(),
-            client_jwt_issued_at: "2026-01-01T00:00:00Z".into(),
-        });
+        .push(make_client_pairing_row(client_id, pairing_id));
+}
+
+fn add_client_pairings(repo: &MockRepository, pairings: &[(&str, &str)]) {
+    repo.client_pairings_data.lock().unwrap().extend(
+        pairings
+            .iter()
+            .map(|(client_id, pairing_id)| make_client_pairing_row(client_id, pairing_id)),
+    );
+}
+
+fn make_client_pairing_row(client_id: &str, pairing_id: &str) -> ClientPairingRow {
+    make_test_client_pairing_row(client_id, pairing_id)
 }
 
 fn get_pairing_token_request() -> Request<Body> {
@@ -257,9 +257,28 @@ fn pairing_session_request(auth_header: Option<&str>) -> Request<Body> {
     builder.body(Body::empty()).unwrap()
 }
 
+fn pairing_session_bearer_request(token: &str) -> Request<Body> {
+    let bearer = format!("Bearer {token}");
+    pairing_session_request(Some(&bearer))
+}
+
+fn pairing_session_bearer_request_without_ip(token: &str) -> Request<Body> {
+    Request::get("/pairing-session")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
 fn json_body(tokens: &[String]) -> Body {
     let body = json!({ "client_jwts": tokens });
     Body::from(serde_json::to_vec(&body).unwrap())
+}
+
+fn query_gpg_keys_request(tokens: &[String]) -> Request<Body> {
+    Request::post("/pairing/gpg-keys")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(json_body(tokens))
+        .unwrap()
 }
 
 fn make_device_assertion_token(
@@ -285,16 +304,7 @@ fn make_client_with_public_key(
     kid: &str,
 ) -> ClientRow {
     let pub_json = jwk_to_json(pub_jwk).unwrap();
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        public_keys: format!("[{pub_json}]"),
-        default_kid: kid.to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row(client_id, "tok", format!("[{pub_json}]"), kid, "[]")
 }
 
 fn make_pairing_token(priv_jwk: &josekit::jwk::Jwk, kid: &str, pairing_id: &str) -> String {

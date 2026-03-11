@@ -1,12 +1,19 @@
+use std::sync::Arc;
+
 use axum::Router;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
 use axum::routing::{delete, get, patch, post};
 use serde_json::json;
+use tower::ServiceExt;
 
 use crate::http::AppState;
-use crate::jwt::{
-    DeviceAssertionClaims, build_signing_key_row, generate_signing_key_pair, jwk_to_json, sign_jws,
+use crate::jwt::{build_signing_key_row, generate_signing_key_pair, jwk_to_json};
+use crate::repository::{ClientRepository, ClientRow, SigningKeyRepository, SigningKeyRow};
+use crate::test_support::{
+    build_test_sqlite_repo, make_device_assertion, make_test_app_state_arc,
+    make_test_client_row_with_issued_at,
 };
-use crate::repository::{ClientRow, SigningKeyRow};
 
 use super::{
     add_gpg_key, add_public_key, delete_device, delete_gpg_key, delete_public_key, list_gpg_keys,
@@ -23,9 +30,38 @@ mod register_mutations;
 // ---------------------------------------------------------------------------
 
 const SECRET: &str = "test-secret-key!";
-const BASE_URL: &str = "https://api.example.com";
 const X_COORD: &str = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU";
 const Y_COORD: &str = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0";
+
+fn ec_public_key_value(key_use: &str, alg: &str, kid: Option<&str>) -> serde_json::Value {
+    let mut key = json!({
+        "kty": "EC",
+        "use": key_use,
+        "crv": "P-256",
+        "alg": alg,
+        "x": X_COORD,
+        "y": Y_COORD,
+    });
+    if let Some(kid) = kid {
+        key["kid"] = json!(kid);
+    }
+    key
+}
+
+fn ec_public_key_json(key_use: &str, alg: &str, kid: &str) -> String {
+    serde_json::to_string(&ec_public_key_value(key_use, alg, Some(kid))).unwrap()
+}
+
+fn signing_public_key_json(pub_jwk: &josekit::jwk::Jwk) -> String {
+    let mut key: serde_json::Value = serde_json::from_str(&jwk_to_json(pub_jwk).unwrap()).unwrap();
+    key["use"] = json!("sig");
+    key["alg"] = json!("ES256");
+    serde_json::to_string(&key).unwrap()
+}
+
+fn public_keys_json(keys: &[String]) -> String {
+    format!("[{}]", keys.join(","))
+}
 
 fn make_signing_key_row() -> (SigningKeyRow, josekit::jwk::Jwk) {
     let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
@@ -39,16 +75,14 @@ fn make_client_row(
     public_keys: &str,
     default_kid: &str,
 ) -> ClientRow {
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: device_token.to_owned(),
-        device_jwt_issued_at: chrono::Utc::now().to_rfc3339(),
-        public_keys: public_keys.to_owned(),
-        default_kid: default_kid.to_owned(),
-        gpg_keys: "[]".to_owned(),
-    }
+    make_test_client_row_with_issued_at(
+        client_id,
+        device_token,
+        public_keys.to_owned(),
+        default_kid,
+        "[]",
+        chrono::Utc::now().to_rfc3339(),
+    )
 }
 
 fn register_body(fid: &str, token: &str) -> serde_json::Value {
@@ -64,20 +98,7 @@ fn register_body(fid: &str, token: &str) -> serde_json::Value {
     })
 }
 
-/// Build a DeviceAssertion JWT for authenticated endpoints.
-fn make_device_assertion(priv_jwk: &josekit::jwk::Jwk, kid: &str, sub: &str, path: &str) -> String {
-    let claims = DeviceAssertionClaims {
-        iss: sub.to_owned(),
-        sub: sub.to_owned(),
-        aud: format!("{BASE_URL}{path}"),
-        exp: 1_900_000_000,
-        iat: 1_900_000_000 - 30,
-        jti: uuid::Uuid::new_v4().to_string(),
-    };
-    sign_jws(&claims, priv_jwk, kid).unwrap()
-}
-
-fn build_test_router(state: AppState) -> Router {
+pub fn build_test_router(state: AppState) -> Router {
     Router::new()
         .route("/device", post(register_device))
         .route("/device", patch(update_device))
@@ -90,6 +111,129 @@ fn build_test_router(state: AppState) -> Router {
         .route("/device/gpg_key", get(list_gpg_keys))
         .route("/device/gpg_key/{keygrip}", delete(delete_gpg_key))
         .with_state(state)
+}
+
+struct DeviceAppFixture {
+    repo: Arc<crate::repository::SqliteRepository>,
+    app: Router,
+}
+
+impl DeviceAppFixture {
+    async fn new() -> Self {
+        let (sk, _) = make_signing_key_row();
+        let (repo, app) = build_sqlite_device_app(&sk).await;
+
+        Self { repo, app }
+    }
+
+    async fn with_client(client: &ClientRow) -> Self {
+        let fixture = Self::new().await;
+        fixture.repo.create_client(client).await.unwrap();
+        fixture
+    }
+}
+
+async fn build_sqlite_device_app(
+    signing_key: &SigningKeyRow,
+) -> (Arc<crate::repository::SqliteRepository>, Router) {
+    let repo = build_test_sqlite_repo().await;
+    repo.store_signing_key(signing_key).await.unwrap();
+
+    let app = build_test_router(make_test_app_state_arc(
+        Arc::clone(&repo) as Arc<dyn crate::repository::SignatureRepository>
+    ));
+
+    (repo, app)
+}
+
+async fn build_sqlite_device_app_with_client(
+    signing_key: &SigningKeyRow,
+    client: &ClientRow,
+) -> (Arc<crate::repository::SqliteRepository>, Router) {
+    let (repo, app) = build_sqlite_device_app(signing_key).await;
+    repo.create_client(client).await.unwrap();
+    (repo, app)
+}
+
+fn json_request(method: Method, uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
+fn authed_request(method: Method, uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+pub fn authed_json_request(
+    method: Method,
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
+pub fn post_device_json_request(uri: &str, token: &str, body: &serde_json::Value) -> Request<Body> {
+    authed_json_request(Method::POST, uri, token, body)
+}
+
+pub fn get_device_request(uri: &str, token: &str) -> Request<Body> {
+    authed_request(Method::GET, uri, token)
+}
+
+pub fn delete_device_item_request(resource: &str, item: &str, token: &str) -> Request<Body> {
+    authed_request(Method::DELETE, &format!("{resource}/{item}"), token)
+}
+
+pub async fn assert_device_request_status_keeps_client_state<F>(
+    case_name: &str,
+    app: &Router,
+    repo: &(impl ClientRepository + ?Sized),
+    client_id: &str,
+    request: Request<Body>,
+    expected_status: StatusCode,
+    assert_unchanged: F,
+) where
+    F: Fn(&ClientRow, &ClientRow, &str),
+{
+    let before = repo.get_client_by_id(client_id).await.unwrap().unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        expected_status,
+        "case failed: {case_name}"
+    );
+
+    let after = repo.get_client_by_id(client_id).await.unwrap().unwrap();
+    assert_unchanged(&before, &after, case_name);
+}
+
+fn make_device_key_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, String, String) {
+    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
+    let (sk, _) = make_signing_key_row();
+    let pub_json = signing_public_key_json(&pub_jwk);
+    let enc_kid = "enc-1".to_owned();
+    let keys = public_keys_json(&[
+        pub_json,
+        ec_public_key_json("enc", "ECDH-ES+A256KW", &enc_kid),
+    ]);
+    (priv_jwk, kid, sk, enc_kid, keys)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,15 +252,9 @@ fn make_pk_test_setup() -> (
     String,
     String,
 ) {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let enc_kid = "enc-1";
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"{enc_kid}\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_client_row("fid-pk", "tok-pk", &keys, enc_kid);
-    (priv_jwk, kid, sk, client, enc_kid.to_owned(), keys)
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_client_row("fid-pk", "tok-pk", &keys, &enc_kid);
+    (priv_jwk, kid, sk, client, enc_kid, keys)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,25 +271,18 @@ fn make_gpg_client_row(
     default_kid: &str,
     gpg_keys: &str,
 ) -> ClientRow {
-    ClientRow {
-        client_id: client_id.to_owned(),
-        created_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        updated_at: "2026-01-01T00:00:00+00:00".to_owned(),
-        device_token: "tok".to_owned(),
-        device_jwt_issued_at: chrono::Utc::now().to_rfc3339(),
-        public_keys: public_keys.to_owned(),
-        default_kid: default_kid.to_owned(),
-        gpg_keys: gpg_keys.to_owned(),
-    }
+    make_test_client_row_with_issued_at(
+        client_id,
+        "tok",
+        public_keys.to_owned(),
+        default_kid,
+        gpg_keys.to_owned(),
+        chrono::Utc::now().to_rfc3339(),
+    )
 }
 
 fn make_gpg_test_setup() -> (josekit::jwk::Jwk, String, SigningKeyRow, ClientRow) {
-    let (priv_jwk, pub_jwk, kid) = generate_signing_key_pair().unwrap();
-    let (sk, _) = make_signing_key_row();
-    let pub_json = jwk_to_json(&pub_jwk).unwrap();
-    let keys = format!(
-        "[{pub_json},{{\"kty\":\"EC\",\"use\":\"enc\",\"crv\":\"P-256\",\"alg\":\"ECDH-ES+A256KW\",\"kid\":\"enc-1\",\"x\":\"{X_COORD}\",\"y\":\"{Y_COORD}\"}}]"
-    );
-    let client = make_gpg_client_row("fid-gpg", &keys, "enc-1", "[]");
+    let (priv_jwk, kid, sk, enc_kid, keys) = make_device_key_test_setup();
+    let client = make_gpg_client_row("fid-gpg", &keys, &enc_kid, "[]");
     (priv_jwk, kid, sk, client)
 }

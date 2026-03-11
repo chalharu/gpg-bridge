@@ -15,8 +15,8 @@ use crate::http::pairing::notifier::PairingNotifier;
 use crate::http::rate_limit::{SseConnectionTracker, config::SseConnectionConfig};
 use crate::http::signing::notifier::SignEventNotifier;
 use crate::jwt::{
-    ClientInnerClaims, ClientOuterClaims, PayloadType, encrypt_jwe_direct, encrypt_private_key,
-    jwk_to_json, sign_jws,
+    ClientInnerClaims, ClientOuterClaims, DeviceAssertionClaims, PayloadType, encrypt_jwe_direct,
+    encrypt_private_key, jwk_to_json, sign_jws,
 };
 use crate::repository::{
     AuditLogRepository, AuditLogRow, CleanupRepository, ClientPairingRepository, ClientPairingRow,
@@ -31,6 +31,7 @@ use crate::repository::{
 
 pub const TEST_SECRET: &str = "test-secret-key!";
 pub const BASE_URL: &str = "https://api.example.com";
+const TEST_TIME_RFC3339_Z: &str = "2026-01-01T00:00:00Z";
 
 // ---------------------------------------------------------------------------
 // MockRepository
@@ -739,6 +740,55 @@ pub fn make_signing_key_row(
     }
 }
 
+/// Build a test [`ClientRow`] with explicit device JWT issue time.
+pub fn make_test_client_row_with_issued_at(
+    client_id: &str,
+    device_token: &str,
+    public_keys: impl Into<String>,
+    default_kid: &str,
+    gpg_keys: impl Into<String>,
+    device_jwt_issued_at: impl Into<String>,
+) -> ClientRow {
+    ClientRow {
+        client_id: client_id.to_owned(),
+        created_at: TEST_TIME_RFC3339_Z.to_owned(),
+        updated_at: TEST_TIME_RFC3339_Z.to_owned(),
+        device_token: device_token.to_owned(),
+        device_jwt_issued_at: device_jwt_issued_at.into(),
+        public_keys: public_keys.into(),
+        default_kid: default_kid.to_owned(),
+        gpg_keys: gpg_keys.into(),
+    }
+}
+
+/// Build a test [`ClientRow`] with the historical fixed issue time used by
+/// pairing and signing tests.
+pub fn make_test_client_row(
+    client_id: &str,
+    device_token: &str,
+    public_keys: impl Into<String>,
+    default_kid: &str,
+    gpg_keys: impl Into<String>,
+) -> ClientRow {
+    make_test_client_row_with_issued_at(
+        client_id,
+        device_token,
+        public_keys,
+        default_kid,
+        gpg_keys,
+        TEST_TIME_RFC3339_Z,
+    )
+}
+
+/// Build a test [`ClientPairingRow`] with a fixed issued-at timestamp.
+pub fn make_test_client_pairing_row(client_id: &str, pairing_id: &str) -> ClientPairingRow {
+    ClientPairingRow {
+        client_id: client_id.to_owned(),
+        pairing_id: pairing_id.to_owned(),
+        client_jwt_issued_at: TEST_TIME_RFC3339_Z.to_owned(),
+    }
+}
+
 /// Build a client JWT (outer JWS wrapping an inner JWE) suitable for pairing
 /// and signing endpoints.
 pub fn make_client_jwt(
@@ -760,6 +810,24 @@ pub fn make_client_jwt(
         exp: 1_900_000_000,
     };
     sign_jws(&outer, priv_jwk, kid).unwrap()
+}
+
+/// Build a device assertion JWT for authenticated device and signing tests.
+pub fn make_device_assertion(
+    priv_jwk: &josekit::jwk::Jwk,
+    kid: &str,
+    sub: &str,
+    path: &str,
+) -> String {
+    let claims = DeviceAssertionClaims {
+        iss: sub.to_owned(),
+        sub: sub.to_owned(),
+        aud: format!("{BASE_URL}{path}"),
+        exp: 1_900_000_000,
+        iat: 1_900_000_000 - 30,
+        jti: uuid::Uuid::new_v4().to_string(),
+    };
+    sign_jws(&claims, priv_jwk, kid).unwrap()
 }
 
 /// Decode a JSON response body for HTTP handler tests.
