@@ -5,7 +5,7 @@
 #          -v gpg-bridge-cargo-git:/usr/local/cargo/git \
 #          -w /workspace gpg-bridge-dev <command>
 
-FROM rust:1.93-bookworm
+FROM rust:1.93-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
